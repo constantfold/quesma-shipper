@@ -16,19 +16,15 @@ import (
 // A user layer disabling a source beats a remote layer enabling it.
 func TestLocalDenyBeatsRemoteAllow(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, `
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, `
 sources:
   - id: claude-code-transcripts
     enabled: false
-`)},
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+`), layerDoc(t, config.LayerRemote, `
 sources:
   - id: claude-code-transcripts
     enabled: true
-`)},
-	))
-	require.NoError(t, err)
+`))
 	for _, s := range eff.Sources {
 		require.True(t, s.ID != "claude-code-transcripts" || !s.Enabled, "a remote enable must not undo a local disable")
 	}
@@ -40,8 +36,7 @@ sources:
 // send: block is the s3 one still served to the pre-vend fleet and has to keep LOADING here.
 func TestServedDocumentWithAuthoredPartResolves(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: servedDoc(t, `
+	eff := resolved(t, home, servedLayer(t, config.LayerRemote, `
 issued_at: 2026-08-12T10:00:00Z
 org: acme
 send:
@@ -59,9 +54,7 @@ sources:
 scrub:
   rule_packs: [gitleaks-core]
 max_files_per_run: 200
-`)},
-	))
-	require.NoErrorf(t, err, "the served document must resolve: %v", err)
+`))
 	assert.Equalf(t, "30m", eff.Schedule, "mode.schedule = %q: the org's schedule did not take effect", eff.Schedule)
 	assert.Equalf(t, 200, eff.MaxFilesPerRun, "max_files_per_run = %d, want 200", eff.MaxFilesPerRun)
 	assert.Equal(t, config.LayerRemote, eff.Provenance["mode.schedule"].Layer)
@@ -70,13 +63,10 @@ max_files_per_run: 200
 // A layer's exemptions MERGE with the compiled baseline rather than replacing it; detection rules are free to add.
 func TestServedExemptionsMergeWithTheCompiledBaseline(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+	eff := resolved(t, home, layerDoc(t, config.LayerRemote, `
 structural_exempt:
   claude-code: [acmeInternalTraceId]
-`)},
-	))
-	require.NoErrorf(t, err, "the served layer may carry exemptions: %v", err)
+`))
 	if !slices.Contains(eff.StructuralEx["claude-code"], "acmeInternalTraceId") {
 		t.Errorf("served exemption not applied: %v", eff.StructuralEx)
 	}
@@ -90,8 +80,7 @@ structural_exempt:
 // and keep this test green.
 func TestCompiledExemptionBaselineIsSeededByDefault(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	for _, p := range []string{"toolUseId", "message.content[].id", "message.content[].tool_use_id"} {
 		assert.Truef(t, slices.Contains(eff.StructuralEx["claude-code"], p), "claude-code join key %q not exempt by default", p)
 	}
@@ -100,13 +89,10 @@ func TestCompiledExemptionBaselineIsSeededByDefault(t *testing.T) {
 // Union, not replace: a layer naming one real pack must not drop the four the defaults carry.
 func TestRulePacksUnionRatherThanReplace(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+	eff := resolved(t, home, layerDoc(t, config.LayerRemote, `
 scrub:
   rule_packs: [pii-core]
-`)},
-	))
-	require.NoError(t, err)
+`))
 	for _, want := range []string{"gitleaks-core", "cloud-keys", "generic-entropy", "pii-core"} {
 		found := false
 		for _, got := range eff.RulePacks {
@@ -123,16 +109,13 @@ scrub:
 // The served config names the organization; it cannot name the write path, so the send block it serves is ignored.
 func TestServedRemoteConfigSetsOrgAndIgnoresTheSendBlock(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: servedDoc(t, `
+	eff := resolved(t, home, servedLayer(t, config.LayerRemote, `
 org: acme
 send:
   sink: s3
   bucket: acme-archive
   region: eu-central-1
-`)},
-	))
-	require.NoErrorf(t, err, "the served config must resolve: %v", err)
+`))
 	assert.Equalf(t, "acme", eff.OrganizationID, "served config not applied: %s", eff.OrganizationID)
 }
 
@@ -141,7 +124,7 @@ func TestEnvelopeFieldsAreRefusedFromLocalLayers(t *testing.T) {
 	home := fakeHome(t)
 	for _, y := range []string{"org: acme\n", "issued_at: 2026-01-01T00:00:00Z\n"} {
 		_, err := config.Resolve(baseInput(t, home,
-			config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, y)},
+			layerDoc(t, config.LayerUser, y),
 		))
 		var rej *config.RejectionError
 		if !errors.As(err, &rej) {
@@ -159,7 +142,7 @@ func TestOrganizationComesFromServedConfigNotAConstant(t *testing.T) {
 	assert.Equalf(t, "default", standalone.OrganizationID, "standalone organization %q, want default", standalone.OrganizationID)
 
 	enterprise, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, "org: acme\n")},
+		layerDoc(t, config.LayerRemote, "org: acme\n"),
 	))
 	require.NoError(t, err)
 	assert.Equalf(t, "acme", enterprise.OrganizationID, "enterprise organization %q, want acme", enterprise.OrganizationID)
@@ -173,10 +156,7 @@ func TestServedParseToleratesUnknownFieldsAndTheLocalParseDoesNot(t *testing.T) 
 		"future_top_level: 7\n" +
 		"mode:\n  schedule: \"5m\"\n  future_nested: yes\n"
 
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: servedDoc(t, body)},
-	))
-	require.NoErrorf(t, err, "a served document with unknown fields must resolve: %v", err)
+	eff := resolved(t, home, servedLayer(t, config.LayerRemote, body))
 	assert.Equalf(t, "5m", eff.Schedule, "the fields this build does know must still apply: schedule %q", eff.Schedule)
 
 	if _, err := config.ParseDocument([]byte(body)); err == nil {
@@ -193,11 +173,11 @@ func TestSpecFingerprintCoversOnlyReadAffectingFields(t *testing.T) {
 
 	// A push that changes a redaction rule and the run budget.
 	unrelated, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+		layerDoc(t, config.LayerRemote, `
 scrub:
   rule_packs: [pii-core]
 max_files_per_run: 8
-`)},
+`),
 	))
 	require.NoError(t, err)
 	for i := range before.Sources {
@@ -206,11 +186,11 @@ max_files_per_run: 8
 
 	// A glob change resets exactly one source.
 	globbed, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, `
+		layerDoc(t, config.LayerUser, `
 sources:
   - id: claude-code-transcripts
     include: ["projects/**/*.jsonl"]
-`)},
+`),
 	))
 	require.NoError(t, err)
 	changed := 0
@@ -227,8 +207,7 @@ sources:
 func TestTheServedDocumentCannotMoveTheStateDirectory(t *testing.T) {
 	home := fakeHome(t)
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote,
-			Doc: doc(t, "state_dir: /tmp/somewhere-else\n")},
+		layerDoc(t, config.LayerRemote, "state_dir: /tmp/somewhere-else\n"),
 	))
 	var rej *config.RejectionError
 	require.ErrorAsf(t, err, &rej, "the served document moved the state directory: %v", err)
@@ -238,9 +217,6 @@ func TestTheServedDocumentCannotMoveTheStateDirectory(t *testing.T) {
 func TestTheUserLayerMayMoveTheStateDirectory(t *testing.T) {
 	home := fakeHome(t)
 	// The machine owner's own file must still set it, or the field is settable by nobody.
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "state_dir: /tmp/mine\n")},
-	))
-	require.NoError(t, err)
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, "state_dir: /tmp/mine\n"))
 	assert.Equalf(t, "/tmp/mine", eff.StateDir, "state_dir = %q", eff.StateDir)
 }

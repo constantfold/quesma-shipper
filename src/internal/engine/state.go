@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -117,16 +118,13 @@ func editStore(stateDir, installID string, dryRun bool, edit func(*Store) int) (
 // volume reads as gone, which is why it stays a command.
 func Prune(stateDir, installID string, dryRun bool) (removed, kept int, err error) {
 	removed, err = editStore(stateDir, installID, dryRun, func(s *Store) int {
-		gone := 0
-		for k := range s.entries {
-			if _, statErr := os.Lstat(k.NativePath); statErr == nil {
-				kept++
-				continue
-			}
-			gone++
-			delete(s.entries, k)
-		}
-		return gone
+		before := len(s.entries)
+		maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool {
+			_, err := os.Lstat(k.NativePath)
+			return err != nil
+		})
+		kept = len(s.entries)
+		return before - kept
 	})
 	return removed, kept, err
 }
@@ -160,9 +158,7 @@ func (s *Store) Len() int { return len(s.entries) }
 // loop, and it happens last: a crash before the replace re-runs those files onto their existing
 // keys. Safe under retry-is-re-run. Never make this a database.
 func (s *Store) CommitAll(updates map[Key]Fingerprint) error {
-	for k, fp := range updates {
-		s.entries[k] = fp
-	}
+	maps.Copy(s.entries, updates)
 	return s.flush()
 }
 
@@ -181,12 +177,9 @@ func (s *Store) EnsureSpec(sourceID, specFP string) (dropped int, err error) {
 		return 0, nil
 	}
 	if known {
-		for k := range s.entries {
-			if k.SourceID == sourceID {
-				delete(s.entries, k)
-				dropped++
-			}
-		}
+		before := len(s.entries)
+		maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool { return k.SourceID == sourceID })
+		dropped = before - len(s.entries)
 	}
 	if s.specs == nil {
 		s.specs = map[string]string{}
@@ -198,17 +191,9 @@ func (s *Store) EnsureSpec(sourceID, specFP string) (dropped int, err error) {
 // DropVanished forgets this source's entries whose file discovery no longer sees, keyed by native
 // path. Only a source that collected AND returned candidates proves absence: err on kept-too-long.
 func (s *Store) DropVanished(sourceID string, live map[string]bool) (int, error) {
-	dropped := 0
-	for k := range s.entries {
-		if k.SourceID != sourceID {
-			continue
-		}
-		if live[k.NativePath] {
-			continue
-		}
-		delete(s.entries, k)
-		dropped++
-	}
+	before := len(s.entries)
+	maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool { return k.SourceID == sourceID && !live[k.NativePath] })
+	dropped := before - len(s.entries)
 	if dropped == 0 {
 		return 0, nil
 	}

@@ -19,11 +19,11 @@ func TestOutsideCeilingRootIsRejected(t *testing.T) {
 	mustMkdir(t, filepath.Join(home, "evil", "projects"))
 
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+		layerDoc(t, config.LayerRemote, `
 sources:
   - id: claude-code-transcripts
     roots: ["~/evil"]
-`)},
+`),
 	))
 	require.Error(t, err, "a root outside the compiled ceiling must be rejected")
 	assert.Containsf(t, err.Error(), "ceiling", "the refusal should explain the ceiling, got: %v", err)
@@ -32,14 +32,11 @@ sources:
 // A user-layer adjustment within an already-compiled root family works with no recompilation.
 func TestUserLayerMayNarrowWithinACompiledRoot(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, `
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, `
 sources:
   - id: claude-code-transcripts
     include: ["projects/**/*.jsonl"]
-`)},
-	))
-	require.NoErrorf(t, err, "narrowing includes within a compiled root must be allowed: %v", err)
+`))
 	for _, s := range eff.Sources {
 		if s.ID == "claude-code-transcripts" {
 			assert.Truef(t, len(s.Include) == 1 && s.Include[0] == "projects/**/*.jsonl", "include not applied: %v", s.Include)
@@ -53,11 +50,11 @@ func TestIncludeReachingAgentCredentialsIsRejected(t *testing.T) {
 	mustWrite(t, filepath.Join(home, ".claude", ".credentials.json"), `{"accessToken":"secret"}`)
 
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+		layerDoc(t, config.LayerRemote, `
 sources:
   - id: claude-code-transcripts
     include: ["**"]
-`)},
+`),
 	))
 	require.Error(t, err, "an include glob reaching .credentials.json must be rejected")
 	assert.Containsf(t, err.Error(), "deny", "the refusal should name the deny list, got: %v", err)
@@ -124,8 +121,7 @@ func TestRequireSubdirRefusesAWrongShapedRoot(t *testing.T) {
 	mustMkdir(t, filepath.Join(home, ".claude"))
 	// No projects/ dir: the root exists but is the wrong shape.
 
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	for _, s := range eff.Sources {
 		if s.ID == "claude-code-transcripts" {
 			assert.Equalf(t, "", s.Root, "a root with no projects/ dir must not resolve, got %q", s.Root)
@@ -141,8 +137,7 @@ func TestARootThatAppearsAfterStartupIsPickedUp(t *testing.T) {
 	home := t.TempDir()
 	mustMkdir(t, filepath.Join(home, ".claude")) // present, but not yet the right shape
 
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	require.Equal(t, "", sourceByID(t, eff, "claude-code-transcripts").Root)
 
 	// The agent runs for the first time.
@@ -159,8 +154,7 @@ func TestARootThatAppearsAfterStartupIsPickedUp(t *testing.T) {
 // could move collection to a different directory mid-run, so a refresh only fills in the gaps.
 func TestRefreshLeavesAnAlreadyResolvedRootAlone(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	before := sourceByID(t, eff, "claude-code-transcripts").Root
 	require.NotEqual(t, "", before, "precondition: the root must resolve from a fake home")
 
@@ -176,8 +170,7 @@ func TestRefreshKeepsTheReasonCurrentWhileTheAgentStaysAbsent(t *testing.T) {
 	home := t.TempDir()
 	mustMkdir(t, filepath.Join(home, ".claude"))
 
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	assert.Len(t, config.RefreshAbsentRoots(eff, env(home, nil)), 0)
 	src := sourceByID(t, eff, "claude-code-transcripts")
 	assert.Equalf(t, "", src.Root, "the root must stay unresolved, got %q", src.Root)
@@ -198,8 +191,7 @@ func TestEnvVarRootIsExpandedThenDenyChecked(t *testing.T) {
 // An unset variable is the normal case, not an error: the next candidate is tried.
 func TestUnsetEnvVarFallsThroughToTheNextRoot(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	for _, s := range eff.Sources {
 		assert.Truef(t, s.ID != "claude-code-transcripts" || s.Root != "", "with $CLAUDE_CONFIG_DIR unset, ~/.claude must still resolve: %s", s.RootUnresolvedReason)
 	}
@@ -217,8 +209,7 @@ func TestRelativeExpansionIsRefused(t *testing.T) {
 func TestNonExistentRootDoesNotResolve(t *testing.T) {
 	home := fakeHome(t) // has ~/.claude, deliberately no ~/.cursor
 
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	for _, s := range eff.Sources {
 		if s.Family != "cursor" {
 			continue
@@ -233,8 +224,7 @@ func TestRootThatIsAFileDoesNotResolve(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".claude"), "not a directory")
 
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	eff := resolved(t, home)
 	for _, s := range eff.Sources {
 		assert.Truef(t, s.Family != "claude-code" || s.Root == "", "%s: a regular file must not resolve as a root, got %q", s.ID, s.Root)
 	}

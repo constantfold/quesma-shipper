@@ -1,16 +1,49 @@
 package sources
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 const accountResponseLimit = 1 << 20
+
+type accountEndpoint struct {
+	source, method, url, body string
+	headers                   map[string]string
+}
+
+func (p *Accounts) observe(ctx context.Context, req Request, token string, endpoint accountEndpoint) accountObservation {
+	obs := accountObservation{Source: endpoint.source, ObservedAt: req.Now().UTC()}
+	if token == "" {
+		obs.Error = "credentials_unavailable"
+		return obs
+	}
+	var body io.Reader
+	if endpoint.body != "" {
+		body = strings.NewReader(endpoint.body)
+	}
+	request, err := http.NewRequestWithContext(ctx, endpoint.method, endpoint.url, body)
+	if err != nil {
+		obs.Error = "request_failed"
+		return obs
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "quesma-shipper")
+	for name, value := range endpoint.headers {
+		if value != "" {
+			request.Header.Set(name, value)
+		}
+	}
+	return p.fetch(obs, request)
+}
 
 func localAccount(req Request, source string, body json.RawMessage, err error) accountObservation {
 	obs := accountObservation{Source: source, ObservedAt: req.Now().UTC(), Body: body}

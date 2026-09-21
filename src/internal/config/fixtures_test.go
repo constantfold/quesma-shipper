@@ -64,6 +64,16 @@ func servedDoc(t *testing.T, y string) *config.Document {
 	return d
 }
 
+func layerDoc(t *testing.T, layer config.Layer, body string) config.LayeredDocument {
+	t.Helper()
+	return config.LayeredDocument{Layer: layer, Doc: doc(t, body)}
+}
+
+func servedLayer(t *testing.T, layer config.Layer, body string) config.LayeredDocument {
+	t.Helper()
+	return config.LayeredDocument{Layer: layer, Doc: servedDoc(t, body)}
+}
+
 func baseInput(t *testing.T, home string, layers ...config.LayeredDocument) config.Input {
 	t.Helper()
 	return config.Input{
@@ -72,6 +82,13 @@ func baseInput(t *testing.T, home string, layers ...config.LayeredDocument) conf
 		Env:      env(home, nil),
 		StateDir: t.TempDir(),
 	}
+}
+
+func resolved(t *testing.T, home string, layers ...config.LayeredDocument) *config.Effective {
+	t.Helper()
+	eff, err := config.Resolve(baseInput(t, home, layers...))
+	require.NoError(t, err)
+	return eff
 }
 
 func enrichersOf(eff *config.Effective, id string) map[string]bool {

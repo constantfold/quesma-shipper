@@ -22,13 +22,7 @@ func TestPolicyGradeLayersAddRecipientsAsAUnion(t *testing.T) {
 	home := fakeHome(t)
 	userRec, orgRec := testRecipient(t), testRecipient(t)
 
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t,
-			"encryption:\n  additional_recipients: ["+userRec+"]\n")},
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t,
-			"encryption:\n  additional_recipients: ["+orgRec+", "+userRec+"]\n")},
-	))
-	require.NoError(t, err)
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, "encryption:\n  additional_recipients: ["+userRec+"]\n"), layerDoc(t, config.LayerRemote, "encryption:\n  additional_recipients: ["+orgRec+", "+userRec+"]\n"))
 	want := []string{userRec, orgRec}
 	assert.Truef(t, slices.Equal(eff.AdditionalRecipients, want), "additional recipients:\n got %v\nwant %v (union, first-seen order, no duplicates)", eff.AdditionalRecipients, want)
 }
@@ -39,7 +33,7 @@ func TestUnparseableRecipientIsRejectedAtResolveTime(t *testing.T) {
 	body := "encryption:\n  additional_recipients: [not-an-age-key]\n"
 	for _, layer := range []config.Layer{config.LayerUser, config.LayerRemote} {
 		_, err := config.Resolve(baseInput(t, home,
-			config.LayeredDocument{Layer: layer, Doc: doc(t, body)},
+			layerDoc(t, layer, body),
 		))
 		require.Errorf(t, err, "a recipient that does not parse must be a resolve-time rejection (%v layer)", layer)
 	}
@@ -50,11 +44,7 @@ func TestServedRemoteConfigAddsRecipients(t *testing.T) {
 	home := fakeHome(t)
 	rec := testRecipient(t)
 
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t,
-			"org: acme\nencryption:\n  additional_recipients: ["+rec+"]\n")},
-	))
-	require.NoError(t, err)
+	eff := resolved(t, home, layerDoc(t, config.LayerRemote, "org: acme\nencryption:\n  additional_recipients: ["+rec+"]\n"))
 	assert.Truef(t, slices.Equal(eff.AdditionalRecipients, []string{rec}), "served recipients did not land: %v", eff.AdditionalRecipients)
 	assert.True(t, eff.IncludeInstallRecipient, "a served config that does not mention include_install_recipient must not withhold it")
 	origin := eff.Provenance["encryption.additional_recipients"]
@@ -66,17 +56,16 @@ func TestWithholdingTheInstallRecipientRequiresAnotherReader(t *testing.T) {
 	home := fakeHome(t)
 
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, `
+		layerDoc(t, config.LayerRemote, `
 encryption:
   include_install_recipient: false
-`)},
+`),
 	))
 	require.Error(t, err, "withholding the only recipient must be rejected: it would seal objects no key can open")
 
 	rec := testRecipient(t)
 	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t,
-			"encryption:\n  include_install_recipient: false\n  additional_recipients: ["+rec+"]\n")},
+		layerDoc(t, config.LayerRemote, "encryption:\n  include_install_recipient: false\n  additional_recipients: ["+rec+"]\n"),
 	))
 	require.NoErrorf(t, err, "withhold plus an org reader is the documented enterprise shape: %v", err)
 	assert.True(t, !eff.IncludeInstallRecipient, "include_install_recipient=false from the served layer did not take effect")

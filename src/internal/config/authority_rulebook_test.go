@@ -53,7 +53,7 @@ func resolveLayers(t *testing.T, layers ...config.LayeredDocument) (*config.Effe
 
 func served(t *testing.T, y string) config.LayeredDocument {
 	t.Helper()
-	return config.LayeredDocument{Layer: config.LayerRemote, Doc: servedDoc(t, y)}
+	return servedLayer(t, config.LayerRemote, y)
 }
 
 func mustReject(t *testing.T, err error, context string) {
@@ -84,7 +84,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			eff, err := resolveLayers(t, served(t, envelope))
 			require.NoErrorf(t, err, "served envelope refused: %v", err)
 			assert.Equalf(t, "acme", eff.OrganizationID, "served org did not become the organization id: %q", eff.OrganizationID)
-			_, err = resolveLayers(t, config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, envelope)})
+			_, err = resolveLayers(t, layerDoc(t, config.LayerUser, envelope))
 			mustReject(t, err, "envelope in a local file")
 		}},
 
@@ -127,8 +127,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			reject: "upload_targets:\n  - origin: https://evil.example.com\n    addressing: virtual-hosted\n",
 			custom: func(t *testing.T) {
 				// The machine owner's own layer is the one that may name a destination.
-				eff, err := resolveLayers(t, config.LayeredDocument{Layer: config.LayerUser,
-					Doc: doc(t, "upload_targets:\n  - origin: https://acme.s3.example.com\n    addressing: virtual-hosted\n")})
+				eff, err := resolveLayers(t, layerDoc(t, config.LayerUser, "upload_targets:\n  - origin: https://acme.s3.example.com\n    addressing: virtual-hosted\n"))
 				require.NoErrorf(t, err, "local upload_targets refused: %v", err)
 				require.Truef(t, len(eff.UploadTargets) == 1 && eff.UploadTargets[0].Origin == "https://acme.s3.example.com", "local allowlist did not apply: %+v", eff.UploadTargets)
 				assert.Equal(t, config.LayerUser, eff.Provenance["upload_targets"].Layer)
@@ -156,7 +155,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 
 		"scrub.secret_key_names": {custom: func(t *testing.T) {
 			eff, err := resolveLayers(t,
-				config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "scrub:\n  secret_key_names:\n    - HOUSE_SIG\n")},
+				layerDoc(t, config.LayerUser, "scrub:\n  secret_key_names:\n    - HOUSE_SIG\n"),
 				served(t, "scrub:\n  secret_key_names:\n    - ACME_DEPLOY_TOKEN\n"),
 			)
 			require.NoError(t, err)
@@ -179,7 +178,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 
 		"encryption.additional_recipients": {custom: func(t *testing.T) {
 			eff, err := resolveLayers(t,
-				config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "encryption:\n  additional_recipients:\n    - "+probeRecipientA+"\n")},
+				layerDoc(t, config.LayerUser, "encryption:\n  additional_recipients:\n    - "+probeRecipientA+"\n"),
 				served(t, "encryption:\n  additional_recipients:\n    - "+probeRecipientB+"\n"),
 			)
 			require.NoError(t, err)
@@ -230,7 +229,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			assert.True(t, !sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"], "served enricher disable did not apply")
 			// A served enable over a local disable is ignored, not honored.
 			eff, err = resolveLayers(t,
-				config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n")},
+				layerDoc(t, config.LayerUser, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"),
 				served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: true\n"),
 			)
 			require.NoError(t, err)

@@ -96,32 +96,20 @@ func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 			continue
 		}
 		strongComparable++
-		if storedSet[av.v] {
-			strongMatched++
-			long = long || len(av.v) >= longArgLen
-			continue
-		}
-		if slices.ContainsFunc(storedVals, func(sv argValue) bool {
+		matches := storedSet[av.v] || slices.ContainsFunc(storedVals, func(sv argValue) bool {
 			return !sv.weak && stripCursorAttribution(sv.v) == av.v
-		}) {
+		})
+		// Unparsed legacy records support only long-value containment, including JSON escapes.
+		if !matches && !parsed && len(av.v) >= longArgLen {
+			matches = strings.Contains(strippedStored, av.v)
+			if !matches {
+				e := jsonEscaped(av.v)
+				matches = e != av.v && strings.Contains(strippedStored, e)
+			}
+		}
+		if matches {
 			strongMatched++
 			long = long || len(av.v) >= longArgLen
-			continue
-		}
-		if !parsed && len(av.v) >= longArgLen {
-			// Older generations wrote a bare string, leaving only containment, gated to a
-			// length that cannot collide — and against the escaped form too, since a value
-			// with quotes or newlines appears escaped inside a string field holding JSON.
-			if strings.Contains(strippedStored, av.v) {
-				strongMatched++
-				long = true
-				continue
-			}
-			if e := jsonEscaped(av.v); e != av.v && strings.Contains(strippedStored, e) {
-				strongMatched++
-				long = true
-				continue
-			}
 		}
 	}
 	switch {

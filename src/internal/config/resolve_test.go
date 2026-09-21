@@ -13,8 +13,7 @@ import (
 
 func TestResolveWithNoConfigFilesWorks(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home))
-	require.NoErrorf(t, err, "a clone-and-run install with no config files must resolve: %v", err)
+	eff := resolved(t, home)
 
 	var claude *config.ResolvedSource
 	for i := range eff.Sources {
@@ -29,19 +28,15 @@ func TestResolveWithNoConfigFilesWorks(t *testing.T) {
 // Every value is attributable to the layer that set it.
 func TestProvenanceAttributesEveryValue(t *testing.T) {
 	home := fakeHome(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, `
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, `
 mode:
   schedule: "5m"
 sources:
   - id: cursor-transcripts
     enabled: false
-`)},
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: servedDoc(t, `
+`), servedLayer(t, config.LayerRemote, `
 max_files_per_run: 32
-`)},
-	))
-	require.NoError(t, err)
+`))
 
 	want := map[string]config.Layer{
 		"max_files_per_run":                       config.LayerRemote,
@@ -65,7 +60,7 @@ max_files_per_run: 32
 func TestUnknownConfigVersionIsAHardError(t *testing.T) {
 	home := fakeHome(t)
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerRemote, Doc: doc(t, "config_version: 99\n")},
+		layerDoc(t, config.LayerRemote, "config_version: 99\n"),
 	))
 	require.Error(t, err, "an unknown config_version must be a hard error, never a partial application")
 	assert.Containsf(t, err.Error(), "config_version", "the refusal should name the field, got: %v", err)
@@ -81,11 +76,11 @@ func TestUnknownFieldInADocumentIsRefused(t *testing.T) {
 func TestSourceOverrideForUnknownSourceIsRefused(t *testing.T) {
 	home := fakeHome(t)
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, `
+		layerDoc(t, config.LayerUser, `
 sources:
   - id: not-a-real-source
     enabled: true
-`)},
+`),
 	))
 	require.Error(t, err, "a config layer must not be able to invent a source")
 }
@@ -94,10 +89,7 @@ func TestDrainDeadlineParses(t *testing.T) {
 	home := fakeHome(t)
 
 	// Distinct from the default, so the assertion can only pass by parsing the document.
-	eff, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "drain_deadline: 90s\n")},
-	))
-	require.NoError(t, err)
+	eff := resolved(t, home, layerDoc(t, config.LayerUser, "drain_deadline: 90s\n"))
 	assert.Equalf(t, 90*time.Second, eff.DrainDeadline, "drain_deadline = %s, want 90s", eff.DrainDeadline)
 }
 
@@ -106,8 +98,7 @@ func TestANonPositiveDrainDeadlineIsRejected(t *testing.T) {
 	for _, spelling := range []string{"0s", "-30s"} {
 		// A zero or negative deadline makes every drain a silent no-op, losing the data the drain exists to save.
 		_, err := config.Resolve(baseInput(t, home,
-			config.LayeredDocument{Layer: config.LayerUser,
-				Doc: doc(t, "drain_deadline: "+spelling+"\n")},
+			layerDoc(t, config.LayerUser, "drain_deadline: "+spelling+"\n"),
 		))
 		var rej *config.RejectionError
 		assert.ErrorAsf(t, err, &rej, "drain_deadline %s was accepted: %v", spelling, err)
@@ -117,7 +108,7 @@ func TestANonPositiveDrainDeadlineIsRejected(t *testing.T) {
 func TestAnUnparseableDrainDeadlineIsRejected(t *testing.T) {
 	home := fakeHome(t)
 	_, err := config.Resolve(baseInput(t, home,
-		config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "drain_deadline: 60\n")},
+		layerDoc(t, config.LayerUser, "drain_deadline: 60\n"),
 	))
 	// Bare "60" is the plausible mistake, and guessing at seconds would mean a config that means something else.
 	var rej *config.RejectionError
