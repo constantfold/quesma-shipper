@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The authorization accumulator, exercised directly: the byte bound needs objects too large to
@@ -53,7 +54,7 @@ func stageAll(t *testing.T, sizes []int) [][]int {
 	batches := make(chan []fileResult, len(sizes)+1)
 	p.staged = &batcher{
 		maxObjects: maxBatchObjects,
-		send:       func(items []stagedUpload) { batches <- p.o.sendBatch(ctx, items) },
+		send:       func(items []fileResult) { batches <- p.o.sendBatch(ctx, items) },
 	}
 
 	for i, sz := range sizes {
@@ -63,7 +64,11 @@ func stageAll(t *testing.T, sizes []int) [][]int {
 	}
 	p.staged.flush()
 	for seen := 0; seen < len(sizes); {
-		seen += len(<-batches)
+		done := <-batches
+		for _, result := range done {
+			assert.Nil(t, result.pending, "completed results must release ciphertext")
+		}
+		seen += len(done)
 	}
 	port.mu.Lock()
 	defer port.mu.Unlock()
@@ -117,4 +122,26 @@ func TestSourceHashIsLiftedOutOfTheMetadata(t *testing.T) {
 	}
 	assert.Lenf(t, obj.Metadata, 2, "metadata lost or gained names: %v", obj.Metadata)
 	assert.True(t, preparedFrom(0, "k", nil, nil).Metadata != nil, "nil metadata produced a nil map rather than an empty one")
+}
+
+// Exercise both stop paths without relying on worker timing to leave a partly filled batch.
+func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fatal=%t", fatal), func(t *testing.T) {
+			p := &sourcePass{fatal: fatal, uploadHalted: !fatal, staged: &batcher{maxObjects: maxBatchObjects}}
+			p.staged.add(stagedFor(0, 1))
+			newResult, final := p.stageUpload(stagedFor(1, 1))
+			require.True(t, final, "a stopped pass must not enqueue new uploads")
+			drained := p.drainStaged()
+			require.Len(t, drained, 1)
+			for i, result := range append(drained, newResult) {
+				assert.Equal(t, i, result.idx)
+				assert.Nil(t, result.pending, "abandoned results must release ciphertext")
+				assert.Equal(t, "failed", string(result.outcome.Decision))
+				assert.Equal(t, fatal, result.outcome.Fatal)
+				assert.Equal(t, !fatal, result.unavailable)
+			}
+			assert.Zero(t, p.staged.len())
+		})
+	}
 }

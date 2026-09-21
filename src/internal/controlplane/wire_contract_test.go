@@ -240,11 +240,8 @@ func TestFixturesValidate(t *testing.T) {
 			doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 			require.NoError(t, err)
 			err = compileWireSchema(t, schema).Validate(doc)
-			if bad := strings.HasPrefix(pathpkg.Base(path), "bad-"); bad && err == nil {
-				t.Errorf("%s must be rejected by %s", name, schema)
-			} else if !bad && err != nil {
-				t.Errorf("%s must validate against %s: %v", name, schema, err)
-			}
+			bad := strings.HasPrefix(pathpkg.Base(path), "bad-")
+			assert.Equalf(t, bad, err != nil, "%s validation: %v", schema, err)
 		})
 	}
 }
@@ -276,10 +273,7 @@ func TestFixturesRoundTripStructs(t *testing.T) {
 			require.NoError(t, dec.Decode(v))
 			remarshaled, err := json.Marshal(v)
 			require.NoError(t, err)
-			var want, got any
-			require.NoError(t, json.Unmarshal(raw, &want))
-			require.NoError(t, json.Unmarshal(remarshaled, &got))
-			assert.Equalf(t, want, got, "round trip through %T changed the document:\nfixture: %s\nrewrote: %s", v, raw, remarshaled)
+			assert.JSONEqf(t, string(raw), string(remarshaled), "round trip through %T changed the document", v)
 		})
 	}
 }
@@ -328,20 +322,9 @@ func loadAuthFixture(t *testing.T, version string) (authFixture, ed25519.Private
 // the exact body bytes against the fixture's public key.
 func TestAuthFixtureGoldensVerify(t *testing.T) {
 	fx, key := loadAuthFixture(t, "v1")
-	pub := key.Public().(ed25519.PublicKey)
-	for name, ex := range map[string]authExchange{"config": fx.Config} {
-		want := "Shipper-Device org=" + fx.Organization + ", install=" + fx.InstallID + ", sig="
-		if !strings.HasPrefix(ex.Authorization, want) {
-			t.Errorf("%s authorization %q does not open with %q", name, ex.Authorization, want)
-			continue
-		}
-		sig, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(ex.Authorization, want))
-		if err != nil {
-			t.Errorf("%s sig is not base64: %v", name, err)
-			continue
-		}
-		assert.Truef(t, ed25519.Verify(pub, []byte(ex.Body), sig), "%s golden signature does not verify over its body", name)
-	}
+	sig := deviceSignature(t, fx.Config.Authorization, fx.Organization, fx.InstallID)
+	assert.True(t, ed25519.Verify(key.Public().(ed25519.PublicKey), []byte(fx.Config.Body), sig),
+		"the v1 golden signature does not verify over its body")
 }
 
 // --- v2 upload authorization ---------------------------------------------------------
@@ -361,7 +344,7 @@ func v2Fresh(issuedAt, serverTime time.Time) bool {
 	return !issuedAt.Before(serverTime.Add(-5*time.Minute)) && !issuedAt.After(serverTime.Add(time.Minute))
 }
 
-func v2Signature(t *testing.T, authorization, organization, installID string) []byte {
+func deviceSignature(t *testing.T, authorization, organization, installID string) []byte {
 	t.Helper()
 	want := "Shipper-Device org=" + organization + ", install=" + installID + ", sig="
 	require.Truef(t, strings.HasPrefix(authorization, want), "authorization %q does not open with %q", authorization, want)
@@ -393,7 +376,7 @@ func TestAuthV2FixtureGoldensVerify(t *testing.T) {
 	require.Equalf(t, v2SigningPrefix, fx.SigningPrefix, "fixture signing_prefix is %q, protocol says %q", fx.SigningPrefix, v2SigningPrefix)
 	require.True(t, !fx.ServerTime.IsZero(), "v2 auth fixture carries no server_time, so freshness cannot be judged")
 
-	golden := v2Signature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)
+	golden := deviceSignature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)
 	assert.True(t, ed25519.Verify(pub, v2SigningInput(fx.Authorize.Method, fx.Authorize.Path, fx.Authorize.Body), golden), "the golden authorize signature does not verify over its domain-separated input")
 
 	for _, rej := range fx.Rejected {
@@ -401,7 +384,7 @@ func TestAuthV2FixtureGoldensVerify(t *testing.T) {
 			if authorizationOrganization(rej.Authorization) != fx.Organization {
 				return
 			}
-			sig := v2Signature(t, rej.Authorization, fx.Organization, fx.InstallID)
+			sig := deviceSignature(t, rej.Authorization, fx.Organization, fx.InstallID)
 			if !ed25519.Verify(pub, v2SigningInput(rej.Method, rej.Path, rej.Body), sig) {
 				return // refused on the signature, which is the point of the case
 			}
@@ -434,8 +417,8 @@ func TestV2SigningInputIsDomainSeparated(t *testing.T) {
 	domainSeparated := base64.StdEncoding.EncodeToString(
 		ed25519.Sign(key, v2SigningInput(fx.Authorize.Method, fx.Authorize.Path, fx.Authorize.Body)))
 
-	assert.Equal(t, base64.StdEncoding.EncodeToString(v2Signature(t, legacy.Authorization, fx.Organization, fx.InstallID)), bodyOnly)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(v2Signature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)), domainSeparated)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(deviceSignature(t, legacy.Authorization, fx.Organization, fx.InstallID)), bodyOnly)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(deviceSignature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)), domainSeparated)
 	assert.NotEqual(t, domainSeparated, bodyOnly, "v1 and v2 signatures agree over the same body: the domain separation is not there")
 }
 

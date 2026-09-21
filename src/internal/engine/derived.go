@@ -119,11 +119,11 @@ func (o Options) shipDerivedGroups(
 	fos := make([]FileOutcome, len(objects))
 	group := &batcher{
 		maxObjects: maxBatchObjects,
-		send: func(items []stagedUpload) {
+		send: func(items []fileResult) {
 			outcomes := o.authorizeAndUpload(ctx, items)
 			for i, g := range items {
-				idx := g.res.idx
-				fos[idx] = o.commitDerived(store, g.res.outcome, g.pending, outcomes[i])
+				idx := g.idx
+				fos[idx] = o.commitDerived(store, g.outcome, g.pending, outcomes[i])
 				if fos[idx].Decision == auditlog.DecisionShipped {
 					shipped++
 				}
@@ -148,7 +148,7 @@ func (o Options) shipDerivedGroups(
 			fos[i] = fo
 			continue
 		}
-		group.add(stagedUpload{res: fileResult{idx: i, outcome: fo}, pending: pending}, int64(len(pending.obj)))
+		group.add(fileResult{idx: i, outcome: fo, pending: pending})
 	}
 	group.flush()
 

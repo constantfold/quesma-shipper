@@ -26,13 +26,14 @@ const (
 // maxObjects differs per path; the byte bound is the protocol's and is the same for both.
 type batcher struct {
 	maxObjects int
-	send       func([]stagedUpload)
+	send       func([]fileResult)
 
-	items []stagedUpload
+	items []fileResult
 	bytes int64
 }
 
-func (b *batcher) add(it stagedUpload, size int64) {
+func (b *batcher) add(it fileResult) {
+	size := int64(len(it.pending.obj))
 	// Sent BEFORE the append: a group past the declared ciphertext limit is refused whole.
 	// No object-count check here: the post-append flush keeps the count strictly below the cap.
 	if len(b.items) > 0 && b.bytes+size > maxBatchBytes {
@@ -51,8 +52,8 @@ func (b *batcher) flush() {
 	}
 }
 
-// take empties the accumulator without sending, for a run that has stopped uploading.
-func (b *batcher) take() []stagedUpload {
+// take hands off the batch; later appends cannot reuse its backing array.
+func (b *batcher) take() []fileResult {
 	items := b.items
 	b.items, b.bytes = nil, 0
 	return items
@@ -97,22 +98,14 @@ var (
 	ErrAlreadyPresent = errors.New("engine: the archive already held this object under the same source hash")
 )
 
-// stagedUpload is a prepared object waiting for its authorization group; the accumulator that
-// holds these lives on the loop goroutine alone, which is why it needs no lock.
-type stagedUpload struct {
-	res     fileResult
-	pending *pendingPut
-}
-
 // sendBatch authorizes one bounded group and turns each verdict into a file result, on a batch
 // goroutine: everything it touches arrived by value or by handover.
-func (o Options) sendBatch(ctx context.Context, items []stagedUpload) []fileResult {
+func (o Options) sendBatch(ctx context.Context, items []fileResult) []fileResult {
 	outcomes := o.authorizeAndUpload(ctx, items)
-	res := make([]fileResult, len(items))
 	for i, it := range items {
-		res[i] = o.applyUploadOutcome(it, outcomes[i])
+		items[i] = o.applyUploadOutcome(it, outcomes[i])
 	}
-	return res
+	return items
 }
 
 // preparedFrom builds one descriptor from a sealed object and its manifest metadata. source-hash
@@ -134,7 +127,7 @@ func preparedFrom(idx int, key string, body []byte, md map[string]string) Prepar
 
 // authorizeAndUpload spends one group, with at most ONE reauthorization for expired tickets: a
 // second expiry means the clock or the lease is wrong, and retrying only stalls everything else.
-func (o Options) authorizeAndUpload(ctx context.Context, items []stagedUpload) []error {
+func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []error {
 	batch := make([]PreparedObject, len(items))
 	for i, it := range items {
 		batch[i] = preparedFrom(i, it.pending.objectKey, it.pending.obj, it.pending.md)
@@ -188,8 +181,9 @@ const alreadyPresentReason = "no bytes sent: the control plane answered that the
 
 // applyUploadOutcome is the verdict-to-decision map. No park branch: a failed upload persists
 // nothing, so the next run re-prepares the same key and a backoff would only delay recovery.
-func (o Options) applyUploadOutcome(it stagedUpload, oc error) (r fileResult) {
-	r = it.res
+func (o Options) applyUploadOutcome(it fileResult, oc error) (r fileResult) {
+	r = it
+	r.pending = nil
 	out := &r.outcome
 
 	// No stored-size cross-check here: upload.ValidateTicket is what refuses a length mismatch.
@@ -213,8 +207,9 @@ func (o Options) applyUploadOutcome(it stagedUpload, oc error) (r fileResult) {
 
 // abandon is a sealed object the pass will not send. Nothing commits, so the next run prepares it
 // again; callers reach here only with one of the two latches set.
-func (p *sourcePass) abandon(it stagedUpload) (r fileResult) {
-	r = it.res
+func (p *sourcePass) abandon(it fileResult) (r fileResult) {
+	r = it
+	r.pending = nil
 	r.outcome.Decision = auditlog.DecisionFailed
 	r.outcome.Fatal = p.fatal
 	// The non-fatal case must be marked as a halt, so fold suppresses its duplicates too.

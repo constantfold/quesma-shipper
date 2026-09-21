@@ -25,15 +25,14 @@ type pendingPut struct {
 	next Fingerprint
 }
 
-// prepareFile is the compute leg: change detection, read, scrub, seal. A non-nil pendingPut
-// means the file wants the network.
+// prepareFile reads, scrubs and seals; a result with pending set still needs an upload.
 func (o Options) prepareFile(
 	ctx context.Context,
 	job fileJob,
 	src sources.Resolved,
 	disc sources.Discovery,
 	staging bool,
-) (res fileResult, pending *pendingPut) {
+) (res fileResult) {
 	cand := job.cand
 	res = fileResult{idx: job.idx, bytes: cand.Size}
 	out := &res.outcome
@@ -53,7 +52,7 @@ func (o Options) prepareFile(
 	if fp.Parked && o.Now().Before(fp.BackoffUntil) {
 		out.Decision = auditlog.DecisionSkipped
 		out.Reason = "parked until " + fp.BackoffUntil.Format(time.RFC3339) + ": " + fp.LastError
-		return res, nil
+		return res
 	}
 
 	// Cheap pre-filter on size and mtime only: mtime alone re-ships byte-identical files, so the
@@ -63,13 +62,13 @@ func (o Options) prepareFile(
 		!(staging && o.Now().Sub(cand.MTime) < recomputeWindow) {
 		out.Decision = auditlog.DecisionUnchanged
 		out.Reason = "size and mtime unchanged"
-		return res, nil
+		return res
 	}
 
 	payload, err := cand.Load(ctx)
 	if err != nil {
 		failAndBackOff(o, &res, key, fp, err.Error())
-		return res, nil
+		return res
 	}
 	raw, mtime := payload.Bytes, payload.MTime
 	res.loadWarning = payload.Warning
@@ -104,7 +103,7 @@ func (o Options) prepareFile(
 			refreshed.Attempts = 0
 			res.intent = intent{kind: intentRefresh, key: key, fp: refreshed}
 		}
-		return res, nil
+		return res
 	}
 
 	// Drift signal only: the whole file ships regardless, but truncation stops looking like growth.
@@ -117,7 +116,7 @@ func (o Options) prepareFile(
 	if err != nil {
 		// Fail closed: a scrub-ENGINE error means this file does not upload.
 		failAndBackOff(o, &res, key, fp, "scrub failed closed: "+err.Error())
-		return res, nil
+		return res
 	}
 	out.Density = scrubbed.Density()
 	out.RuleHits = scrubbed.RuleHits
@@ -127,7 +126,7 @@ func (o Options) prepareFile(
 	if err != nil {
 		out.Decision = auditlog.DecisionFailed
 		out.Reason = err.Error()
-		return res, nil
+		return res
 	}
 	out.ObjectKey = objectKey
 
@@ -136,7 +135,7 @@ func (o Options) prepareFile(
 	if err != nil {
 		out.Decision = auditlog.DecisionFailed
 		out.Reason = err.Error()
-		return res, nil
+		return res
 	}
 	out.BytesOut = int64(len(obj))
 
@@ -146,10 +145,10 @@ func (o Options) prepareFile(
 		if out.Reason == "" {
 			out.Reason = "would ship (preview)"
 		}
-		return res, nil
+		return res
 	}
 
-	return res, &pendingPut{
+	res.pending = &pendingPut{
 		key:       key,
 		objectKey: objectKey,
 		obj:       obj,
@@ -160,6 +159,7 @@ func (o Options) prepareFile(
 			SourceHash:  sourceHash,
 		},
 	}
+	return res
 }
 
 // keySpread is a cheap stable hash of a state key, used only to separate backoff wakeups.

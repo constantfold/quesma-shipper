@@ -107,61 +107,44 @@ func TestCandidatesAreOldestFirst(t *testing.T) {
 	}
 }
 
-// A store encrypted at rest, or moved to a different substrate, must degrade to match_present_unreadable rather than ship garbage.
-func TestHighEntropyStoreDegradesToUnreadable(t *testing.T) {
-	root := t.TempDir()
-	// Binary content with a NUL byte: not newline-delimited JSON by any reading.
-	write(t, filepath.Join(root, "projects", "p", "a.jsonl"), "\x00\x01\x02binary garbage\x00")
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	assert.Equalf(t, sources.MatchPresentUnreadable, d.Health, "health %q, want match_present_unreadable (sniff %q)", d.Health, d.Sniff)
-	assert.Equalf(t, sources.SniffUnexpectedShape, d.Sniff, "sniff %q", d.Sniff)
-	assert.Len(t, d.Candidates, 0, "no garbage payload may be offered for shipping")
+// Shape drift blocks collection; empty sessions and both agents' version headers remain collectable.
+func TestDiscoverySniffsStoreShapeAndVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, glob, body, version string
+		sniff                           sources.SniffResult
+	}{
+		{"HighEntropyStoreDegradesToUnreadable", "projects/p/a.jsonl", "projects/**/*.jsonl",
+			"\x00\x01\x02binary garbage\x00", "", sources.SniffUnexpectedShape},
+		{"SQLiteReplacingJSONLIsCaughtByTheSniff", "projects/p/a.jsonl", "projects/**/*.jsonl",
+			"SQLite format 3\x00\x04\x00\x01", "", sources.SniffUnexpectedShape},
+		{"EmptyFileSniffsAsEmptyNotBroken", "projects/p/a.jsonl", "projects/**/*.jsonl", "", "", sources.SniffEmpty},
+		{"AgentVersionIsObservedFromTheStore", "projects/p/a.jsonl", "projects/**/*.jsonl",
+			`{"type":"user","uuid":"u1","version":"2.1.220"}` + "\n", "2.1.220", sources.SniffOK},
+		{"AgentVersionIsFoundBelowTheFirstLine", "projects/p/a.jsonl", "projects/**/*.jsonl",
+			`{"type":"summary","sessionId":"s"}` + "\n" +
+				`{"type":"user","sessionId":"s"}` + "\n" +
+				`{"type":"assistant","version":"2.1.245"}` + "\n", "2.1.245", sources.SniffOK},
+		{"CodexNestedVersionIsObserved", "sessions/r.jsonl", "sessions/**/*.jsonl",
+			`{"timestamp":"t","type":"session_meta","payload":{"cli_version":"0.144.1"}}` + "\n", "0.144.1", sources.SniffOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, filepath.Join(root, tc.path), tc.body)
+			d := discover(t, source(root, []string{tc.glob}), nil)
+			assert.Equal(t, tc.sniff, d.Sniff)
+			assert.Equal(t, tc.version, d.AgentVersion)
+			if tc.sniff == sources.SniffUnexpectedShape {
+				assert.Equal(t, sources.MatchPresentUnreadable, d.Health)
+				assert.Empty(t, d.Candidates)
+			} else {
+				assert.Equal(t, sources.Collected, d.Health)
+				assert.Len(t, d.Candidates, 1)
+			}
+		})
+	}
 }
 
-// Replacing a JSONL store with SQLite must be visible, with a config push to metadata-only as the remedy rather than a release.
-func TestSQLiteReplacingJSONLIsCaughtByTheSniff(t *testing.T) {
-	root := t.TempDir()
-	// SQLite's file magic, then binary.
-	write(t, filepath.Join(root, "projects", "p", "a.jsonl"), "SQLite format 3\x00\x04\x00\x01")
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	assert.Equalf(t, sources.MatchPresentUnreadable, d.Health, "a substrate change must not be silent: health %q sniff %q", d.Health, d.Sniff)
-}
-
-func TestEmptyFileSniffsAsEmptyNotBroken(t *testing.T) {
-	root := t.TempDir()
-	write(t, filepath.Join(root, "projects", "p", "a.jsonl"), "")
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	assert.Equalf(t, sources.SniffEmpty, d.Sniff, "an empty file should sniff as empty, got %q", d.Sniff)
-	// Empty is a legitimate state, a session that just started, so the file is still a candidate.
-	assert.Lenf(t, d.Candidates, 1, "an empty file is still collectable, got %d candidates", len(d.Candidates))
-}
-
-// The producer version is read from the store, which makes a parse-failure spike attributable to an agent release.
-func TestAgentVersionIsObservedFromTheStore(t *testing.T) {
-	root := t.TempDir()
-	write(t, filepath.Join(root, "projects", "p", "a.jsonl"),
-		`{"type":"user","uuid":"u1","version":"2.1.220"}`+"\n")
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	assert.Equalf(t, "2.1.220", d.AgentVersion, "agent version %q, want 2.1.220", d.AgentVersion)
-}
-
-// Claude Code puts the version on a later header line, not always the first, so the sniff scans a few lines in.
-func TestAgentVersionIsFoundBelowTheFirstLine(t *testing.T) {
-	root := t.TempDir()
-	lines := `{"type":"summary","sessionId":"s"}` + "\n" +
-		`{"type":"user","sessionId":"s"}` + "\n" +
-		`{"type":"assistant","version":"2.1.245"}` + "\n"
-	write(t, filepath.Join(root, "projects", "p", "a.jsonl"), lines)
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	assert.Equalf(t, "2.1.245", d.AgentVersion, "agent version %q, want 2.1.245", d.AgentVersion)
-}
-
-// The reported version is the newest session's, the closest proxy for the installed agent, not the oldest retained one.
+// The reported version is the newest readable session's.
 func TestAgentVersionComesFromTheNewestFile(t *testing.T) {
 	root := t.TempDir()
 	old := filepath.Join(root, "projects", "p", "old.jsonl")
@@ -172,16 +155,6 @@ func TestAgentVersionComesFromTheNewestFile(t *testing.T) {
 
 	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
 	assert.Equalf(t, "2.1.245", d.AgentVersion, "agent version %q, want the newest file's 2.1.245", d.AgentVersion)
-}
-
-func TestCodexNestedVersionIsObserved(t *testing.T) {
-	root := t.TempDir()
-	write(t, filepath.Join(root, "sessions", "r.jsonl"),
-		`{"timestamp":"t","type":"session_meta","payload":{"cli_version":"0.144.1"}}`+"\n")
-
-	src := source(root, []string{"sessions/**/*.jsonl"})
-	d := discover(t, src, nil)
-	assert.Equalf(t, "0.144.1", d.AgentVersion, "agent version %q, want 0.144.1", d.AgentVersion)
 }
 
 // The walk does not follow symlinks, which pairs with O_NOFOLLOW at open time; neither is sufficient alone.

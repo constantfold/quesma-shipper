@@ -77,6 +77,8 @@ The main files name the decisions they own:
 `sources.Discover` dispatches to the compiled collectors. Enrichers retain their
 registry because the app supplies their implementations. Workers return write intents;
 only the source coordinator commits them, after the destination confirms the write.
+A `fileResult` carries ciphertext while pending and clears it after upload or abandonment;
+batching uses that same record without another staging wrapper.
 The audit logger accepts nil as disabled, allowing preview to use the same pipeline.
 
 Import direction follows the table below: **every internal edge is declared, package by
@@ -120,7 +122,7 @@ Two edges deserve prose because they look like mistakes and are the design:
 
 - **`src/app` is the only package importing both `src/internal/controlplane` and
   `src/internal/upload`.** The engine
-  declares the port (`UploadPort`, `PreparedObject`, `PutResult`) and is handed an
+  declares the port (`UploadPort`, `PreparedObject`) and is handed an
   implementation; the ticket, the URL and every wire type stop in `src/app/`, which is why the
   loop cannot learn that a control plane exists.
 - **`src/internal/controlplane → src/internal/config`**: the served document is config's format to parse; the

@@ -2,7 +2,6 @@ package controlplane_test
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -24,16 +23,8 @@ func authorizeAgainst(t *testing.T, handler http.HandlerFunc) (controlplane.Auth
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	_, key, err := ed25519.GenerateKey(nil)
-	require.NoError(t, err)
-	client, err := controlplane.New(controlplane.Options{
-		Endpoint:     srv.URL,
-		InstallID:    fixtureInstallID,
-		Organization: "acme",
-		DeviceKey:    key,
-	})
-	require.NoError(t, err)
-	return client.AuthorizeUploads(context.Background(), sampleAuthorizeRequest())
+	c, _ := client(t, srv.URL)
+	return c.AuthorizeUploads(context.Background(), sampleAuthorizeRequest())
 }
 
 func alreadyPresentTicketJSON() string {
@@ -88,42 +79,33 @@ func TestAuthorizeUploadsStatusMapping(t *testing.T) {
 	}
 }
 
-// A field this build does not know, on the response or inside a ticket, is ignored: the server
-// grows the response first, and nothing the client sends comes from a field it did not validate.
-func TestAuthorizeUploadsIgnoresUnknownResponseFields(t *testing.T) {
-	resp, err := authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		ticket := strings.TrimSuffix(alreadyPresentTicketJSON(), "}") + `,"future_field":"unknown"}`
-		w.Write([]byte(`{"tickets":[` + ticket + `],"future_top_level":1}`))
-	})
-	require.NoErrorf(t, err, "an unknown v2 response field was refused: %v", err)
-	require.Truef(t, len(resp.Tickets) == 1 && resp.Tickets[0].AlreadyPresent, "want one already-present ticket, got %+v", resp.Tickets)
-}
-
-func TestAuthorizeUploadsAcceptsAlreadyPresentAndRejectsMixedCapability(t *testing.T) {
-	response, err := authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tickets":[{"ticket_id":"` + fixtureTicketID +
-			`","object_id":"trajectory-1","already_present":true}]}`))
-	})
-	require.Truef(t, err == nil && response.Tickets[0].AlreadyPresent, "valid already-present answer: response=%+v error=%v", response, err)
-
-	_, err = authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tickets":[{"ticket_id":"` + fixtureTicketID +
-			`","object_id":"trajectory-1","already_present":true,"method":"PUT"}]}`))
-	})
-	require.Truef(t, err != nil && strings.Contains(err.Error(), "invalid already-present"), "a mixed already-present capability must be refused, got %v", err)
-}
-
-// A batch is authorized whole or not at all, so a short ticket list is a partial authorization
-// this client refuses rather than matching up ticket by ticket.
-func TestAuthorizeUploadsRejectsMismatchedBatch(t *testing.T) {
-	_, err := authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tickets":[]}`))
-	})
-	require.Truef(t, err != nil && strings.Contains(err.Error(), "issued 0 tickets for 1 objects"), "want an error naming the ticket and object counts, got %v", err)
+// Unknown fields are forward-compatible; partial batches and mixed capabilities are not.
+func TestAuthorizeUploadResponses(t *testing.T) {
+	ticket := alreadyPresentTicketJSON()
+	for _, tc := range []struct {
+		name, response, wantError string
+	}{
+		{"already present", `{"tickets":[` + ticket + `]}`, ""},
+		{"unknown fields", `{"tickets":[` + strings.TrimSuffix(ticket, "}") +
+			`,"future_field":"unknown"}],"future_top_level":1}`, ""},
+		{"mixed capability", `{"tickets":[` + strings.TrimSuffix(ticket, "}") +
+			`,"method":"PUT"}]}`, "invalid already-present"},
+		{"mismatched batch", `{"tickets":[]}`, "issued 0 tickets for 1 objects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := controlPlane(t, http.StatusOK, tc.response)
+			c, _ := client(t, server.URL)
+			resp, err := c.AuthorizeUploads(context.Background(), sampleAuthorizeRequest())
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []controlplane.Ticket{{
+				TicketID: fixtureTicketID, ObjectID: "trajectory-1", AlreadyPresent: true,
+			}}, resp.Tickets)
+		})
+	}
 }
 
 // A redirect is refused rather than followed: following one either strips the device signature
@@ -148,32 +130,12 @@ func TestAuthorizeUploadsRefusesIncompleteRequest(t *testing.T) {
 	}
 	for field, blank := range cases {
 		t.Run(field, func(t *testing.T) {
-			_, key, err := ed25519.GenerateKey(nil)
-			require.NoError(t, err)
-			client, err := controlplane.New(controlplane.Options{
-				Endpoint:     "https://control.example.invalid",
-				InstallID:    fixtureInstallID,
-				Organization: "acme",
-				DeviceKey:    key,
-			})
-			require.NoError(t, err)
+			c, _ := client(t, "https://control.example.invalid")
 			req := sampleAuthorizeRequest()
 			blank(&req)
-			_, err = client.AuthorizeUploads(context.Background(), req)
+			_, err := c.AuthorizeUploads(context.Background(), req)
 			require.Truef(t, err != nil && strings.Contains(err.Error(), field), "a batch missing %s must be refused by name, got %v", field, err)
 		})
-	}
-}
-
-func TestAuthorizeUploadsAcceptsAnAlreadyPresentTicket(t *testing.T) {
-	resp, err := authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tickets":[` + alreadyPresentTicketJSON() + `]}`))
-	})
-	require.NoErrorf(t, err, "an already-present answer must decode: %v", err)
-	require.Truef(t, len(resp.Tickets) == 1 && resp.Tickets[0].AlreadyPresent, "want one already-present ticket, got %+v", resp.Tickets)
-	if resp.Tickets[0].URL != "" || len(resp.Tickets[0].RequiredHeaders) != 0 {
-		t.Errorf("an already-present ticket carried a capability: %+v", resp.Tickets[0])
 	}
 }
 

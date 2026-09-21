@@ -109,9 +109,9 @@ func TestGeneratedFileChecksUploadStateBeforeLoading(t *testing.T) {
 				return sources.Payload{}, errors.New("fixture load failure")
 			}}
 			o := Options{DryRun: true, Now: time.Now}
-			result, pending := o.prepareFile(context.Background(), fileJob{cand: cand, seen: true, fp: Fingerprint{SourceHash: hash, SourceSize: cand.Size, SourceMTime: cand.MTime}},
+			result := o.prepareFile(context.Background(), fileJob{cand: cand, seen: true, fp: Fingerprint{SourceHash: hash, SourceSize: cand.Size, SourceMTime: cand.MTime}},
 				sources.Resolved{}, sources.Discovery{}, false)
-			require.True(t, pending == nil, "unexpected upload")
+			require.Nil(t, result.pending, "unexpected upload")
 			if hash != "" {
 				if loads != 0 || result.outcome.Decision != "unchanged" {
 					t.Fatalf("reloaded uploaded snapshot: loads=%d, %+v", loads, result.outcome)

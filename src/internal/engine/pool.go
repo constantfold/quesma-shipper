@@ -33,7 +33,7 @@ type fileResult struct {
 	// bytes is the candidate's size, released back to the in-flight gate when folded.
 	bytes int64
 
-	// pending lives only between the compute leg and the loop thread that stages it.
+	// pending owns ciphertext until upload or abandonment.
 	pending *pendingPut
 
 	// unavailable stops this run's uploads without outcome.Fatal's permanent-kill meaning.
@@ -131,7 +131,7 @@ func (p *sourcePass) run(ctx context.Context) error {
 	// Half the upload budget bounds a group below uploadLimit, so seal and PUT overlap.
 	p.staged = &batcher{
 		maxObjects: max(1, min(maxBatchObjects, uploadLimit/2)),
-		send: func(items []stagedUpload) {
+		send: func(items []fileResult) {
 			// One authorization, then one PUT per member. The group holds ONE upload slot for its
 			// whole life; the port bounds the fan-out inside.
 			go func() {
@@ -161,10 +161,9 @@ func (p *sourcePass) run(ctx context.Context) error {
 			p.inFlightBytes += job.cand.Size
 			go func() {
 				computeSlots <- struct{}{}
-				r, pending := p.o.prepareFile(ctx, job, p.src, p.disc, p.staging)
+				r := p.o.prepareFile(ctx, job, p.src, p.disc, p.staging)
 				<-computeSlots
 				// A sealed object goes back to the loop thread to join an authorization group.
-				r.pending = pending
 				results <- r
 			}()
 			next++

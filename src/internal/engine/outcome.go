@@ -102,14 +102,10 @@ func (p *sourcePass) applyIntent(r *fileResult) {
 // stageUpload puts one sealed object into the authorization accumulator, which sends the group when
 // the next object would take it past either bound. A true final means the result was decided here.
 func (p *sourcePass) stageUpload(r fileResult) (res fileResult, final bool) {
-	pending := r.pending
-	r.pending = nil
-	it := stagedUpload{res: r, pending: pending}
-
 	if p.fatal || p.uploadHalted {
-		return p.abandon(it), true
+		return p.abandon(r), true
 	}
-	p.staged.add(it, int64(len(pending.obj)))
+	p.staged.add(r)
 	return fileResult{}, false
 }
 
@@ -119,11 +115,10 @@ func (p *sourcePass) drainStaged() []fileResult {
 		return nil
 	}
 	items := p.staged.take()
-	out := make([]fileResult, len(items))
 	for i, it := range items {
-		out[i] = p.abandon(it)
+		items[i] = p.abandon(it)
 	}
-	return out
+	return items
 }
 
 // assemble moves the slots into the source outcome in candidate order; unfilled ones never decided.
