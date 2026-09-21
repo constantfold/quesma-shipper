@@ -69,34 +69,23 @@ func TestRunRefusesWithoutRecipients(t *testing.T) {
 	}
 }
 
-// An expired config keeps collecting, and every object it produces says so. Stamped per object
-// rather than per run, because the archive outlives the run that produced it.
-func TestExpiredConfigStillShipsAndStampsEveryManifest(t *testing.T) {
-	f := newFixture(t)
-	f.eff.ConfigExpired = true
-	f.writeTranscript("p/s1.jsonl", line1)
-	f.writeTranscript("p/s2.jsonl", line2)
-
-	rep := f.run()
-	require.Equalf(t, 2, rep.Shipped, "an expired config stopped collection: %+v", rep)
-	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
-		assert.Truef(t, m.ConfigExpired, "%s: manifest does not carry config_expired", k)
+// Expiry is recorded per object because the archive outlives the collection run.
+func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%t", expired), func(t *testing.T) {
+			f := newFixture(t)
+			f.eff.ConfigExpired = expired
+			f.writeTranscript("p/s1.jsonl", line1)
+			f.writeTranscript("p/s2.jsonl", line2)
+			require.Equal(t, 2, f.run().Shipped)
+			for _, k := range f.port.keys() {
+				obj, _ := f.port.get(k)
+				m, _, err := transforms.Open(obj.Body, f.unit.Identity)
+				require.NoError(t, err)
+				assert.Equal(t, expired, m.ConfigExpired, k)
+			}
+		})
 	}
-}
-
-// The other direction, so the stamp is not simply always set.
-func TestCurrentConfigLeavesTheStampOff(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	f.run()
-
-	obj, _ := f.port.get(f.port.keys()[0])
-	m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-	require.NoError(t, err)
-	assert.True(t, !m.ConfigExpired, "config_expired is set on a run with a current config")
 }
 
 // A paused install collects nothing, ships nothing, and commits nothing. Checked at the engine

@@ -1,6 +1,7 @@
 package transforms
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,17 +65,7 @@ func TestKeyNamesSplitOnSeparatorsAndCamelHumps(t *testing.T) {
 		{"HTTPToken", []string{"http", "token"}},
 		{"", nil},
 	} {
-		got := splitKeyWords(tc.in)
-		if len(got) != len(tc.want) {
-			t.Errorf("%q -> %v, want %v", tc.in, got, tc.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Errorf("%q -> %v, want %v", tc.in, got, tc.want)
-				break
-			}
-		}
+		assert.Truef(t, slices.Equal(tc.want, splitKeyWords(tc.in)), "%q: want %v", tc.in, tc.want)
 	}
 }
 

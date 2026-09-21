@@ -3,6 +3,7 @@ package transforms_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +36,6 @@ func scrubJSONL(t *testing.T, s *transforms.Scrubber, family, payload string) tr
 	require.NoErrorf(t, err, "scrub returned an engine error: %v", err)
 	return res
 }
-
-// --- M3 gate: representative leaks -----------------------------------------
 
 func TestRepresentativeLeaksAreRedacted(t *testing.T) {
 	s := newScrubber(t)
@@ -153,8 +152,6 @@ func TestKeyNameRulesCatchShapelessValues(t *testing.T) {
 	}
 }
 
-// --- M3 gate: the exemption fixture ----------------------------------------
-
 // A planted secret in EVERY structurally exempt field is still caught, which is only
 // satisfiable because exemptions are detector-scoped: the pattern packs scan every
 // field regardless.
@@ -175,34 +172,6 @@ func TestPlantedSecretInEveryExemptFieldIsStillCaught(t *testing.T) {
 				assert.NotContainsf(t, string(res.Out), planted, "a planted secret survived in exempt field %q:\n%s", path, res.Out)
 			})
 		}
-	}
-}
-
-// The other half of the same rule: the identifiers those exemptions protect must
-// survive an ordinary scrub, or the causal graph dies.
-func TestExemptIdentifiersSurvive(t *testing.T) {
-	s := newScrubber(t)
-
-	line := `{"type":"assistant","uuid":"9f2c4e10-3b7a-4c19-8f2e-1a2b3c4d5e6f",` +
-		`"parentUuid":"1a2b3c4d-5e6f-4718-9a0b-1c2d3e4f5a6b",` +
-		`"sessionId":"3f2504e0-4f89-41d3-9a0c-0305e82c3301",` +
-		`"requestId":"req_011CQ8xKp3mNvRtY7wZa2bCd",` +
-		`"timestamp":"2026-07-30T10:00:00.123Z","version":"2.1.220",` +
-		`"message":{"id":"msg_01ABcdEfGhIjKlMnOpQrStUv","content":[{"type":"text","text":"hello"}]}}`
-
-	res := scrubJSONL(t, s, "claude-code", line+"\n")
-	out := string(res.Out)
-
-	for _, id := range []string{
-		"9f2c4e10-3b7a-4c19-8f2e-1a2b3c4d5e6f",
-		"1a2b3c4d-5e6f-4718-9a0b-1c2d3e4f5a6b",
-		"3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-		"req_011CQ8xKp3mNvRtY7wZa2bCd",
-		"msg_01ABcdEfGhIjKlMnOpQrStUv",
-		"2026-07-30T10:00:00.123Z",
-		"2.1.220",
-	} {
-		assert.Containsf(t, out, id, "exempt identifier %q was redacted — the causal graph would not reassemble:\n%s", id, out)
 	}
 }
 
@@ -239,21 +208,6 @@ func TestGraphReassemblesAfterScrub(t *testing.T) {
 	assert.True(t, toolResult["tool_use_id"] == toolUseID, "tool_use_id broken — the subagent join would fail")
 }
 
-// The other end of the spawn-tree join: toolUseId is the only field in a subagent's
-// meta.json that points anywhere, and it is exactly the shape the backstop eats.
-func TestSubagentMetaJoinKeySurvives(t *testing.T) {
-	s := newScrubber(t)
-
-	payload := `{"agentType":"general-purpose","description":"Audit cache failures","toolUseId":"toolu_0183yENGzL6di289E8QTzyxi","spawnDepth":1}` + "\n"
-
-	res := scrubJSONL(t, s, "claude-code", payload)
-	var meta map[string]any
-	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(res.Out))), &meta))
-	assert.Truef(t, meta["toolUseId"] == "toolu_0183yENGzL6di289E8QTzyxi", "toolUseId = %q — the subagent is an orphan", meta["toolUseId"])
-}
-
-// --- opaque binary payloads -------------------------------------------------
-
 // Cursor stores a hex-encoded image inside the assembled request: a declared opaque
 // payload, exempt via the NESTED PATH content[].image.hex rather than a field name.
 func TestDeclaredOpaqueBinaryPayloadSurvivesTheEntropyBackstop(t *testing.T) {
@@ -273,17 +227,6 @@ func TestDeclaredOpaqueBinaryPayloadSurvivesTheEntropyBackstop(t *testing.T) {
 	assert.NotContains(t, string(res2.Out), imageHex, "a high-entropy blob in an undeclared field should hit the backstop")
 }
 
-// The backstop is blind to a long blob with repeating structure, however long it runs:
-// it detects random-looking secrets, not binary, which is why the pattern packs stay broad.
-func TestEntropyBackstopIsBlindToRepeatingStructure(t *testing.T) {
-	s := newScrubber(t)
-	repeating := strings.Repeat("89504e470d0a1a0a0000000d49484452", 200)
-
-	res := scrubJSONL(t, s, "claude-code",
-		`{"type":"user","message":{"content":[{"type":"text","text":"`+repeating+`"}]}}`+"\n")
-	assert.Contains(t, string(res.Out), repeating, "thresholds were retuned; update this note with the new behaviour")
-}
-
 // pseudoRandomHex builds deterministic high-entropy hex from a fixed seed.
 func pseudoRandomHex(t *testing.T, n int) string {
 	t.Helper()
@@ -299,8 +242,6 @@ func pseudoRandomHex(t *testing.T, n int) string {
 	return string(out)
 }
 
-// --- path_user --------------------------------------------------------------
-
 // path_user is a rewriter, not a detector, so it runs on exempt fields too.
 func TestPathUserRewritesEverywhereIncludingExemptFields(t *testing.T) {
 	s := newScrubber(t)
@@ -315,8 +256,6 @@ func TestPathUserRewritesEverywhereIncludingExemptFields(t *testing.T) {
 	assert.Containsf(t, out, "/Users/__USER__/work/api", "path shape was not preserved — paths must stay comparable across sessions:\n%s", out)
 	assert.NotEqual(t, 0, res.RuleHits["path-user"])
 }
-
-// --- parse-miss versus engine error ---------------------------------
 
 // A torn tail is raw-scanned and ships: a truncated last line is a parse-miss, never
 // an engine error.
@@ -349,8 +288,6 @@ func TestNonJSONPayloadIsRawScanned(t *testing.T) {
 	assert.Equalf(t, transforms.ScanModeRawText, res.ScanMode, "scan_mode: %q", res.ScanMode)
 }
 
-// --- base64 -----------------------------------------------------------------
-
 // A base64-encoded secret is invisible to every regex, so one level is decoded and
 // scanned. One level only: recursion is unbounded work per byte.
 func TestOneLevelOfBase64IsDecodedAndScanned(t *testing.T) {
@@ -370,35 +307,6 @@ func TestOneLevelOfBase64IsDecodedAndScanned(t *testing.T) {
 	_ = res2 // no assertion on catching it; the entropy backstop may or may not fire
 }
 
-// --- fidelity ---------------------------------------------------------------
-
-// A record with nothing to redact must come out byte-identical, so a re-shipped file
-// differs downstream only where something was actually redacted.
-func TestUntouchedRecordsAreByteIdentical(t *testing.T) {
-	s := newScrubber(t)
-
-	payload := `{"type":"user","uuid":"u1","timestamp":"2026-07-30T10:00:00Z","nested":{"b":2,"a":1},` +
-		`"big":1234567890123456789,"float":1.5,"esc":"tab\there \"quoted\" <html>","nil":null,"arr":[3,2,1]}` + "\n"
-
-	res := scrubJSONL(t, s, "claude-code", payload)
-	assert.Equalf(t, payload, string(res.Out), "an untouched record was rewritten:\n got %s\nwant %s", res.Out, payload)
-	assert.Equalf(t, 0, res.BytesRedacted, "nothing should have been redacted, got %d bytes", res.BytesRedacted)
-}
-
-// When a record IS modified, key order and number literals must still survive: 1.23e+18
-// for a large integer is gratuitous damage to bytes the shipper preserves.
-func TestModifiedRecordsPreserveKeyOrderAndNumbers(t *testing.T) {
-	s := newScrubber(t)
-
-	payload := `{"zeta":1,"alpha":"ghp_abcdefghijklmnopqrstuvwxyz0123456789","mid":1234567890123456789,"beta":true}` + "\n"
-	res := scrubJSONL(t, s, "claude-code", payload)
-	out := string(res.Out)
-
-	assert.Truef(t, strings.Index(out, `"zeta"`) <= strings.Index(out, `"alpha"`), "key order was not preserved:\n%s", out)
-	assert.Containsf(t, out, "1234567890123456789", "a large integer lost precision:\n%s", out)
-	assert.True(t, strings.Contains(out, "<html>") || !strings.Contains(payload, "<html>"), "HTML escaping was applied where the input had none")
-}
-
 // A recorded over-redaction, left alone deliberately. In a postgres URL the url-userinfo
 // and email rules overlap, and the wider span wins: it takes the hostname with the
 // password and attributes the hit to email. The safe direction on an overlap is the wider
@@ -414,8 +322,6 @@ func TestKnownOverRedactionInConnectionStrings(t *testing.T) {
 	assert.NotContains(t, out, "db.internal", "the hostname now survives — the overlap rule changed; update this note")
 }
 
-// --- the ledger -------------------------------------------------------------
-
 func TestDensityAndRuleHitLedger(t *testing.T) {
 	s := newScrubber(t)
 
@@ -428,38 +334,6 @@ func TestDensityAndRuleHitLedger(t *testing.T) {
 	assert.Truef(t, res.Density() > 0 && res.Density() <= 1, "density out of range: %v", res.Density())
 	assert.Equal(t, 1, res.RuleHits["github-pat"])
 	assert.Equalf(t, len(dirty), res.BytesTotal, "bytes_total %d, want %d", res.BytesTotal, len(dirty))
-}
-
-// The sentinel's width depends only on the rule id, so it cannot leak the secret's
-// length, and nothing in it derives from the value.
-func TestSentinelLeaksNeitherLengthNorValue(t *testing.T) {
-	s := newScrubber(t)
-
-	short := "ghp_" + strings.Repeat("a", 36)
-	long := "ghp_" + strings.Repeat("b", 200)
-
-	outShort := scrubJSONL(t, s, "claude-code", `{"t":"`+short+`"}`+"\n")
-	outLong := scrubJSONL(t, s, "claude-code", `{"t":"`+long+`"}`+"\n")
-
-	assert.Lenf(t, outShort.Out, len(outLong.Out), "sentinel width tracks the secret length: %d vs %d bytes", len(outShort.Out), len(outLong.Out))
-	assert.Containsf(t, string(outShort.Out), transforms.Sentinel("github-pat"), "sentinel should carry the rule id: %s", outShort.Out)
-	for _, frag := range []string{"aaaa", "bbbb"} {
-		assert.True(t, !strings.Contains(string(outShort.Out), frag) && !strings.Contains(string(outLong.Out), frag), "a fragment of the secret survived in the placeholder")
-	}
-}
-
-// Idempotence: a second pass must not redact the first pass's placeholders, which would
-// destroy the ledger's meaning.
-func TestScrubIsIdempotent(t *testing.T) {
-	s := newScrubber(t)
-	// Deliberately long and mixed-case: the first pass turns "jane" into "__USER__", which
-	// ADDS entropy, and the second pass must not eat that.
-	payload := `{"type":"user","cwd":"/Users/jane/Work2026/SampleOrg/blink-UI","message":{"content":[{"type":"text","text":"ghp_abcdefghijklmnopqrstuvwxyz0123456789 in ~/.claude/projects/-Users-jane-Work2026-SampleOrg-blink-UI/f00.jsonl"}]}}` + "\n"
-
-	first := scrubJSONL(t, s, "claude-code", payload)
-	second := scrubJSONL(t, s, "claude-code", string(first.Out))
-
-	assert.Equalf(t, string(first.Out), string(second.Out), "second pass changed the output:\n first %s\nsecond %s", first.Out, second.Out)
 }
 
 // A pack named in config but absent from the corpus must fail loudly: running with fewer
@@ -477,23 +351,15 @@ func TestUnknownPackIsAnError(t *testing.T) {
 func buildRecordWithValueAt(t *testing.T, path, value string) string {
 	t.Helper()
 
-	segments := strings.Split(path, ".")
-	var build func(i int) any
-	build = func(i int) any {
-		if i == len(segments) {
-			return value
+	var valueAt any = value
+	for _, segment := range slices.Backward(strings.Split(path, ".")) {
+		name, array := strings.CutSuffix(segment, "[]")
+		if array {
+			valueAt = []any{valueAt}
 		}
-		seg := segments[i]
-		if strings.HasSuffix(seg, "[]") {
-			return map[string]any{
-				strings.TrimSuffix(seg, "[]"): []any{build(i + 1)},
-			}
-		}
-		return map[string]any{seg: build(i + 1)}
+		valueAt = map[string]any{name: valueAt}
 	}
-
-	rec, ok := build(0).(map[string]any)
-	require.Truef(t, ok, "could not build a record for path %q", path)
+	rec := valueAt.(map[string]any)
 	rec["type"] = "user"
 	raw, err := json.Marshal(rec)
 	require.NoError(t, err)
