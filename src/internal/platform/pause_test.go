@@ -8,36 +8,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 func TestSetReadClearRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	if platform.Read(dir).Paused {
-		t.Fatal("a fresh install reads as paused")
-	}
-	if err := platform.Set(dir, "laptop going to a client site", time.Now(), time.Time{}); err != nil {
-		t.Fatal(err)
-	}
+	require.True(t, !platform.Read(dir).Paused, "a fresh install reads as paused")
+	require.NoError(t, platform.Set(dir, "laptop going to a client site", time.Now(), time.Time{}))
 
 	got := platform.Read(dir)
-	if !got.Paused {
-		t.Fatal("not paused after Set")
-	}
-	if got.Reason != "laptop going to a client site" {
-		t.Errorf("reason = %q", got.Reason)
-	}
-	if got.At == "" {
-		t.Error("no timestamp: `status` could not say since when")
-	}
+	require.True(t, got.Paused, "not paused after Set")
+	assert.Equalf(t, "laptop going to a client site", got.Reason, "reason = %q", got.Reason)
+	assert.NotEqual(t, "", got.At, "no timestamp: `status` could not say since when")
 
-	if err := platform.Clear(dir); err != nil {
-		t.Fatal(err)
-	}
-	if platform.Read(dir).Paused {
-		t.Fatal("still paused after Clear")
-	}
+	require.NoError(t, platform.Clear(dir))
+	require.True(t, !platform.Read(dir).Paused, "still paused after Clear")
 }
 
 func TestSetAndClearAreIdempotent(t *testing.T) {
@@ -45,14 +34,10 @@ func TestSetAndClearAreIdempotent(t *testing.T) {
 
 	// Repeated pause and resume operations must remain script-safe.
 	for i := 0; i < 3; i++ {
-		if err := platform.Set(dir, "", time.Now(), time.Time{}); err != nil {
-			t.Fatalf("Set %d: %v", i, err)
-		}
+		require.NoError(t, platform.Set(dir, "", time.Now(), time.Time{}))
 	}
 	for i := 0; i < 3; i++ {
-		if err := platform.Clear(dir); err != nil {
-			t.Fatalf("Clear %d: %v", i, err)
-		}
+		require.NoError(t, platform.Clear(dir))
 	}
 }
 
@@ -84,17 +69,13 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, platform.File), []byte(tc.body), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, platform.File), []byte(tc.body), 0o644))
 			got := platform.Read(dir)
 			if !got.Paused {
 				t.Fatal("a flag file that exists but does not parse read as NOT paused: " +
 					"that direction resumes collection on a machine whose owner stopped it")
 			}
-			if tc.body != "" && got.Reason == "" && tc.name != "the flag says paused false" {
-				t.Error("no reason given, so `status` could not explain the state")
-			}
+			assert.True(t, tc.body == "" || got.Reason != "" || tc.name == "the flag says paused false", "no reason given, so `status` could not explain the state")
 		})
 	}
 }
@@ -102,24 +83,16 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 func TestSetCreatesTheStateDirectory(t *testing.T) {
 	// Pausing before `init` has to work: switching the tool off must not require initialising it first.
 	dir := filepath.Join(t.TempDir(), "not", "created", "yet")
-	if err := platform.Set(dir, "", time.Now(), time.Time{}); err != nil {
-		t.Fatal(err)
-	}
-	if !platform.Read(dir).Paused {
-		t.Fatal("not paused")
-	}
+	require.NoError(t, platform.Set(dir, "", time.Now(), time.Time{}))
+	require.True(t, platform.Read(dir).Paused, "not paused")
 }
 
 func TestFlagSurvivesReadingItRepeatedly(t *testing.T) {
 	dir := t.TempDir()
-	if err := platform.Set(dir, "why", time.Now(), time.Time{}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, platform.Set(dir, "why", time.Now(), time.Time{}))
 	// Read must not consume or rewrite the flag: the daemon reads it every tick.
 	for i := 0; i < 5; i++ {
-		if !platform.Read(dir).Paused {
-			t.Fatalf("read %d cleared the flag", i)
-		}
+		require.Truef(t, platform.Read(dir).Paused, "read %d cleared the flag", i)
 	}
 	if _, err := os.Stat(filepath.Join(dir, platform.File)); err != nil {
 		t.Fatalf("the flag file is gone: %v", err)
@@ -140,10 +113,7 @@ func TestPauseCannotSeeConfigOrBackend(t *testing.T) {
 	}
 	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		for _, f := range forbidden {
-			if dep == f {
-				t.Errorf("internal/pause links %s: pause state must not be reachable "+
-					"from configuration or from a control plane", f)
-			}
+			assert.NotEqual(t, dep, f)
 		}
 	}
 }

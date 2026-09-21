@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
@@ -13,18 +15,14 @@ import (
 func testUnit(t *testing.T) *identity.Unit {
 	t.Helper()
 	unit, err := identity.Mint(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return unit
 }
 
 func testRecipient(t *testing.T) string {
 	t.Helper()
 	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return id.Recipient().String()
 }
 
@@ -44,14 +42,10 @@ func TestRecipientsForComposesInstallThenAdditional(t *testing.T) {
 		IncludeInstallRecipient: true,
 		AdditionalRecipients:    []string{org},
 	}, unit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want := []string{unit.Recipient().String(), org}
 	gotS := recipientStrings(got)
-	if len(gotS) != 2 || gotS[0] != want[0] || gotS[1] != want[1] {
-		t.Errorf("recipients:\n got %v\nwant %v", gotS, want)
-	}
+	assert.Truef(t, len(gotS) == 2 && gotS[0] == want[0] && gotS[1] == want[1], "recipients:\n got %v\nwant %v", gotS, want)
 }
 
 func TestRecipientsForHonorsAWithheldInstallRecipient(t *testing.T) {
@@ -62,9 +56,7 @@ func TestRecipientsForHonorsAWithheldInstallRecipient(t *testing.T) {
 		IncludeInstallRecipient: false,
 		AdditionalRecipients:    []string{org},
 	}, unit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if gotS := recipientStrings(got); len(gotS) != 1 || gotS[0] != org {
 		t.Errorf("a withheld install recipient must not be encrypted to: %v", gotS)
 	}

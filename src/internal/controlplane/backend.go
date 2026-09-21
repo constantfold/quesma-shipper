@@ -1,10 +1,6 @@
-// Package controlplane is the optional control-plane client: with no endpoint configured it is
-// never constructed and the build makes zero network calls. It offers enroll, config, upload
-// authorization and telemetry submission, and must never offer an upload-status endpoint, a cursor
-// API or per-object acks.
-//
-// Telemetry says how collection is going and is forwarded without being read. The rule above still
-// holds: what is forbidden is a channel revealing what was collected, and this is not one.
+// Package controlplane handles enrollment, configuration, upload authorization and telemetry.
+// It never reports collected payloads, upload cursors or per-object acknowledgements.
+// No client is constructed without an endpoint.
 package controlplane
 
 import (

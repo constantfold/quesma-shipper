@@ -129,15 +129,8 @@ type SourceOutcome struct {
 	EnrichInfos []string
 }
 
-// FailureRecord is what an install remembers about going wrong. It is persisted locally and
-// carried by the next heartbeat that manages to ship, because a failed run uploads nothing -- its
-// own heartbeat included -- so without this every failure is invisible downstream the moment the
-// machine recovers, and a machine that fails every run looks exactly like an idle one.
-//
-// Two counters, not one: a crash and a failed run are different events, counted by different
-// mechanisms. Crashes are read back out of the crash journal as far as the last delivered report;
-// failures are incremented per run and reset on success. Collapsing them into one integer would
-// have to pick one of those reset rules and be wrong about the other.
+// FailureRecord persists failures for delivery by the next successful heartbeat.
+// Crashes count until acknowledged; run failures count until success.
 type FailureRecord struct {
 	// A run that died without being able to say anything, detected by a journal with no "exit".
 	LastCrash *LastCrash `json:"last_crash,omitempty"`
@@ -153,11 +146,7 @@ type FailureRecord struct {
 	Facts *RunFacts `json:"facts,omitempty"`
 }
 
-// RunFacts is the last run's cost and the limits it ran under. Memory pressure and a pathological
-// redaction are the two ways an install degrades without any single step returning an error, so
-// they are recorded as figures rather than events: they would otherwise recur every tick and evict
-// the log. The concurrency knobs travel with them because the same figures mean different things at
-// different widths.
+// RunFacts records the last run’s resource costs and concurrency limits.
 type RunFacts struct {
 	GOMAXPROCS       int   `json:"gomaxprocs,omitempty"`
 	MaxFilesPerRun   int   `json:"max_files_per_run,omitempty"`

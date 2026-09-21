@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
@@ -24,9 +26,7 @@ func (transport *homebrewUpdateTransport) RoundTrip(*http.Request) (*http.Respon
 
 func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 	if os.Getenv("QUESMA_TEST_BREW_CHILD") == "1" {
-		if !packaging.HomebrewManaged() {
-			t.Fatal("did not recognize the cask executable")
-		}
+		require.True(t, packaging.HomebrewManaged(), "did not recognize the cask executable")
 		build := app.Build{Version: "1.0.0", Release: true}
 		var out bytes.Buffer
 		transport := &homebrewUpdateTransport{}
@@ -36,9 +36,7 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		t.Setenv(app.NoSelfUpdateEnv, "1")
 		t.Setenv(app.ReexecGuardEnv, "")
 		maybeSelfUpdate(context.Background(), build, true, &out)
-		if transport.calls != 0 {
-			t.Fatal("self-update ignored the explicit disable switch")
-		}
+		require.Equal(t, 0, transport.calls, "self-update ignored the explicit disable switch")
 		t.Setenv(app.NoSelfUpdateEnv, "")
 		out.Reset()
 		maybeSelfUpdate(context.Background(), build, true, &out)
@@ -56,16 +54,10 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 			t.Fatalf("manual update did not reach TUF: %v", err)
 		}
 		_, paths, err := app.ResolveEffective()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(paths.StateDir, 0o700))
 		marker := filepath.Join(paths.StateDir, "preserve")
-		if err := os.WriteFile(marker, []byte("state"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(marker, []byte("state"), 0o600))
 		for _, purge := range []bool{false, true} {
 			out.Reset()
 			cmd = Root(build, &out, &out)
@@ -94,24 +86,14 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 
 	root := t.TempDir()
 	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	raw, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	installed := filepath.Join(root, "Caskroom", "quesma-shipper", "1.0.0", "quesma-shipper")
-	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(installed, raw, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(installed), 0o755))
+	require.NoError(t, os.WriteFile(installed, raw, 0o755))
 	link := filepath.Join(root, "shipper")
-	if err := os.Symlink(installed, link); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(installed, link))
 	cmd := exec.Command(link, "-test.run=^TestHomebrewSelfUpdatesButBrewUninstalls$")
 	cmd.Env = append(os.Environ(), "QUESMA_TEST_BREW_CHILD=1", "HOME="+root, "XDG_STATE_HOME="+filepath.Join(root, "state"), "XDG_CONFIG_HOME="+filepath.Join(root, "config"))
 	if out, err := cmd.CombinedOutput(); err != nil {

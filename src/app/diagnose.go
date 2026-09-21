@@ -42,20 +42,15 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		installID = unit.InstallID.String()
 	}
 	doc, docErr := engine.Peek(paths.StateDir)
-	registry := sources.NewRegistry()
 	trackFilter := eff.Catalog.RepoFilter()
 	var probes []sourceProbe
 	for _, src := range eff.Sources {
 		pr := sourceProbe{src: src}
 		if src.Enabled {
-			if prim, err := registry.For(src.Gather); err != nil {
-				pr.err = err
-			} else {
-				pr.d, pr.err = prim.Discover(sources.Request{
-					Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
-					StateDir: paths.StateDir, Username: username,
-				})
-			}
+			pr.d, pr.err = sources.Discover(sources.Request{
+				Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
+				StateDir: paths.StateDir, Username: username,
+			})
 			if pr.err == nil && docErr == nil {
 				pr.pending, _ = pending(doc, src, pr.d)
 			}

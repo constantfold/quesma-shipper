@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Big enough that scrubbing dominates the CPU; the same size as the memory guard's fixture.
@@ -82,9 +85,7 @@ func assertRuleHits(t *testing.T, w *world, session string, want map[string]int)
 	// This tier is its own module and cannot import the shipper's internal auditlog package, so it
 	// decodes the two fields it judges directly.
 	raw, err := os.ReadFile(filepath.Join(w.State, "trajectory-shipper", "audit.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got := map[string]int{}
 	found := false
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
@@ -107,14 +108,8 @@ func assertRuleHits(t *testing.T, w *world, session string, want map[string]int)
 			got[rule] += n
 		}
 	}
-	if !found {
-		t.Fatalf("no shipped audit entry for %s.jsonl: the ledger this gate reads is not the run's",
-			session)
-	}
+	require.Falsef(t, !found, "no shipped audit entry for %s.jsonl: the ledger this gate reads is not the run's", session)
 	for rule, n := range want {
-		if got[rule] != n {
-			t.Errorf("rule %q recorded %d hits, want %d (whole ledger for this file: %v)",
-				rule, got[rule], n, got)
-		}
+		assert.Falsef(t, got[rule] != n, "rule %q recorded %d hits, want %d (whole ledger for this file: %v)", rule, got[rule], n, got)
 	}
 }

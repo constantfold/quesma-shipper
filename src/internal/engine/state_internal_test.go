@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // A document that cannot be loaded, whatever the reason, is discarded rather than fatal: the run
@@ -34,13 +36,9 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 			}
 			dir := t.TempDir()
 			path := filepath.Join(dir, FileName)
-			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, []byte(c.body), 0o600))
 			if c.unreadable {
-				if err := os.Chmod(path, 0o000); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.Chmod(path, 0o000))
 			}
 			maxBytes := c.maxBytes
 			if maxBytes == 0 {
@@ -48,23 +46,17 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 			}
 
 			s, err := open(dir, install, maxBytes)
-			if err != nil {
-				t.Fatalf("open must succeed over a document it cannot load: %v", err)
-			}
+			require.NoErrorf(t, err, "open must succeed over a document it cannot load: %v", err)
 			if s.Len() != 0 || !s.Corrupt() {
 				t.Fatalf("len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
 			}
 			k := Key{SourceID: "s", NativePath: "/x/b.jsonl"}
 			fp := Fingerprint{SourceSize: 1, SourceMTime: time.Unix(1, 0).UTC(), SourceHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
-			if err := s.CommitAll(map[Key]Fingerprint{k: fp}); err != nil {
-				t.Fatalf("the first flush must replace the file: %v", err)
-			}
+			require.NoError(t, s.CommitAll(map[Key]Fingerprint{k: fp}))
 			s.Close()
 
 			s2, err := Open(dir, install)
-			if err != nil {
-				t.Fatalf("reopen: %v", err)
-			}
+			require.NoErrorf(t, err, "reopen: %v", err)
 			defer s2.Close()
 			if s2.Corrupt() || s2.Len() != 1 {
 				t.Fatalf("after the replace: corrupt=%v len=%d, want a clean store of one", s2.Corrupt(), s2.Len())

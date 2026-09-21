@@ -30,7 +30,6 @@ type AgentRow struct {
 // attributor is the caller's: the tracking browser keeps one across refreshes for its cwd cache.
 func Survey(eff *config.Effective, paths config.Paths, attr *sources.RepoFilter) []AgentRow {
 	names := familyNames(eff.Catalog)
-	registry := sources.NewRegistry()
 	byFamily := map[string]*AgentRow{}
 	var order []string
 	doc, docErr := engine.Peek(paths.StateDir)
@@ -58,11 +57,7 @@ func Survey(eff *config.Effective, paths config.Paths, attr *sources.RepoFilter)
 		if src.Root == "" {
 			continue
 		}
-		prim, err := registry.For(src.Gather)
-		if err != nil {
-			continue
-		}
-		d, err := prim.Discover(sources.Request{Source: src, All: eff.Sources, Deny: eff.Deny, StateDir: paths.StateDir})
+		d, err := sources.Discover(sources.Request{Source: src, All: eff.Sources, Deny: eff.Deny, StateDir: paths.StateDir})
 		if err != nil {
 			continue
 		}

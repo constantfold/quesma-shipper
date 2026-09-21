@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -39,19 +42,10 @@ func TestALineIsEitherFullyCoveredOrRawScanned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := s.Scrub([]byte(tc.line+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(res.Out), plantedAWSKey) {
-				t.Errorf("the planted key shipped in the clear:\n%s", res.Out)
-			}
-			if res.RuleHits["aws-access-key-id"] == 0 {
-				t.Errorf("nothing was recorded in the ledger: %v\n%s", res.RuleHits, res.Out)
-			}
-			if res.ScanMode != tc.wantMode {
-				t.Errorf("scan_mode %q, want %q — the manifest reports how a payload was "+
-					"handled and a reader relies on it", res.ScanMode, tc.wantMode)
-			}
+			require.NoError(t, err)
+			assert.NotContainsf(t, string(res.Out), plantedAWSKey, "the planted key shipped in the clear:\n%s", res.Out)
+			assert.NotEqual(t, 0, res.RuleHits["aws-access-key-id"])
+			assert.Equal(t, res.ScanMode, tc.wantMode)
 		})
 	}
 }
@@ -63,20 +57,12 @@ func TestARepeatedKeyKeepsBothValues(t *testing.T) {
 	const line = `{"a":"` + plantedAWSKey + `","a":"kept","b":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}`
 
 	res, err := s.Scrub([]byte(line+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out := string(res.Out)
-	if strings.Count(out, `"a":`) != 2 {
-		t.Errorf("the repeated key lost a value:\n%s", out)
-	}
-	if !strings.Contains(out, `"a":"kept"`) {
-		t.Errorf("the surviving value was altered:\n%s", out)
-	}
+	assert.Equalf(t, 2, strings.Count(out, `"a":`), "the repeated key lost a value:\n%s", out)
+	assert.Containsf(t, out, `"a":"kept"`, "the surviving value was altered:\n%s", out)
 	for _, rule := range []string{"aws-access-key-id", "github-pat"} {
-		if res.RuleHits[rule] == 0 {
-			t.Errorf("%s not in the ledger: %v", rule, res.RuleHits)
-		}
+		assert.NotEqual(t, 0, res.RuleHits[rule])
 	}
 }
 
@@ -88,13 +74,7 @@ func TestOrdinaryLinesStayOnTheParsedPath(t *testing.T) {
 		`"usage":{"input_tokens":120}},"toolUseId":"toolu_01FcSqsnNxWeeDGKyfZKjJHbXk9QwErTyU"}`
 
 	res, err := s.Scrub([]byte(line+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.ScanMode != transforms.ScanModeDecodedJSON {
-		t.Errorf("scan_mode %q, want %q", res.ScanMode, transforms.ScanModeDecodedJSON)
-	}
-	if string(res.Out) != line+"\n" {
-		t.Errorf("an ordinary line was altered:\n got %s\nwant %s", res.Out, line)
-	}
+	require.NoError(t, err)
+	assert.Equalf(t, transforms.ScanModeDecodedJSON, res.ScanMode, "scan_mode %q, want %q", res.ScanMode, transforms.ScanModeDecodedJSON)
+	assert.Equalf(t, line+"\n", string(res.Out), "an ordinary line was altered:\n got %s\nwant %s", res.Out, line)
 }

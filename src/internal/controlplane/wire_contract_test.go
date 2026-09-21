@@ -14,8 +14,11 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	pathpkg "path"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +26,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
+
 	protocol "github.com/QuesmaOrg/shipper-protocol"
 )
 
@@ -40,37 +44,23 @@ var wireSchemas = []string{
 func compileWireSchema(t *testing.T, name string) *jsonschema.Schema {
 	t.Helper()
 	raw, err := fs.ReadFile(protocol.FS, pathpkg.Join("schemas", name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
-	}
+	require.NoErrorf(t, err, "read %s: %v", name, err)
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("parse %s: %v", name, err)
-	}
+	require.NoErrorf(t, err, "parse %s: %v", name, err)
 	c := jsonschema.NewCompiler()
-	if err := c.AddResource(name, doc); err != nil {
-		t.Fatalf("add %s: %v", name, err)
-	}
+	require.NoError(t, c.AddResource(name, doc))
 	s, err := c.Compile(name)
-	if err != nil {
-		t.Fatalf("compile %s: %v", name, err)
-	}
+	require.NoErrorf(t, err, "compile %s: %v", name, err)
 	return s
 }
 
 func TestWireSchemasComplete(t *testing.T) {
 	entries, err := fs.Glob(protocol.FS, "schemas/*.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	versioned, err := fs.Glob(protocol.FS, "schemas/*/*.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	entries = append(entries, versioned...)
-	if len(entries) != len(wireSchemas) {
-		t.Errorf("shipper-protocol embeds %d schemas, wireSchemas lists %d — keep them in step", len(entries), len(wireSchemas))
-	}
+	assert.Lenf(t, entries, len(wireSchemas), "shipper-protocol embeds %d schemas, wireSchemas lists %d — keep them in step", len(entries), len(wireSchemas))
 	for _, name := range wireSchemas {
 		compileWireSchema(t, name)
 	}
@@ -202,16 +192,10 @@ func TestStructsMatchSchemas(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			payload, err := json.Marshal(tc.v)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(payload))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := compileWireSchema(t, tc.schema).Validate(doc); err != nil {
-				t.Errorf("marshaled struct does not satisfy its schema:\n%s\n%v", payload, err)
-			}
+			require.NoError(t, err)
+			assert.NoError(t, compileWireSchema(t, tc.schema).Validate(doc))
 		})
 	}
 }
@@ -241,9 +225,7 @@ func fixtureSchema(path string) string {
 func wireFixtures(t *testing.T) []string {
 	t.Helper()
 	paths, err := fs.Glob(protocol.FS, "fixtures/*/*/*.json")
-	if err != nil || len(paths) == 0 {
-		t.Fatalf("no embedded protocol fixtures (err: %v)", err)
-	}
+	require.Truef(t, err == nil && len(paths) != 0, "no embedded protocol fixtures (err: %v)", err)
 	return paths
 }
 
@@ -258,13 +240,9 @@ func TestFixturesValidate(t *testing.T) {
 		name := pathpkg.Base(pathpkg.Dir(path)) + "/" + pathpkg.Base(path)
 		t.Run(name, func(t *testing.T) {
 			raw, err := fs.ReadFile(protocol.FS, path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			err = compileWireSchema(t, schema).Validate(doc)
 			if bad := strings.HasPrefix(pathpkg.Base(path), "bad-"); bad && err == nil {
 				t.Errorf("%s must be rejected by %s", name, schema)
@@ -295,29 +273,17 @@ func TestFixturesRoundTripStructs(t *testing.T) {
 		name := pathpkg.Base(pathpkg.Dir(path)) + "/" + pathpkg.Base(path)
 		t.Run(name, func(t *testing.T) {
 			raw, err := fs.ReadFile(protocol.FS, path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			v := targets[schema]()
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
-			if err := dec.Decode(v); err != nil {
-				t.Fatalf("fixture does not decode into %T: %v", v, err)
-			}
+			require.NoError(t, dec.Decode(v))
 			remarshaled, err := json.Marshal(v)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			var want, got any
-			if err := json.Unmarshal(raw, &want); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(remarshaled, &got); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(want, got) {
-				t.Errorf("round trip through %T changed the document:\nfixture: %s\nrewrote: %s", v, raw, remarshaled)
-			}
+			require.NoError(t, json.Unmarshal(raw, &want))
+			require.NoError(t, json.Unmarshal(remarshaled, &got))
+			assert.Equalf(t, want, got, "round trip through %T changed the document:\nfixture: %s\nrewrote: %s", v, raw, remarshaled)
 		})
 	}
 }
@@ -348,23 +314,17 @@ type authExchange struct {
 func loadAuthFixture(t *testing.T, version string) (authFixture, ed25519.PrivateKey) {
 	t.Helper()
 	raw, err := fs.ReadFile(protocol.FS, pathpkg.Join("fixtures", version, "auth", "headers.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var fx authFixture
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&fx); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, dec.Decode(&fx))
 	seed, err := hex.DecodeString(fx.DeviceKeySeedHex)
 	if err != nil || len(seed) != ed25519.SeedSize {
 		t.Fatalf("device_key_seed_hex is not a %d-byte hex seed: %v", ed25519.SeedSize, err)
 	}
 	key := ed25519.NewKeyFromSeed(seed)
-	if got := base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey)); got != fx.DevicePublicKey {
-		t.Fatalf("seed derives public key %s, fixture says %s", got, fx.DevicePublicKey)
-	}
+	require.Equal(t, base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), fx.DevicePublicKey)
 	return fx, key
 }
 
@@ -384,9 +344,7 @@ func TestAuthFixtureGoldensVerify(t *testing.T) {
 			t.Errorf("%s sig is not base64: %v", name, err)
 			continue
 		}
-		if !ed25519.Verify(pub, []byte(ex.Body), sig) {
-			t.Errorf("%s golden signature does not verify over its body", name)
-		}
+		assert.Truef(t, ed25519.Verify(pub, []byte(ex.Body), sig), "%s golden signature does not verify over its body", name)
 	}
 }
 
@@ -410,13 +368,9 @@ func v2Fresh(issuedAt, serverTime time.Time) bool {
 func v2Signature(t *testing.T, authorization, organization, installID string) []byte {
 	t.Helper()
 	want := "Shipper-Device org=" + organization + ", install=" + installID + ", sig="
-	if !strings.HasPrefix(authorization, want) {
-		t.Fatalf("authorization %q does not open with %q", authorization, want)
-	}
+	require.Truef(t, strings.HasPrefix(authorization, want), "authorization %q does not open with %q", authorization, want)
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authorization, want))
-	if err != nil {
-		t.Fatalf("sig is not base64: %v", err)
-	}
+	require.NoErrorf(t, err, "sig is not base64: %v", err)
 	return sig
 }
 
@@ -440,17 +394,11 @@ func TestAuthV2FixtureGoldensVerify(t *testing.T) {
 	fx, key := loadAuthFixture(t, "v2")
 	pub := key.Public().(ed25519.PublicKey)
 
-	if fx.SigningPrefix != v2SigningPrefix {
-		t.Fatalf("fixture signing_prefix is %q, protocol says %q", fx.SigningPrefix, v2SigningPrefix)
-	}
-	if fx.ServerTime.IsZero() {
-		t.Fatal("v2 auth fixture carries no server_time, so freshness cannot be judged")
-	}
+	require.Equalf(t, v2SigningPrefix, fx.SigningPrefix, "fixture signing_prefix is %q, protocol says %q", fx.SigningPrefix, v2SigningPrefix)
+	require.True(t, !fx.ServerTime.IsZero(), "v2 auth fixture carries no server_time, so freshness cannot be judged")
 
 	golden := v2Signature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)
-	if !ed25519.Verify(pub, v2SigningInput(fx.Authorize.Method, fx.Authorize.Path, fx.Authorize.Body), golden) {
-		t.Error("the golden authorize signature does not verify over its domain-separated input")
-	}
+	assert.True(t, ed25519.Verify(pub, v2SigningInput(fx.Authorize.Method, fx.Authorize.Path, fx.Authorize.Body), golden), "the golden authorize signature does not verify over its domain-separated input")
 
 	for _, rej := range fx.Rejected {
 		t.Run(rej.Name, func(t *testing.T) {
@@ -464,9 +412,7 @@ func TestAuthV2FixtureGoldensVerify(t *testing.T) {
 			var carried struct {
 				IssuedAt time.Time `json:"issued_at"`
 			}
-			if err := json.Unmarshal([]byte(rej.Body), &carried); err != nil {
-				t.Fatalf("rejected body does not parse: %v", err)
-			}
+			require.NoError(t, json.Unmarshal([]byte(rej.Body), &carried))
 			if v2Fresh(carried.IssuedAt, fx.ServerTime) {
 				t.Errorf("this case verifies AND is fresh at %s, so nothing refuses it",
 					fx.ServerTime.Format(time.RFC3339))
@@ -486,23 +432,15 @@ func TestV2SigningInputIsDomainSeparated(t *testing.T) {
 			legacy = rej
 		}
 	}
-	if legacy.Body == "" {
-		t.Fatal("v2 auth fixture has no 'legacy body-only signature' case to compare against")
-	}
+	require.NotEqual(t, "", legacy.Body, "v2 auth fixture has no 'legacy body-only signature' case to compare against")
 
 	bodyOnly := base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(legacy.Body)))
 	domainSeparated := base64.StdEncoding.EncodeToString(
 		ed25519.Sign(key, v2SigningInput(fx.Authorize.Method, fx.Authorize.Path, fx.Authorize.Body)))
 
-	if got := base64.StdEncoding.EncodeToString(v2Signature(t, legacy.Authorization, fx.Organization, fx.InstallID)); got != bodyOnly {
-		t.Errorf("v1 body-only signing produces %s, the fixture's legacy case is %s", bodyOnly, got)
-	}
-	if got := base64.StdEncoding.EncodeToString(v2Signature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)); got != domainSeparated {
-		t.Errorf("v2 signing produces %s, the golden is %s", domainSeparated, got)
-	}
-	if bodyOnly == domainSeparated {
-		t.Error("v1 and v2 signatures agree over the same body: the domain separation is not there")
-	}
+	assert.Equal(t, base64.StdEncoding.EncodeToString(v2Signature(t, legacy.Authorization, fx.Organization, fx.InstallID)), bodyOnly)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(v2Signature(t, fx.Authorize.Authorization, fx.Organization, fx.InstallID)), domainSeparated)
+	assert.NotEqual(t, domainSeparated, bodyOnly, "v1 and v2 signatures agree over the same body: the domain separation is not there")
 }
 
 // The client reproduces the golden authorize exchange byte for byte: same body, same
@@ -510,19 +448,13 @@ func TestV2SigningInputIsDomainSeparated(t *testing.T) {
 func TestClientReproducesGoldenAuthorizeHeader(t *testing.T) {
 	fx, key := loadAuthFixture(t, "v2")
 	requestFixture, err := fs.ReadFile(protocol.FS, "fixtures/v2/uploads-authorize/request.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	responseFixture, err := fs.ReadFile(protocol.FS, "fixtures/v2/uploads-authorize/response.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var req controlplane.AuthorizeRequest
 	dec := json.NewDecoder(bytes.NewReader(requestFixture))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		t.Fatalf("request fixture does not decode into AuthorizeRequest: %v", err)
-	}
+	require.NoError(t, dec.Decode(&req))
 
 	var gotAuth, gotBody, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -539,29 +471,15 @@ func TestClientReproducesGoldenAuthorizeHeader(t *testing.T) {
 		Organization: fx.Organization,
 		DeviceKey:    key,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	resp, err := client.AuthorizeUploads(context.Background(), req)
-	if err != nil {
-		t.Fatalf("authorize against the fixture response: %v", err)
-	}
+	require.NoErrorf(t, err, "authorize against the fixture response: %v", err)
 
-	if gotPath != fx.Authorize.Path {
-		t.Errorf("client posted to %s, protocol path is %s", gotPath, fx.Authorize.Path)
-	}
-	if gotBody != fx.Authorize.Body {
-		t.Errorf("client posted body\n  %s\ngolden is\n  %s", gotBody, fx.Authorize.Body)
-	}
-	if gotAuth != fx.Authorize.Authorization {
-		t.Errorf("client built header\n  %s\ngolden is\n  %s", gotAuth, fx.Authorize.Authorization)
-	}
+	assert.Equalf(t, fx.Authorize.Path, gotPath, "client posted to %s, protocol path is %s", gotPath, fx.Authorize.Path)
+	assert.Equalf(t, fx.Authorize.Body, gotBody, "client posted body\n  %s\ngolden is\n  %s", gotBody, fx.Authorize.Body)
+	assert.Equalf(t, fx.Authorize.Authorization, gotAuth, "client built header\n  %s\ngolden is\n  %s", gotAuth, fx.Authorize.Authorization)
 
 	var want controlplane.AuthorizeResponse
-	if err := json.Unmarshal(responseFixture, &want); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(resp, want) {
-		t.Errorf("decoded response %+v does not match the fixture %+v", resp, want)
-	}
+	require.NoError(t, json.Unmarshal(responseFixture, &want))
+	assert.Equalf(t, resp, want, "decoded response %+v does not match the fixture %+v", resp, want)
 }

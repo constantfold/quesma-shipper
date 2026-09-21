@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
-	"github.com/QuesmaOrg/quesma-shipper/app"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/QuesmaOrg/quesma-shipper/app"
 )
 
 // Columns align by rune count, not bytes, so a multi-byte label cannot shift them.
@@ -26,9 +29,7 @@ func TestRenderSectionsAlignment(t *testing.T) {
 		"  !  länger  second\n" +
 		"     → do the thing\n" +
 		"  -  b       third\n"
-	if out.String() != want {
-		t.Fatalf("layout drifted:\ngot:\n%q\nwant:\n%q", out.String(), want)
-	}
+	require.Equalf(t, want, out.String(), "layout drifted:\ngot:\n%q\nwant:\n%q", out.String(), want)
 }
 
 func TestRenderSectionsUntitledAndMultilineFix(t *testing.T) {
@@ -40,9 +41,7 @@ func TestRenderSectionsUntitledAndMultilineFix(t *testing.T) {
 		"  !  parked  2 file(s)\n" +
 		"     → one\n" +
 		"       two\n"
-	if out.String() != want {
-		t.Fatalf("got:\n%q\nwant:\n%q", out.String(), want)
-	}
+	require.Equalf(t, want, out.String(), "got:\n%q\nwant:\n%q", out.String(), want)
 }
 
 func TestRenderSectionsColor(t *testing.T) {
@@ -60,9 +59,7 @@ func TestRenderSectionsColor(t *testing.T) {
 		"\x1b[2mT\x1b[0m",  // dim title
 		"\x1b[2m  -  ref",  // dim rows dim as a whole line
 	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("missing %q in:\n%q", want, s)
-		}
+		assert.Containsf(t, s, want, "missing %q in:\n%q", want, s)
 	}
 }
 
@@ -84,23 +81,15 @@ func TestPaint(t *testing.T) {
 	for _, c := range cases {
 		got := p.paint(c.in, "")
 		for _, tok := range c.want {
-			if !strings.Contains(got, p.cyan+tok+p.reset) {
-				t.Errorf("paint(%q): token %q not painted in %q", c.in, tok, got)
-			}
+			assert.Contains(t, got, p.cyan+tok+p.reset)
 		}
 		for _, word := range c.not {
-			if strings.Contains(got, p.cyan+word) {
-				t.Errorf("paint(%q): prose %q wrongly painted", c.in, word)
-			}
+			assert.NotContains(t, got, p.cyan+word)
 		}
 	}
 
-	if got := p.paint("12 files", p.dim); !strings.Contains(got, p.cyan+"12"+p.reset+p.dim) {
-		t.Errorf("restore state not re-established after token: %q", got)
-	}
-	if got := (palette{}).paint("12 files", ""); got != "12 files" {
-		t.Errorf("zero palette must be a no-op, got %q", got)
-	}
+	assert.Contains(t, p.paint("12 files", p.dim), p.cyan+"12"+p.reset+p.dim)
+	assert.Equal(t, "12 files", (palette{}).paint("12 files", ""))
 }
 
 func TestColorEnabled(t *testing.T) {
@@ -119,9 +108,7 @@ func TestColorEnabled(t *testing.T) {
 		{"dumb_term", true, map[string]string{"TERM": "dumb"}, false},
 	}
 	for _, c := range cases {
-		if got := colorEnabled(c.tty, env(c.vals)); got != c.want {
-			t.Errorf("%s: colorEnabled = %v, want %v", c.name, got, c.want)
-		}
+		assert.Equal(t, colorEnabled(c.tty, env(c.vals)), c.want)
 	}
 }
 
@@ -137,8 +124,6 @@ func TestVerdict(t *testing.T) {
 		{2, 2, "2 problems are stopping collection; 2 issues need attention."},
 	}
 	for _, c := range cases {
-		if got := verdict(c.fails, c.warns); got != c.want {
-			t.Errorf("verdict(%d, %d) = %q, want %q", c.fails, c.warns, got, c.want)
-		}
+		assert.Equal(t, verdict(c.fails, c.warns), c.want)
 	}
 }

@@ -1,8 +1,5 @@
-// Package enrich is the enricher contract and registry: a compiled per-source hook running
-// after a flush's raw units are staged and BEFORE redaction, joining a store of higher fidelity
-// (Cursor's SQLite holds the tool results, tool-call ids and timestamps its JSONL lacks). It is
-// the ONLY capture path for those fields, since no rows ship; raw files ship regardless, so it
-// fails open, and its output is deterministic and versioned so the output hash is a change signal.
+// Enrichers join staged raw data with declared stores before redaction.
+// Outputs are deterministic and versioned; failures never prevent raw files from shipping.
 package transforms
 
 import (

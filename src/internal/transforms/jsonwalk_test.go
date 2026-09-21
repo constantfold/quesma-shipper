@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
@@ -13,9 +16,7 @@ func sourcePatchScrubber(t *testing.T) *Scrubber {
 	cfg.Exemptions = CompiledExemptions()
 	cfg.Username = "jane"
 	s, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return s
 }
 
@@ -33,9 +34,7 @@ func TestJSONTextAcceptanceMatchesEncodingJSON(t *testing.T) {
 		var walker jsonWalker
 		walker.reset(s, "claude-code", &scan, []byte(line))
 		got := walker.walkLine() == nil
-		if want := json.Valid([]byte(line)); got != want {
-			t.Errorf("valid(%q) = %v, encoding/json = %v", line, got, want)
-		}
+		assert.Equal(t, got, json.Valid([]byte(line)))
 	}
 }
 
@@ -45,15 +44,9 @@ func TestSourcePatchingRequotesOnlyDirtyStrings(t *testing.T) {
 	want := " \t{ \"n\" : 1e+09, \"text\" : \"left/< __REDACTED:aws-access-key-id__ right\", \"keep\":\"\\u0041\\/\" } \r\n"
 
 	res, err := s.Scrub([]byte(before), Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(res.Out); got != want {
-		t.Fatalf("source bytes changed outside the dirty string:\n got %q\nwant %q", got, want)
-	}
-	if res.ScanMode != ScanModeDecodedJSON || res.RuleHits["aws-access-key-id"] != 1 {
-		t.Fatalf("unexpected result metadata: %+v", res)
-	}
+	require.NoError(t, err)
+	require.Equal(t, string(res.Out), want)
+	require.Truef(t, res.ScanMode == ScanModeDecodedJSON && res.RuleHits["aws-access-key-id"] == 1, "unexpected result metadata: %+v", res)
 }
 
 func TestSourcePatchingCoversKeysDuplicatesAndBareStrings(t *testing.T) {
@@ -79,15 +72,9 @@ func TestSourcePatchingCoversKeysDuplicatesAndBareStrings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := s.Scrub([]byte(tc.before), Hint{Family: "claude-code", JSONL: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := string(res.Out); got != tc.want {
-				t.Fatalf("got  %q\nwant %q", got, tc.want)
-			}
-			if res.ScanMode != ScanModeDecodedJSON {
-				t.Fatalf("scan mode = %q", res.ScanMode)
-			}
+			require.NoError(t, err)
+			require.Equal(t, string(res.Out), tc.want)
+			require.Equalf(t, ScanModeDecodedJSON, res.ScanMode, "scan mode = %q", res.ScanMode)
 		})
 	}
 }
@@ -104,12 +91,8 @@ func TestSourcePatchingNormalizesExceptionalBytesInDirtyStrings(t *testing.T) {
 			before := `{"text":"` + tc.prefix + ` / AKIAIOSFODNN7EXAMPLE / \u0041"}`
 			want := `{"text":"� / __REDACTED:aws-access-key-id__ / A"}`
 			res, err := s.Scrub([]byte(before), Hint{Family: "claude-code", JSONL: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := string(res.Out); got != want {
-				t.Fatalf("got  %q\nwant %q", got, want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, string(res.Out), want)
 		})
 	}
 }

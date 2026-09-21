@@ -1,10 +1,6 @@
-// Package windows owns the per-user Task Scheduler entry. The task runs in the interactive
-// user's security context because the shipper reads that user's coding-agent stores.
-//
-// Task Scheduler terminates an action rather than delivering the Unix signals used by the
-// shipper's drain path. The supervisor therefore puts the child in a kill-on-close Job Object:
-// stopping the task is deterministic, but not graceful. This is safe because a source is only
-// committed after its destination confirms the write, so an interrupted tick is replayed.
+// Package windows owns the interactive user’s Task Scheduler entry.
+// The supervisor’s kill-on-close Job Object makes stops deterministic, not graceful.
+// Interrupted files replay because upload confirmation precedes commit.
 package windows
 
 import (

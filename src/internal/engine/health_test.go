@@ -2,9 +2,11 @@ package engine_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -45,9 +47,7 @@ func TestHeartbeatCarriesNoContentOrUploadState(t *testing.T) {
 		Report: report(), Now: time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC),
 	})
 	body, err := hb.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// No object keys, cursor offsets or paths, which would make it upload tracking. Matched against
 	// field NAMES: "cursor" alone also matches the legitimate source id "cursor-transcripts".
@@ -55,16 +55,12 @@ func TestHeartbeatCarriesNoContentOrUploadState(t *testing.T) {
 		"abc.age", `"object_key"`, `"cursor_before"`, `"cursor_after"`, `"offset"`,
 		`"native_path"`, ".jsonl", "/Users/", "projects/",
 	} {
-		if strings.Contains(string(body), forbidden) {
-			t.Errorf("heartbeat contains %q — it must not be upload tracking:\n%s", forbidden, body)
-		}
+		assert.NotContainsf(t, string(body), forbidden, "heartbeat contains %q — it must not be upload tracking:\n%s", forbidden, body)
 	}
 
 	// What it MUST carry.
 	var parsed map[string]any
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(body, &parsed))
 	for _, want := range []string{"install_id", "client_version", "config_version", "sources"} {
 		if _, ok := parsed[want]; !ok {
 			t.Errorf("heartbeat missing %q", want)
@@ -80,12 +76,8 @@ func TestHeartbeatKeepsAbsentAndNoMatchDistinct(t *testing.T) {
 	for _, s := range hb.Sources {
 		states[s.SourceID] = s.State
 	}
-	if states["codex-rollouts"] != string(sources.AgentAbsent) {
-		t.Errorf("codex state %q", states["codex-rollouts"])
-	}
-	if states["cursor-transcripts"] != string(sources.RootPresentNoMatch) {
-		t.Errorf("cursor state %q", states["cursor-transcripts"])
-	}
+	assert.Equalf(t, string(sources.AgentAbsent), states["codex-rollouts"], "codex state %q", states["codex-rollouts"])
+	assert.Equalf(t, string(sources.RootPresentNoMatch), states["cursor-transcripts"], "cursor state %q", states["cursor-transcripts"])
 }
 
 func TestHeartbeatRecordsPerSourceCounts(t *testing.T) {
@@ -94,15 +86,9 @@ func TestHeartbeatRecordsPerSourceCounts(t *testing.T) {
 		if s.SourceID != "claude-code-transcripts" {
 			continue
 		}
-		if s.Shipped != 1 || s.Unchanged != 1 {
-			t.Errorf("counts: shipped %d unchanged %d", s.Shipped, s.Unchanged)
-		}
-		if s.RedactionDensity <= 0 {
-			t.Error("redaction density should be recorded: it is the rule-drift alarm")
-		}
-		if s.AgentVersion != "2.1.220" {
-			t.Errorf("agent version %q", s.AgentVersion)
-		}
+		assert.Truef(t, s.Shipped == 1 && s.Unchanged == 1, "counts: shipped %d unchanged %d", s.Shipped, s.Unchanged)
+		assert.True(t, s.RedactionDensity > 0, "redaction density should be recorded: it is the rule-drift alarm")
+		assert.Equalf(t, "2.1.220", s.AgentVersion, "agent version %q", s.AgentVersion)
 		return
 	}
 	t.Error("source not found in heartbeat")

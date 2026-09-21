@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testKey = "v1/organization=acme/install=3f2504e0-4f89-41d3-9a0c-0305e82c3301/mirror/source=claude-code-transcripts/f91631a3882c7956a9d2061b96ea38fd75bc77549b85cab26c7b2b63db21ed73.age"
@@ -45,9 +48,7 @@ func objectStore(t *testing.T, respond func(w http.ResponseWriter, r *http.Reque
 func loopbackTarget(t *testing.T, origin string) UploadTarget {
 	t.Helper()
 	target, err := NewUploadTarget(TargetSpec{Origin: origin, Addressing: VirtualHosted, AllowLoopbackHTTP: true})
-	if err != nil {
-		t.Fatalf("build loopback target: %v", err)
-	}
+	require.NoErrorf(t, err, "build loopback target: %v", err)
 	return target
 }
 
@@ -89,34 +90,18 @@ func TestUploadSendsExactlyTheAuthorizedRequest(t *testing.T) {
 	})
 	prepared, ticket := testTicket(server.URL)
 	targets := UploadTargetList{loopbackTarget(t, server.URL)}
-	if err := ValidateTicket(targets, prepared, ticket); err != nil {
-		t.Fatalf("ValidateTicket: %v", err)
-	}
+	require.NoError(t, ValidateTicket(targets, prepared, ticket))
 
-	if err := New().Upload(context.Background(), ticket, prepared.Body); err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-	if requests.Load() != 1 {
-		t.Fatalf("object store saw %d requests, want 1", requests.Load())
-	}
+	require.NoError(t, New().Upload(context.Background(), ticket, prepared.Body))
+	require.Equalf(t, int64(1), requests.Load(), "object store saw %d requests, want 1", requests.Load())
 
 	got := (*puts)[0]
-	if got.method != http.MethodPut {
-		t.Errorf("method = %s, want PUT", got.method)
-	}
-	if want := "/" + canonicalPath(testKey); got.path != want {
-		t.Errorf("path = %q, want %q", got.path, want)
-	}
-	if string(got.body) != string(prepared.Body) {
-		t.Errorf("body = %q, want %q", got.body, prepared.Body)
-	}
-	if got.length != ticket.ContentLength {
-		t.Errorf("Content-Length = %d, want %d", got.length, ticket.ContentLength)
-	}
+	assert.Equalf(t, http.MethodPut, got.method, "method = %s, want PUT", got.method)
+	assert.Equal(t, got.path, "/"+canonicalPath(testKey))
+	assert.Equalf(t, string(prepared.Body), string(got.body), "body = %q, want %q", got.body, prepared.Body)
+	assert.Equalf(t, ticket.ContentLength, got.length, "Content-Length = %d, want %d", got.length, ticket.ContentLength)
 	for name, want := range ticket.RequiredHeaders {
-		if have := got.headers.Get(name); have != want {
-			t.Errorf("header %s = %q, want %q", name, have, want)
-		}
+		assert.Equal(t, got.headers.Get(name), want)
 	}
 	for name := range got.headers {
 		lower := strings.ToLower(name)
@@ -141,12 +126,8 @@ func TestUploadRefusesRedirect(t *testing.T) {
 	_, ticket := testTicket(server.URL)
 
 	err := New().Upload(context.Background(), ticket, []byte("sealed-object-bytes"))
-	if !errors.Is(err, ErrRedirect) {
-		t.Fatalf("error is %v, want ErrRedirect", err)
-	}
-	if requests.Load() != 1 {
-		t.Fatalf("object store saw %d requests, want exactly the one that was redirected", requests.Load())
-	}
+	require.ErrorIsf(t, err, ErrRedirect, "error is %v, want ErrRedirect", err)
+	require.Equalf(t, int64(1), requests.Load(), "object store saw %d requests, want exactly the one that was redirected", requests.Load())
 	assertNoURLLeak(t, err, ticket.URL)
 }
 
@@ -158,18 +139,10 @@ func TestUploadNonOKStatusIsAFailure(t *testing.T) {
 
 	err := New().Upload(context.Background(), ticket, []byte("sealed-object-bytes"))
 	var status *StatusError
-	if !errors.As(err, &status) {
-		t.Fatalf("error is %v, want *StatusError", err)
-	}
-	if status.Status != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", status.Status)
-	}
-	if strings.ContainsAny(status.Reason, "\n\t") {
-		t.Fatalf("reason was not sanitized: %q", status.Reason)
-	}
-	if !strings.Contains(status.Reason, "AccessDenied") {
-		t.Fatalf("reason lost the store's diagnostic: %q", status.Reason)
-	}
+	require.ErrorAsf(t, err, &status, "error is %v, want *StatusError", err)
+	require.Equalf(t, http.StatusForbidden, status.Status, "status = %d, want 403", status.Status)
+	require.Truef(t, !strings.ContainsAny(status.Reason, "\n\t"), "reason was not sanitized: %q", status.Reason)
+	require.Containsf(t, status.Reason, "AccessDenied", "reason lost the store's diagnostic: %q", status.Reason)
 	assertNoURLLeak(t, err, ticket.URL)
 }
 
@@ -191,11 +164,7 @@ func TestValidationRefusesBeforeAnyRequest(t *testing.T) {
 		other := ticket
 		other.URL = server.URL + "/" + canonicalPath(strings.Replace(testKey,
 			"3f2504e0-4f89-41d3-9a0c-0305e82c3301", "11111111-2222-3333-4444-555555555555", 1))
-		if err := ValidateTicket(allowed, prepared, other); err == nil {
-			t.Fatal("a sibling install's key was accepted")
-		}
+		require.Error(t, ValidateTicket(allowed, prepared, other), "a sibling install's key was accepted")
 	})
-	if requests.Load() != 0 {
-		t.Fatalf("object store saw %d requests, want none", requests.Load())
-	}
+	require.Equalf(t, int64(0), requests.Load(), "object store saw %d requests, want none", requests.Load())
 }

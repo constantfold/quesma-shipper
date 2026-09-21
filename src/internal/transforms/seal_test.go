@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"math/rand"
 	"strings"
@@ -14,6 +13,8 @@ import (
 
 	"filippo.io/age"
 	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
@@ -21,9 +22,7 @@ import (
 func identity(t *testing.T) *age.X25519Identity {
 	t.Helper()
 	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return id
 }
 
@@ -49,47 +48,27 @@ func TestSealOpenRoundTrip(t *testing.T) {
 	payload := []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n")
 
 	obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	gotM, gotPayload, err := transforms.Open(obj, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotPayload, payload) {
-		t.Errorf("payload round trip:\n got %q\nwant %q", gotPayload, payload)
-	}
-	if gotM.NativePath != manifest().NativePath {
-		t.Errorf("native_path: %q", gotM.NativePath)
-	}
-	if gotM.RunID != "0123456789abcdef" {
-		t.Errorf("run_id: %q", gotM.RunID)
-	}
+	require.NoError(t, err)
+	assert.Truef(t, bytes.Equal(gotPayload, payload), "payload round trip:\n got %q\nwant %q", gotPayload, payload)
+	assert.Equalf(t, manifest().NativePath, gotM.NativePath, "native_path: %q", gotM.NativePath)
+	assert.Equalf(t, "0123456789abcdef", gotM.RunID, "run_id: %q", gotM.RunID)
 
 	// Seal computes these from the bytes it actually wrote.
 	sum := sha256.Sum256(payload)
-	if gotM.ShippedHash != hex.EncodeToString(sum[:]) {
-		t.Error("shipped_hash does not describe the payload")
-	}
-	if gotM.PayloadSize != int64(len(payload)) {
-		t.Errorf("payload_size %d, want %d", gotM.PayloadSize, len(payload))
-	}
+	assert.Equal(t, hex.EncodeToString(sum[:]), gotM.ShippedHash, "shipped_hash does not describe the payload")
+	assert.Equalf(t, int64(len(payload)), gotM.PayloadSize, "payload_size %d, want %d", gotM.PayloadSize, len(payload))
 }
 
 // A payload of zero bytes is a real case and must round-trip, not be special-cased.
 func TestSealEmptyPayload(t *testing.T) {
 	id := identity(t)
 	obj, _, err := transforms.Seal(manifest(), nil, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	m, payload, err := transforms.Open(obj, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(payload) != 0 || m.PayloadSize != 0 {
-		t.Errorf("empty payload became %d bytes", len(payload))
-	}
+	require.NoError(t, err)
+	assert.Truef(t, len(payload) == 0 && m.PayloadSize == 0, "empty payload became %d bytes", len(payload))
 }
 
 // Manifest-first is the container contract and what makes a ranged head-fetch possible, so
@@ -97,18 +76,12 @@ func TestSealEmptyPayload(t *testing.T) {
 func TestManifestIsTheFirstTarEntry(t *testing.T) {
 	id := identity(t)
 	obj, _, err := transforms.Seal(manifest(), bytes.Repeat([]byte("x"), 4096), []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	dec, err := age.Decrypt(bytes.NewReader(obj), id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	zr, err := zstd.NewReader(dec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer zr.Close()
 
 	tr := tar.NewReader(zr)
@@ -118,9 +91,7 @@ func TestManifestIsTheFirstTarEntry(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		names = append(names, hdr.Name)
 	}
 	if len(names) != 2 || names[0] != transforms.ManifestEntry || names[1] != transforms.PayloadEntry {
@@ -142,28 +113,15 @@ func TestReadManifestPrefixOnMultiMegabyteObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(obj) < 1<<20 {
-		t.Fatalf("object compressed to %d bytes; the test needs one larger than the prefix", len(obj))
-	}
+	require.NoError(t, err)
+	require.Truef(t, len(obj) >= 1<<20, "object compressed to %d bytes; the test needs one larger than the prefix", len(obj))
 
 	prefix := obj[:transforms.SuggestedPrefixBytes]
 	m, err := transforms.ReadManifestPrefix(prefix, id)
-	if err != nil {
-		t.Fatalf("a %d-byte prefix of a %d-byte object must yield the manifest: %v",
-			len(prefix), len(obj), err)
-	}
-	if m.NativePath != manifest().NativePath {
-		t.Errorf("native_path from prefix: %q", m.NativePath)
-	}
-	if m.SourceHash != manifest().SourceHash {
-		t.Errorf("source_hash from prefix: %q", m.SourceHash)
-	}
-	if m.PayloadSize != int64(len(payload)) {
-		t.Errorf("payload_size from prefix: %d, want %d", m.PayloadSize, len(payload))
-	}
+	require.NoErrorf(t, err, "a %d-byte prefix of a %d-byte object must yield the manifest: %v", len(prefix), len(obj), err)
+	assert.Equalf(t, manifest().NativePath, m.NativePath, "native_path from prefix: %q", m.NativePath)
+	assert.Equalf(t, manifest().SourceHash, m.SourceHash, "source_hash from prefix: %q", m.SourceHash)
+	assert.Equalf(t, int64(len(payload)), m.PayloadSize, "payload_size from prefix: %d, want %d", m.PayloadSize, len(payload))
 }
 
 // A prefix too short to hold the manifest must say so distinguishably, so the caller doubles
@@ -173,18 +131,14 @@ func TestReadManifestPrefixReportsTooShort(t *testing.T) {
 	big := make([]byte, 1<<20)
 	rand.New(rand.NewSource(2)).Read(big)
 	obj, _, err := transforms.Seal(manifest(), big, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	for _, n := range []int{1, 16, 128, 1024} {
 		if n >= len(obj) {
 			continue
 		}
 		_, err := transforms.ReadManifestPrefix(obj[:n], id)
-		if !errors.Is(err, transforms.ErrPrefixTooShort) {
-			t.Errorf("a %d-byte prefix should report ErrPrefixTooShort, got %v", n, err)
-		}
+		assert.ErrorIsf(t, err, transforms.ErrPrefixTooShort, "a %d-byte prefix should report ErrPrefixTooShort, got %v", n, err)
 	}
 }
 
@@ -194,28 +148,20 @@ func TestPrefixDoublingConverges(t *testing.T) {
 	big := make([]byte, 2<<20)
 	rand.New(rand.NewSource(3)).Read(big)
 	obj, _, err := transforms.Seal(manifest(), big, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	budget := 512
 	attempts := 0
 	for {
 		attempts++
-		if attempts > 20 {
-			t.Fatal("doubling did not converge")
-		}
+		require.True(t, attempts <= 20, "doubling did not converge")
 		n := min(budget, len(obj))
 		m, err := transforms.ReadManifestPrefix(obj[:n], id)
 		if err == nil {
-			if m.SourceID != "claude-code-transcripts" {
-				t.Errorf("wrong manifest: %+v", m)
-			}
+			assert.Equalf(t, "claude-code-transcripts", m.SourceID, "wrong manifest: %+v", m)
 			return
 		}
-		if !errors.Is(err, transforms.ErrPrefixTooShort) {
-			t.Fatalf("unexpected error at %d bytes: %v", n, err)
-		}
+		require.ErrorIsf(t, err, transforms.ErrPrefixTooShort, "unexpected error at %d bytes: %v", n, err)
 		budget *= 2
 	}
 }
@@ -231,17 +177,13 @@ func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	payload := []byte(`{"text":"a distinctive sentence that must not appear in ciphertext"}`)
 
 	obj, _, err := transforms.Seal(m, payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	for _, needle := range []string{
 		secretPath, "distinctive sentence", "claude-code-transcripts",
 		"manifest.json", "jane", "payload",
 	} {
-		if bytes.Contains(obj, []byte(needle)) {
-			t.Errorf("ciphertext leaks %q in plaintext", needle)
-		}
+		assert.NotContainsf(t, string(obj), needle, "ciphertext leaks %q in plaintext", needle)
 	}
 	if _, _, err := transforms.Open(obj, stranger); err == nil {
 		t.Fatal("an object must not open with an unrelated identity")
@@ -262,14 +204,10 @@ func TestRecipientSetsDecideWhoCanRead(t *testing.T) {
 	payload := []byte(`{"a":1}`)
 
 	archivalOnly, _, err := transforms.Seal(manifest(), payload, []age.Recipient{archival.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	both, _, err := transforms.Seal(manifest(), payload,
 		[]age.Recipient{archival.Recipient(), analysis.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	if _, _, err := transforms.Open(archivalOnly, archival); err != nil {
 		t.Errorf("the archival identity must read an archival object: %v", err)
@@ -285,16 +223,10 @@ func TestRecipientSetsDecideWhoCanRead(t *testing.T) {
 
 	// Recipient key IDs are recorded, public only, so a rotation can find what to rewrap.
 	m, _, err := transforms.Open(both, archival)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(m.Encryption.RecipientKeyIDs) != 2 {
-		t.Errorf("recipient_key_ids: %v", m.Encryption.RecipientKeyIDs)
-	}
+	require.NoError(t, err)
+	assert.Lenf(t, m.Encryption.RecipientKeyIDs, 2, "recipient_key_ids: %v", m.Encryption.RecipientKeyIDs)
 	for _, kid := range m.Encryption.RecipientKeyIDs {
-		if strings.Contains(kid, "AGE-SECRET-KEY") {
-			t.Fatal("a private key reached the manifest")
-		}
+		require.NotContains(t, kid, "AGE-SECRET-KEY", "a private key reached the manifest")
 	}
 }
 
@@ -343,9 +275,7 @@ func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	m.ShippedHash = strings.Repeat("b", 64)
 	m.PayloadSize = 1
 	raw, err := m.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	var tarBuf bytes.Buffer
 	tw := tar.NewWriter(&tarBuf)
@@ -353,29 +283,21 @@ func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 		name string
 		body []byte
 	}{{transforms.ManifestEntry, raw}, {transforms.PayloadEntry, []byte("different")}} {
-		if err := tw.WriteHeader(&tar.Header{
+		require.NoError(t, tw.WriteHeader(&tar.Header{
 			Typeflag: tar.TypeReg, Name: e.name, Size: int64(len(e.body)),
 			Mode: 0o600, ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatUSTAR,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		}))
 		if _, err := tw.Write(e.body); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, tw.Close())
 
 	var objBuf bytes.Buffer
 	encW, err := age.Encrypt(&objBuf, id.Recipient())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	zw, err := zstd.NewWriter(encW, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(transforms.ZstdLevel)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := zw.Write(tarBuf.Bytes()); err != nil {
 		t.Fatal(err)
 	}
@@ -397,9 +319,7 @@ func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 	md := m.ObjectMetadata()
 	for _, needle := range []string{"jane", "secret-project", "s.jsonl", "/Users", "projects"} {
 		for k, v := range md {
-			if strings.Contains(k, needle) || strings.Contains(v, needle) {
-				t.Errorf("object metadata leaks %q: %v", needle, md)
-			}
+			assert.Truef(t, !strings.Contains(k, needle) && !strings.Contains(v, needle), "object metadata leaks %q: %v", needle, md)
 		}
 	}
 	for _, want := range []string{"source-hash", "shipped-hash", "artifact-class", "manifest-version"} {
@@ -417,21 +337,13 @@ func TestShippedHashReachesObjectMetadata(t *testing.T) {
 	payload := []byte(`{"line":"one"}` + "\n")
 
 	obj, sealedM, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := sealedM.ObjectMetadata()["shipped-hash"]; got != sha256Hex(payload) {
-		t.Errorf("object metadata shipped-hash = %q, want the payload hash", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, sealedM.ObjectMetadata()["shipped-hash"], sha256Hex(payload))
 
 	// And the sealed copy agrees, so decrypting and heading the object tell the same story.
 	sealed, _, err := transforms.Open(obj, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sealed.ShippedHash != sha256Hex(payload) {
-		t.Errorf("sealed manifest shipped_hash = %q", sealed.ShippedHash)
-	}
+	require.NoError(t, err)
+	assert.Equalf(t, sha256Hex(payload), sealed.ShippedHash, "sealed manifest shipped_hash = %q", sealed.ShippedHash)
 }
 
 func sha256Hex(b []byte) string {
@@ -444,9 +356,7 @@ func sha256Hex(b []byte) string {
 // is there because a runtime-level defect is a property of the toolchain alone.
 func TestTheManifestRecordsWhichBuildSealedTheObject(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	m := manifest()
 	m.Client = transforms.Client{
 		Version:   "0.0.0-d5f735643cbd+dirty",
@@ -458,43 +368,27 @@ func TestTheManifestRecordsWhichBuildSealedTheObject(t *testing.T) {
 	}
 
 	sealed, _, err := transforms.Seal(m, []byte("{}\n"), []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, _, err := transforms.Open(sealed, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if got.Client.Commit != m.Client.Commit {
-		t.Errorf("commit did not survive: %q", got.Client.Commit)
-	}
-	if !got.Client.Modified {
-		t.Error("a build from a modified tree is recorded as clean")
-	}
-	if got.Client.GoVersion != "go1.25.0" {
-		t.Errorf("go_version did not survive: %q", got.Client.GoVersion)
-	}
+	assert.Equalf(t, m.Client.Commit, got.Client.Commit, "commit did not survive: %q", got.Client.Commit)
+	assert.True(t, got.Client.Modified, "a build from a modified tree is recorded as clean")
+	assert.Equalf(t, "go1.25.0", got.Client.GoVersion, "go_version did not survive: %q", got.Client.GoVersion)
 }
 
 // A build with no VCS stamping must not invent one, and the schema refuses unknown fields, so
 // an empty commit has to be OMITTED rather than sent as "".
 func TestABuildWithNoStampSealsWithoutTheOptionalFields(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	m := manifest()
 	m.Client = transforms.Client{Version: "unknown"}
 
 	sealed, _, err := transforms.Seal(m, []byte("{}\n"), []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatalf("a manifest from an unstamped build did not seal: %v", err)
-	}
+	require.NoErrorf(t, err, "a manifest from an unstamped build did not seal: %v", err)
 	got, _, err := transforms.Open(sealed, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Client.Commit != "" || got.Client.Modified {
 		t.Errorf("fields were invented: %+v", got.Client)
 	}

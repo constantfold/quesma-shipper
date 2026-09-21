@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func testSpec() Spec {
@@ -29,11 +31,7 @@ func TestUnitCarriesRestartEnvironmentAndLoginStart(t *testing.T) {
 	got := renderUnit(testSpec())
 	for _, want := range []string{"ExecStart=/usr/local/bin/quesma-shipper run", "Restart=always",
 		"WantedBy=default.target", "Environment=HOME=/home/jane"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("unit is missing %q:\n%s", want, got)
-		}
+		assert.Falsef(t, !strings.Contains(got, want), "unit is missing %q:\n%s", want, got)
 	}
-	if strings.Contains(got, "User=") || strings.Contains(got, "[Timer]") {
-		t.Errorf("user service contains system-level or timer configuration:\n%s", got)
-	}
+	assert.Falsef(t, strings.Contains(got, "User=") || strings.Contains(got, "[Timer]"), "user service contains system-level or timer configuration:\n%s", got)
 }

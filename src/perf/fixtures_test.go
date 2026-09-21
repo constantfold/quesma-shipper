@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -99,9 +101,7 @@ func removeCorpusMaster() {
 func stageCorpus(t *testing.T, w *world) int {
 	t.Helper()
 	corpusOnce.Do(buildCorpusMaster)
-	if corpusErr != nil {
-		t.Fatalf("build the corpus master: %v", corpusErr)
-	}
+	require.Falsef(t, corpusErr != nil, "build the corpus master: %v", corpusErr)
 	err := filepath.WalkDir(corpusMaster, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -115,9 +115,7 @@ func stageCorpus(t *testing.T, w *world) int {
 		}
 		return os.Link(path, filepath.Join(w.Home, rel))
 	})
-	if err != nil {
-		t.Fatalf("link the corpus into the world: %v", err)
-	}
+	require.Falsef(t, err != nil, "link the corpus into the world: %v", err)
 	// The denominator of every byte figure this tier reports.
 	t.Logf("corpus: %d files, %d bytes staged", corpusFiles, corpusBytes)
 	return corpusFiles

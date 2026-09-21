@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -26,9 +28,7 @@ func TestRealDataRescrub(t *testing.T) {
 	// here would make byte-diffs mean two things.
 	cfg := transforms.DefaultConfig()
 	s, err := transforms.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	type manifest struct {
 		SourceFamily string `json:"source_family"`
@@ -99,9 +99,7 @@ func TestRealDataRescrub(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	t.Logf("objects rescrubbed: %d (skipped %d, engine errors %d)", objects, skipped, engineErrs)
 	t.Logf("recorded hits in manifests (historical): %s", formatHits(recordedHits))

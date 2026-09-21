@@ -5,6 +5,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The wiring: the email rule has a scanner, and no rule with a capture group does, since a
@@ -13,28 +16,20 @@ func TestHandScannersEngage(t *testing.T) {
 	found := false
 	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
 		rules, err := Load(pack)
-		if err != nil {
-			t.Fatalf("Load(%s): %v", pack, err)
-		}
+		require.NoErrorf(t, err, "Load(%s): %v", pack, err)
 		for _, r := range rules {
 			if r.hand == nil && r.fused == fusedNone {
 				continue
 			}
-			if r.capture != 0 {
-				t.Errorf("rule %s has a hand scanner and a capture group", r.id)
-			}
+			assert.Equalf(t, 0, r.capture, "rule %s has a hand scanner and a capture group", r.id)
 			// A rule the regex never runs for has no business carrying an anchor.
-			if r.anchor != nil {
-				t.Errorf("rule %s has both a hand scanner and an anchor", r.id)
-			}
+			assert.Truef(t, r.anchor == nil, "rule %s has both a hand scanner and an anchor", r.id)
 			if r.id == "email" {
 				found = true
 			}
 		}
 	}
-	if !found {
-		t.Error(`the email rule has no hand scanner: check "scanner": "email" in pii-core.json`)
-	}
+	assert.True(t, found, `the email rule has no hand scanner: check "scanner": "email" in pii-core.json`)
 }
 
 // The equivalence proof scanEmail rests on: scanner and regex agree on every input.
@@ -54,13 +49,9 @@ func TestScanEmailMatchesRegex(t *testing.T) {
 		checked++
 		got := scanEmail(v)
 		w := want(v)
-		if len(got) != len(w) {
-			t.Fatalf("scanEmail(%q) = %v, regex = %v", v, got, w)
-		}
+		require.Lenf(t, got, len(w), "scanEmail(%q) = %v, regex = %v", v, got, w)
 		for i := range got {
-			if got[i] != w[i] {
-				t.Fatalf("scanEmail(%q) = %v, regex = %v", v, got, w)
-			}
+			require.Truef(t, got[i] == w[i], "scanEmail(%q) = %v, regex = %v", v, got, w)
 		}
 	}
 

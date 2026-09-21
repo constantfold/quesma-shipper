@@ -7,14 +7,14 @@ import (
 	"os/user"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func currentSID(t *testing.T) string {
 	t.Helper()
 	current, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return current.Uid
 }
 
@@ -34,24 +34,16 @@ func TestVerifyInstallDirRejectsADirectoryAnotherAccountCanChange(t *testing.T) 
 	}
 
 	err = verifyInstallDir(dir, currentSID(t))
-	if err == nil {
-		t.Fatal("verifyInstallDir() = nil, want an error naming the trustee")
-	}
-	if !strings.Contains(err.Error(), "Users") {
-		t.Fatalf("verifyInstallDir() = %v, want the message to name BUILTIN\\Users", err)
-	}
+	require.False(t, err == nil, "verifyInstallDir() = nil, want an error naming the trustee")
+	require.Falsef(t, !strings.Contains(err.Error(), "Users"), "verifyInstallDir() = %v, want the message to name BUILTIN\\Users", err)
 }
 
 // The installing user's own FullControl must not read as a finding against their own directory.
 func TestDirectoryACEsReadsTheInstallersOwnEntry(t *testing.T) {
 	dir := t.TempDir()
 	aces, err := directoryACEs(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(aces) == 0 {
-		t.Fatal("directoryACEs() returned no entries for a directory that has a DACL")
-	}
+	require.NoError(t, err)
+	require.False(t, len(aces) == 0, "directoryACEs() returned no entries for a directory that has a DACL")
 	sid := currentSID(t)
 	for _, a := range aces {
 		if strings.EqualFold(a.SID, sid) && a.Allow && a.Mask&writeMask != 0 {

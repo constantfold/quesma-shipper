@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -168,14 +170,10 @@ func stageCursor(t *testing.T, w *world, username string, turns []cursorTurn, wi
 func writeCursorStore(t *testing.T, w *world, turns []cursorTurn) {
 	t.Helper()
 	path := filepath.Join(w.Home, filepath.FromSlash(cursorStatePath()))
-	if err := ensureDir(filepath.Dir(path)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, ensureDir(filepath.Dir(path)))
 
 	db, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	for _, stmt := range []string{
 		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,

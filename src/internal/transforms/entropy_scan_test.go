@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The grid scan and the tabulated score are only allowed to be faster, never different; each is
@@ -72,9 +74,7 @@ func TestEntropyGridScanFindsTheSameRunsAsTheByteWalk(t *testing.T) {
 			}
 			v := b.String()
 			got, want := m.Match(v), refMatch(m, v)
-			if len(got) != len(want) {
-				t.Fatalf("MinLength %d, %q: got %v spans, want %v", cfg.MinLength, v, got, want)
-			}
+			require.Len(t, got, len(want))
 			for k := range got {
 				if got[k] != want[k] {
 					t.Fatalf("MinLength %d, %q: span %d = %v, want %v", cfg.MinLength, v, k, got[k], want[k])
@@ -116,7 +116,5 @@ func TestEntropyEstimateTracksTheExactScore(t *testing.T) {
 		}
 	}
 	// Three orders below the slack, on the widest candidates the matcher scores.
-	if worst >= entropyEstSlack/1000 {
-		t.Fatalf("estimate drifts from the exact score by %g, slack is %g", worst, entropyEstSlack)
-	}
+	require.Truef(t, worst <= entropyEstSlack/1000, "estimate drifts from the exact score by %g, slack is %g", worst, entropyEstSlack)
 }

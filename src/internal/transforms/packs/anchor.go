@@ -8,11 +8,9 @@ import (
 	"unicode/utf8"
 )
 
-// anchorScan is a rule's literal entry point: the corpus keywords, one of which every match must
-// begin with, plus an anchored copy of the pattern, since Go's regexp only memchr-skips on a plain
-// literal prefix. The head property is corpus DATA, not derived from the pattern: a rule whose
-// keywords occur mid-match declares "sweep": true, and TestAnchorMatchesSweep turns a keyword edit
-// that breaks it into a loud diff rather than a quiet missed redaction.
+// anchorScan finds corpus keywords, then verifies an anchored regex.
+// Keywords must start every match; rules with interior keywords declare sweep instead.
+// TestAnchorMatchesSweep checks that contract.
 type anchorScan struct {
 	// verify is \A(?:pattern) run against value[p:]: the non-capturing group keeps every
 	// group number, and the leading \A makes the engine's anchored fast exit apply.
@@ -43,10 +41,8 @@ const (
 	litExhausted = -1
 )
 
-// newAnchorScan builds a rule's entry points from its corpus keywords, or (nil, nil) when the rule
-// cannot be soundly or profitably anchored: refusing costs only speed. Only the checks decidable
-// from the pattern's text; a rule that must not anchor for correctness or cost declares "sweep":
-// true in the corpus (see TestPEMHeaderFloodStaysLinear).
+// newAnchorScan returns nil when anchoring is unsound or unprofitable.
+// Rules with known cost cliffs declare sweep; see TestPEMHeaderFloodStaysLinear.
 func newAnchorScan(pattern string, keywords []string, sweep bool) (*anchorScan, error) {
 	if sweep || len(keywords) == 0 || len(keywords) > maxAnchorLits {
 		return nil, nil
@@ -205,23 +201,10 @@ func hasFoldPrefix(s, lit string) bool {
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
-		if !foldEq(r, rune(want)) {
+		if !strings.EqualFold(string(r), string(want)) {
 			return false
 		}
 		i += size
 	}
 	return true
-}
-
-// foldEq reports whether two runes are the same under Go's (?i) simple folding.
-func foldEq(a, b rune) bool {
-	if a == b {
-		return true
-	}
-	for f := unicode.SimpleFold(a); f != a; f = unicode.SimpleFold(f) {
-		if f == b {
-			return true
-		}
-	}
-	return false
 }

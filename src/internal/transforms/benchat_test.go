@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -17,9 +19,7 @@ func BenchmarkScrubSyntheticAt(b *testing.B) {
 	cfg := transforms.DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := transforms.New(cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 
 	cases := []struct {
 		name    string
@@ -36,12 +36,8 @@ func BenchmarkScrubSyntheticAt(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				res, err := s.Scrub(tc.payload, transforms.Hint{Family: "claude-code", JSONL: true})
-				if err != nil {
-					b.Fatal(err)
-				}
-				if len(res.Out) == 0 {
-					b.Fatal("empty output")
-				}
+				require.NoError(b, err)
+				require.NotEqual(b, 0, len(res.Out), "empty output")
 			}
 		})
 	}

@@ -1,7 +1,5 @@
-// Package packs compiles the vendored rule corpora into matchers. Gitleaks is one of the four
-// packs rather than the engine: trajectories carry tool output at higher secret density than source
-// code, with no git history to bound the search and secrets JSON-escaped inside JSON strings. The
-// corpora are vendored as DATA, never imported, so an auditable collector inherits no dependencies.
+// Package packs compiles vendored redaction corpora into matchers.
+// The corpora are data, so the collector does not inherit a detector’s runtime dependencies.
 package packs
 
 import (

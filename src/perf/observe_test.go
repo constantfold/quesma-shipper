@@ -22,6 +22,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Not a sampling rate: VmHWM only ever grows, so this decides how likely a read lands before exit.
@@ -101,9 +104,7 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	}
 
 	st := cmd.ProcessState
-	if st == nil {
-		t.Fatalf("the shipper left no process state behind: %v", err)
-	}
+	require.Falsef(t, st == nil, "the shipper left no process state behind: %v", err)
 	obs.ExitCode = st.ExitCode()
 	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		obs.Signal = ws.Signal()
@@ -244,10 +245,7 @@ func readVmHWM(pid int) (int64, bool) {
 // depend on when the harness looked; elsewhere the log says the gate did not run.
 func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, budget int64) {
 	t.Helper()
-	if budget <= 0 {
-		t.Fatalf("%s declared a memory budget of %d bytes; a budget is a positive number of bytes",
-			scenario, budget)
-	}
+	require.Falsef(t, budget <= 0, "%s declared a memory budget of %d bytes; a budget is a positive number of bytes", scenario, budget)
 	// A reading of zero is under every budget there is: a broken instrument must not pass a gate.
 	if obs.PeakRSS <= 0 {
 		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this gate would "+
@@ -311,9 +309,7 @@ func assertNoResidualScratch(t *testing.T, w *world) {
 			}
 			return nil
 		})
-		if err != nil {
-			t.Fatalf("walk %s for scratch files: %v", root, err)
-		}
+		require.Falsef(t, err != nil, "walk %s for scratch files: %v", root, err)
 	}
 	if len(leftover) == 0 {
 		return
@@ -356,22 +352,13 @@ func TestTheHarnessObservesAChildRun(t *testing.T) {
 	}
 	objects := len(w.currentKeys(t))
 
-	if c.up <= 0 || c.down <= 0 {
-		t.Errorf("the run shipped %d files and the proxy counted %d bytes up, %d down",
-			files, c.up, c.down)
-	}
-	if c.requests <= 0 {
-		t.Errorf("the run shipped %d files and MinIO counted %d new S3 requests", files, c.requests)
-	}
+	assert.Falsef(t, c.up <= 0 || c.down <= 0, "the run shipped %d files and the proxy counted %d bytes up, %d down", files, c.up, c.down)
+	assert.Falsef(t, c.requests <= 0, "the run shipped %d files and MinIO counted %d new S3 requests", files, c.requests)
 	if objects < files {
 		t.Errorf("the run shipped %d files and left %d objects under %s", files, objects, w.keyRoot)
 	}
-	if obs.PeakRSS <= 0 {
-		t.Errorf("the child's peak RSS read as %d bytes from %s", obs.PeakRSS, obs.PeakRSSSource)
-	}
-	if obs.CPUSeconds <= 0 {
-		t.Errorf("the child's CPU time read as %v seconds", obs.CPUSeconds)
-	}
+	assert.Falsef(t, obs.PeakRSS <= 0, "the child's peak RSS read as %d bytes from %s", obs.PeakRSS, obs.PeakRSSSource)
+	assert.Falsef(t, obs.CPUSeconds <= 0, "the child's CPU time read as %v seconds", obs.CPUSeconds)
 
 	assertPeakUnderBudget(t, selfTestScenario, obs, selfTestMemoryBudget)
 	assertNoResidualScratch(t, w)

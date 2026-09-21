@@ -4,6 +4,9 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // PatternPacks are the high-confidence packs. They scan every field, exempt or not.
@@ -46,26 +49,20 @@ func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 	var keywordSets [][]string
 	for _, pack := range PatternPacks {
 		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, r := range rules {
 			if len(r.Keywords()) > 0 {
 				keywordSets = append(keywordSets, r.Keywords())
 			}
 		}
 	}
-	if len(keywordSets) < 10 {
-		t.Fatalf("expected the corpora to carry keyword sets, got %d", len(keywordSets))
-	}
+	require.Truef(t, len(keywordSets) >= 10, "expected the corpora to carry keyword sets, got %d", len(keywordSets))
 
 	b := NewPrefilterBuilder()
 	gates := make([]Gate, len(keywordSets))
 	for i, kws := range keywordSets {
 		g, err := b.AddKeywords(kws)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		gates[i] = g
 	}
 	p := b.Build()
@@ -100,9 +97,7 @@ func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 	keywords := []string{"apikey", "kubectl"}
 	b := NewPrefilterBuilder()
 	gate, err := b.AddKeywords(keywords)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	p := b.Build()
 
 	for _, value := range []string{
@@ -113,9 +108,7 @@ func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 		if seen := p.Scan(value); !seen.Has(gate) {
 			t.Errorf("gate did not fire on %q", value)
 		}
-		if !containsAny(value, keywords) {
-			t.Errorf("containsAny disagrees on %q, the fixture is wrong", value)
-		}
+		assert.Truef(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 
 	for _, value := range []string{
@@ -126,9 +119,7 @@ func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 		if seen := p.Scan(value); seen.Has(gate) {
 			t.Errorf("the fold is ASCII only: a keyword gate must not fire on %q", value)
 		}
-		if containsAny(value, keywords) {
-			t.Errorf("containsAny disagrees on %q, the fixture is wrong", value)
-		}
+		assert.Truef(t, !containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 }
 
@@ -151,9 +142,7 @@ func TestPrefilterGatesAreDeterministic(t *testing.T) {
 		b := NewPrefilterBuilder()
 		for _, pack := range PatternPacks {
 			rules, err := Load(pack)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			for _, r := range rules {
 				if _, err := b.AddKeywords(r.Keywords()); err != nil {
 					t.Fatal(err)
@@ -163,12 +152,8 @@ func TestPrefilterGatesAreDeterministic(t *testing.T) {
 		return b.Build()
 	}
 	a, c := build(), build()
-	if a.width != c.width || len(a.next) != len(c.next) {
-		t.Fatal("table shape differs between builds")
-	}
+	require.True(t, a.width == c.width && len(a.next) == len(c.next), "table shape differs between builds")
 	for i := range a.next {
-		if a.next[i] != c.next[i] {
-			t.Fatalf("transition %d differs between builds", i)
-		}
+		require.Equalf(t, c.next[i], a.next[i], "transition %d differs between builds", i)
 	}
 }

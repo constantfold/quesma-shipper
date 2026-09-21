@@ -3,6 +3,9 @@ package windows
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -78,9 +81,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := untrustedWriters(tc.aces, sidInstaller)
-			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("untrustedWriters() = %v, want %v", got, tc.want)
-			}
+			require.Equalf(t, strings.Join(tc.want, ","), strings.Join(got, ","), "untrustedWriters() = %v, want %v", got, tc.want)
 		})
 	}
 }
@@ -91,18 +92,14 @@ func TestUntrustedWritersIgnoresDeniedAndReadOnlyAccess(t *testing.T) {
 		{SID: sidUsers, Mask: maskReadExecute, Allow: true},
 		{SID: sidInteractive, Mask: maskGenericReadExecute, Allow: true},
 	}
-	if got := untrustedWriters(aces, sidInstaller); len(got) != 0 {
-		t.Fatalf("untrustedWriters() = %v, want none", got)
-	}
+	require.Len(t, untrustedWriters(aces, sidInstaller), 0)
 }
 
 // A SID string comparison that is not case-insensitive would report the installing user as a
 // threat to their own directory.
 func TestUntrustedWritersAcceptsTheInstallerInEitherCase(t *testing.T) {
 	aces := []ace{{SID: strings.ToLower(sidInstaller), Mask: maskFullControl, Allow: true}}
-	if got := untrustedWriters(aces, sidInstaller); len(got) != 0 {
-		t.Fatalf("untrustedWriters() = %v, want none", got)
-	}
+	require.Len(t, untrustedWriters(aces, sidInstaller), 0)
 }
 
 func TestUntrustedWritersReportsEachTrusteeOnce(t *testing.T) {
@@ -113,9 +110,7 @@ func TestUntrustedWritersReportsEachTrusteeOnce(t *testing.T) {
 	}
 	want := []string{sidUsers, sidInteractive}
 	got := untrustedWriters(aces, sidInstaller)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("untrustedWriters() = %v, want %v", got, want)
-	}
+	require.Equalf(t, strings.Join(want, ","), strings.Join(got, ","), "untrustedWriters() = %v, want %v", got, want)
 }
 
 // Every composite right a user sees in an ACL listing has to intersect the atomic write bits.
@@ -128,14 +123,8 @@ func TestWriteMaskCoversTheCompositeRights(t *testing.T) {
 		"TakeOwnership":  standardWriteOwner,
 		"ChangePermsDAC": standardWriteDAC,
 	} {
-		if mask&writeMask == 0 {
-			t.Errorf("%s (%#08x) does not intersect writeMask", name, mask)
-		}
+		assert.NotEqualf(t, uint32(0), mask&writeMask, "%s (%#08x) does not intersect writeMask", name, mask)
 	}
-	if maskReadExecute&writeMask != 0 {
-		t.Errorf("ReadAndExecute (%#08x) intersects writeMask", maskReadExecute)
-	}
-	if maskGenericReadExecute&writeMask != 0 {
-		t.Errorf("GENERIC_READ|GENERIC_EXECUTE (%#08x) intersects writeMask", maskGenericReadExecute)
-	}
+	assert.Truef(t, maskReadExecute&writeMask == 0, "ReadAndExecute (%#08x) intersects writeMask", maskReadExecute)
+	assert.Truef(t, maskGenericReadExecute&writeMask == 0, "GENERIC_READ|GENERIC_EXECUTE (%#08x) intersects writeMask", maskGenericReadExecute)
 }

@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The entry literals of every vendored rule: a keyword edit shows up as a diff in this table,
@@ -92,21 +95,15 @@ func TestAnchorLiterals(t *testing.T) {
 	seen := map[string]bool{}
 	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
 		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, r := range rules {
 			got := describeAnchor(r)
-			if want[r.id] != got {
-				t.Errorf("%s: anchor is %s, table says %s", r.id, got, want[r.id])
-			}
+			assert.Equal(t, want[r.id], got)
 			seen[r.id] = true
 		}
 	}
 	for id := range want {
-		if !seen[id] {
-			t.Errorf("%s: in the table, not in any pack", id)
-		}
+		assert.Truef(t, seen[id], "%s: in the table, not in any pack", id)
 	}
 }
 
@@ -159,13 +156,9 @@ func TestAnchorRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		scan, err := newAnchorScan(tc.pattern, tc.keywords, tc.sweep)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.pattern, err)
-		}
+		require.NoError(t, err)
 		got := describeAnchor(&Rule{anchor: scan})
-		if got != tc.want {
-			t.Errorf("%s: anchor is %s, want %s", tc.pattern, got, tc.want)
-		}
+		assert.Equalf(t, tc.want, got, "%s: anchor is %s, want %s", tc.pattern, got, tc.want)
 	}
 }
 
@@ -180,9 +173,7 @@ func TestAnchorMatchesSweep(t *testing.T) {
 	total := 0
 	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
 		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, r := range rules {
 			if r.anchor == nil {
 				continue
@@ -249,9 +240,7 @@ func TestAnchorOverlapTraps(t *testing.T) {
 	rules := map[string]*Rule{}
 	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
 		loaded, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, r := range loaded {
 			rules[r.id] = r
 		}
@@ -293,9 +282,7 @@ func TestAnchorOverlapTraps(t *testing.T) {
 				continue
 			}
 			got, want := r.matchAnchored(v), r.matchSweep(v)
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s on %q:\n anchored %v\n sweep    %v", id, v, got, want)
-			}
+			assert.Equalf(t, got, want, "%s on %q:\n anchored %v\n sweep    %v", id, v, got, want)
 		}
 	}
 }
@@ -306,18 +293,14 @@ func TestAnchorOverlapTraps(t *testing.T) {
 // test, not a throughput budget.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	rules, err := Load(CloudKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var pem *Rule
 	for _, r := range rules {
 		if r.id == "private-key-block" {
 			pem = r
 		}
 	}
-	if pem == nil {
-		t.Fatal("cloud-keys no longer carries private-key-block")
-	}
+	require.True(t, pem != nil, "cloud-keys no longer carries private-key-block")
 	if pem.anchor != nil {
 		t.Fatal("private-key-block is anchored: its unbounded body makes a failed " +
 			"candidate cost the whole value, which is why the corpus declares \"sweep\"")
@@ -333,9 +316,7 @@ func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	timeFlood := func(headers int) time.Duration {
 		v := flood(headers)
 		start := time.Now()
-		if spans := pem.MatchScanned(v); len(spans) != 0 {
-			t.Fatalf("%d headers: %d spans, want none (no footer in the value)", headers, len(spans))
-		}
+		require.Len(t, pem.MatchScanned(v), 0)
 		return time.Since(start)
 	}
 
@@ -343,8 +324,5 @@ func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	timeFlood(200)
 	small := timeFlood(1600)
 	large := timeFlood(3200)
-	if large > 8*small+2*time.Millisecond {
-		t.Errorf("doubling the headers took %v against %v: that is the quadratic shape back",
-			large, small)
-	}
+	assert.Truef(t, large <= 8*small+2*time.Millisecond, "doubling the headers took %v against %v: that is the quadratic shape back", large, small)
 }

@@ -12,8 +12,9 @@ import (
 	"testing"
 
 	"filippo.io/age"
-
 	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
@@ -51,46 +52,29 @@ type tarVector struct {
 
 func TestConformanceContainerLayout(t *testing.T) {
 	if *update {
-		if err := os.MkdirAll(filepath.Dir(vectorPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(vectorPath, generateContainerVectors(t), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(vectorPath), 0o755))
+		require.NoError(t, os.WriteFile(vectorPath, generateContainerVectors(t), 0o644))
 		t.Logf("regenerated %s", vectorPath)
 	}
 
 	raw, err := os.ReadFile(vectorPath)
-	if err != nil {
-		t.Fatalf("read vectors: %v", err)
-	}
+	require.NoErrorf(t, err, "read vectors: %v", err)
 	var v containerVectors
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &v))
 
-	if v.ZstdLevel != transforms.ZstdLevel {
-		t.Errorf("zstd level drifted: vector says %d, code says %d", v.ZstdLevel, transforms.ZstdLevel)
-	}
+	assert.Equalf(t, transforms.ZstdLevel, v.ZstdLevel, "zstd level drifted: vector says %d, code says %d", v.ZstdLevel, transforms.ZstdLevel)
 	want := []string{transforms.ManifestEntry, transforms.PayloadEntry}
 	for i, name := range want {
-		if i >= len(v.EntryOrder) || v.EntryOrder[i] != name {
-			t.Fatalf("entry order drifted: %v, want %v", v.EntryOrder, want)
-		}
+		require.Truef(t, i <= len(v.EntryOrder) && v.EntryOrder[i] == name, "entry order drifted: %v, want %v", v.EntryOrder, want)
 	}
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			payload, err := hex.DecodeString(c.PayloadHex)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			got := tarBytesFor(t, []byte(c.ManifestB64), payload)
 			sum := sha256.Sum256(got)
-			if hex.EncodeToString(sum[:]) != c.TarSHA256 {
-				t.Errorf("tar layer bytes changed:\n got %s\nwant %s",
-					hex.EncodeToString(sum[:]), c.TarSHA256)
-			}
+			assert.Equalf(t, c.TarSHA256, hex.EncodeToString(sum[:]), "tar layer bytes changed:\n got %s\nwant %s", hex.EncodeToString(sum[:]), c.TarSHA256)
 		})
 	}
 }
@@ -101,29 +85,19 @@ func tarBytesFor(t *testing.T, manifestJSON, payload []byte) []byte {
 	t.Helper()
 
 	var m transforms.Manifest
-	if err := json.Unmarshal(manifestJSON, &m); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(manifestJSON, &m))
 	id := identity(t)
 	obj, _, err := transforms.Seal(m, payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	dec, err := age.Decrypt(bytes.NewReader(obj), id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	zr, err := zstd.NewReader(dec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer zr.Close()
 
 	tarred, err := io.ReadAll(zr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Recipient key IDs differ per run, so rebuild the tar with them blanked, which is what the
 	// vector records.
@@ -142,35 +116,23 @@ func normalizeTar(t *testing.T, tarred []byte) []byte {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		body, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if hdr.Name == transforms.ManifestEntry {
 			var m map[string]any
-			if err := json.Unmarshal(body, &m); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, json.Unmarshal(body, &m))
 			delete(m, "encryption")
 			body, err = json.Marshal(m)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			hdr.Size = int64(len(body))
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, tw.WriteHeader(hdr))
 		if _, err := tw.Write(body); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, tw.Close())
 	return out.Bytes()
 }
 
@@ -224,9 +186,7 @@ func generateContainerVectors(t *testing.T) []byte {
 		m.PayloadSize = int64(len(c.payload))
 
 		encoded, err := json.Marshal(m)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		tarred := tarBytesFor(t, encoded, c.payload)
 		tarSum := sha256.Sum256(tarred)
 
@@ -239,9 +199,7 @@ func generateContainerVectors(t *testing.T) []byte {
 	}
 
 	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return append(b, '\n')
 }
 

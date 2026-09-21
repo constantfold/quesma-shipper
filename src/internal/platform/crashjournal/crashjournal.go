@@ -1,12 +1,5 @@
-// Package crashjournal is the crash-safe run journal, and only that: start, the phase reached, exit, and
-// the acknowledgement that a crash report was delivered. Death is detected by absence — a run whose
-// entries never reach "exit" did not survive — which is the one thing no code running inside that
-// run can report about itself.
-//
-// It deliberately does NOT journal failures the run survived, nor each file before reading it. The
-// first is the failure record's job, which reaches a heartbeat where a journal entry never leaves
-// the machine; the second bought the name of an OOM's suspect file at the price of a line per file,
-// 92% of everything this wrote.
+// Package crashjournal records starts, phases, exits and delivered crash reports.
+// A run without an exit is a crash. Survived failures belong to the failure record.
 package crashjournal
 
 import (

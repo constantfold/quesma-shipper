@@ -4,21 +4,19 @@
 package e2e
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateOnADevBuildRefusesAndNamesTheOverride(t *testing.T) {
 	stageBareWorld(t)
 
 	out, err := runExpectingFailure(t, "update")
-	if err == nil {
-		t.Fatalf("update on a dev build succeeded:\n%s", out)
-	}
+	require.Errorf(t, err, "update on a dev build succeeded:\n%s", out)
 	for _, want := range []string{"dev build", "make build"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not mention %q: %v", want, err)
-		}
+		assert.Containsf(t, err.Error(), want, "the refusal does not mention %q: %v", want, err)
 	}
 }
 
@@ -26,8 +24,5 @@ func TestConfigShowReportsTheUpdateSwitch(t *testing.T) {
 	stageBareWorld(t)
 
 	out := run(t, "config")
-	if !strings.Contains(out, "autoupdate.enabled") {
-		t.Errorf("config show does not render autoupdate.enabled — the switch an operator would "+
-			"verify before trusting a fleet not to self-update:\n%s", out)
-	}
+	assert.Contains(t, out, "autoupdate.enabled")
 }

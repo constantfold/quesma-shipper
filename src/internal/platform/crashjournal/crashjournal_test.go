@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // deadEntries writes a run as a SIGKILL (an OOM kill) leaves it: entries present, no exit,
@@ -12,9 +14,7 @@ import (
 func deadRun(t *testing.T, dir, runID string, mark func(l *Log)) {
 	t.Helper()
 	l, err := Open(dir, runID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	l.Start()
 	mark(l)
 	stampDeadPID(t, dir, runID)
@@ -26,14 +26,10 @@ func stampDeadPID(t *testing.T, dir, runID string) {
 	t.Helper()
 	path := filepath.Join(dir, fileName)
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out := strings.ReplaceAll(string(raw),
 		`"pid":`+pidOf(t, raw, runID), `"pid":99999999`)
-	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(out), 0o600))
 }
 
 func pidOf(t *testing.T, raw []byte, runID string) string {
@@ -54,9 +50,7 @@ func pidOf(t *testing.T, raw []byte, runID string) string {
 func TestCleanRunReportsNoCrash(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir, "run-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	l.Start()
 	l.Phase("init")
 	l.Exit()
@@ -76,15 +70,9 @@ func TestADeathCarriesThePhaseItReached(t *testing.T) {
 	})
 
 	s := LastRun(dir)
-	if s == nil || s.Clean {
-		t.Fatalf("want a death, got %+v", s)
-	}
-	if s.Phase != "tick 1" {
-		t.Fatalf("want the last phase reached, got %+v", s)
-	}
-	if s.Crashes != 1 {
-		t.Fatalf("want 1 crash, got %d", s.Crashes)
-	}
+	require.Truef(t, s != nil && !s.Clean, "want a death, got %+v", s)
+	require.Equalf(t, "tick 1", s.Phase, "want the last phase reached, got %+v", s)
+	require.Equalf(t, 1, s.Crashes, "want 1 crash, got %d", s.Crashes)
 }
 
 func TestConsecutiveCrashesCounted(t *testing.T) {
@@ -94,9 +82,7 @@ func TestConsecutiveCrashesCounted(t *testing.T) {
 	deadRun(t, dir, "run-c", func(l *Log) { l.Phase("init") })
 
 	s := LastRun(dir)
-	if s == nil || s.Clean || s.RunID != "run-c" || s.Crashes != 3 || s.Phase != "init" {
-		t.Fatalf("want run-c with 3 crashes at init, got %+v", s)
-	}
+	require.Truef(t, s != nil && !s.Clean && s.RunID == "run-c" && s.Crashes == 3 && s.Phase == "init", "want run-c with 3 crashes at init, got %+v", s)
 }
 
 // The scenario that loses the report if "previous run" is literal: a crash, then a restart that
@@ -111,12 +97,8 @@ func TestCrashSurvivesErrorExitRestarts(t *testing.T) {
 	}
 
 	s := LastRun(dir)
-	if s == nil || s.Clean || s.RunID != "run-crash" || s.Crashes != 1 {
-		t.Fatalf("want run-crash still reported past two error exits, got %+v", s)
-	}
-	if s.Phase != "tick 1" {
-		t.Fatalf("want the crashed run's phase carried, got %+v", s)
-	}
+	require.Truef(t, s != nil && !s.Clean && s.RunID == "run-crash" && s.Crashes == 1, "want run-crash still reported past two error exits, got %+v", s)
+	require.Equalf(t, "tick 1", s.Phase, "want the crashed run's phase carried, got %+v", s)
 }
 
 // Only delivery clears the report: the heartbeat fails open, so a clean exit proves nothing.
@@ -155,18 +137,14 @@ func TestTornLastLineTolerated(t *testing.T) {
 	dir := t.TempDir()
 	deadRun(t, dir, "run-a", func(l *Log) { l.Phase("engine") })
 	f, err := os.OpenFile(filepath.Join(dir, fileName), os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := f.WriteString(`{"at":"2026-01-01T00:00:00Z","run_id":"run-a","ev":"re`); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
 
 	s := LastRun(dir)
-	if s == nil || s.Clean || s.Phase != "engine" {
-		t.Fatalf("want the last whole entry to win, got %+v", s)
-	}
+	require.Truef(t, s != nil && !s.Clean && s.Phase == "engine", "want the last whole entry to win, got %+v", s)
 }
 
 func TestMissingJournal(t *testing.T) {
@@ -178,9 +156,7 @@ func TestMissingJournal(t *testing.T) {
 func TestOpenRotatesALargeJournal(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, fileName)
-	if err := os.WriteFile(path, make([]byte, maxLogBytes), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, make([]byte, maxLogBytes), 0o600))
 	if _, err := Open(dir, "run-a"); err != nil {
 		t.Fatal(err)
 	}

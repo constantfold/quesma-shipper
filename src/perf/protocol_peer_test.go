@@ -18,10 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"uuid"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/uuid"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 )
 
@@ -192,7 +193,7 @@ func issueTickets(ctx context.Context, install perfInstall, req perfAuthorizeReq
 		if !strings.HasPrefix(obj.Key, root) {
 			return nil, fmt.Errorf("object key %q is outside %q", obj.Key, root)
 		}
-		ticketID := uuid.NewString()
+		ticketID := uuid.New().String()
 		metadata := make(map[string]string, len(obj.Metadata)+2)
 		for name, value := range obj.Metadata {
 			metadata[name] = value

@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -40,9 +43,7 @@ func TestAbsolutePathsAreShortenedOnTheWayOut(t *testing.T) {
 			"backend: …/uploads/authorize: 503",
 		},
 	} {
-		if got := shortenTelemetryPaths(tc.in); got != tc.want {
-			t.Errorf("%s:\n  got  %q\n  want %q", name, got, tc.want)
-		}
+		assert.Equal(t, tc.want, shortenTelemetryPaths(tc.in), name)
 	}
 }
 
@@ -50,12 +51,8 @@ func TestAbsolutePathsAreShortenedOnTheWayOut(t *testing.T) {
 func TestALongMessageKeepsItsCause(t *testing.T) {
 	message := strings.Repeat("wrapped: ", 200) + "connection refused"
 	got := telemetryMessage(message)
-	if len(got) > maxTelemetryMessage {
-		t.Fatalf("message is %d bytes, the bound is %d", len(got), maxTelemetryMessage)
-	}
-	if !strings.HasSuffix(got, "connection refused") {
-		t.Errorf("the cause was cut off: %q", got)
-	}
+	require.Truef(t, len(got) <= maxTelemetryMessage, "message is %d bytes, the bound is %d", len(got), maxTelemetryMessage)
+	assert.Truef(t, strings.HasSuffix(got, "connection refused"), "the cause was cut off: %q", got)
 }
 
 // telemetryRuntime builds the least installHealth needs: a state directory holding a failure record.
@@ -63,12 +60,8 @@ func telemetryRuntime(t *testing.T, record formats.FailureRecord) *Runtime {
 	t.Helper()
 	dir := t.TempDir()
 	body, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, lastFailureFile), body, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, lastFailureFile), body, 0o600))
 	return &Runtime{
 		eff:      &config.Effective{StateDir: dir, TelemetryEndpoint: "/v1/telemetry"},
 		hostname: "ci-runner-3",
@@ -91,13 +84,9 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 	r.lastCrash = &formats.LastCrash{RunID: "r0", Phase: "tick 1", Consecutive: 1}
 
 	_, body, err := r.installHealth(time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var got map[string]any
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(body, &got))
 
 	for field, want := range map[string]any{
 		"event":                InstallHealthEvent,
@@ -105,9 +94,7 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 		"client_version":       "0.0.3",
 		"consecutive_failures": float64(2),
 	} {
-		if got[field] != want {
-			t.Errorf("%s = %v, want %v", field, got[field], want)
-		}
+		assert.Truef(t, got[field] == want, "%s = %v, want %v", field, got[field], want)
 	}
 	faults, ok := got["faults"].([]any)
 	if !ok || len(faults) != 1 {
@@ -115,9 +102,7 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 	}
 	fault := faults[0].(map[string]any)
 	for field, want := range map[string]any{"kind": "tick_failed", "run_id": "r1", "at": "2026-09-18T11:58:00Z"} {
-		if fault[field] != want {
-			t.Errorf("fault %s = %v, want %v", field, fault[field], want)
-		}
+		assert.Truef(t, fault[field] == want, "fault %s = %v, want %v", field, fault[field], want)
 	}
 	if _, ok := got["last_crash"]; !ok {
 		t.Error("the crash was dropped")
@@ -129,12 +114,8 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 func TestTheEventNamesTheMachine(t *testing.T) {
 	r := telemetryRuntime(t, formats.FailureRecord{})
 	_, body, err := r.installHealth(time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), `"hostname":"ci-runner-3"`) {
-		t.Fatalf("the event does not name the machine: %s", body)
-	}
+	require.NoError(t, err)
+	require.Containsf(t, string(body), `"hostname":"ci-runner-3"`, "the event does not name the machine: %s", body)
 }
 
 // The identity the far end deduplicates on belongs to the event, so the two arrive together and a
@@ -142,12 +123,8 @@ func TestTheEventNamesTheMachine(t *testing.T) {
 func TestTheEventCarriesItsOwnBatchIdentity(t *testing.T) {
 	r := telemetryRuntime(t, formats.FailureRecord{})
 	batch, _, err := r.installHealth(time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if batch == "" {
-		t.Fatal("the event has no batch identity")
-	}
+	require.NoError(t, err)
+	require.NotEqual(t, "", batch, "the event has no batch identity")
 }
 
 type stub struct {
@@ -170,17 +147,11 @@ func TestDisabledStopsAskingForTheRestOfTheRun(t *testing.T) {
 	r.SubmitTelemetry(context.Background())
 	r.SubmitTelemetry(context.Background())
 
-	if s.calls != 1 {
-		t.Fatalf("asked %d times after being told it is disabled", s.calls)
-	}
+	require.Equalf(t, 1, s.calls, "asked %d times after being told it is disabled", s.calls)
 	// The latch is the runtime's. Resolved configuration carries provenance and is what `config
 	// show` reports, so a network answer must not rewrite it.
-	if r.eff.TelemetryEndpoint != "/v1/telemetry" {
-		t.Error("a 403 rewrote the resolved configuration")
-	}
-	if !r.telemetryOff {
-		t.Error("the run did not latch off")
-	}
+	assert.Equal(t, "/v1/telemetry", r.eff.TelemetryEndpoint, "a 403 rewrote the resolved configuration")
+	assert.True(t, r.telemetryOff, "the run did not latch off")
 }
 
 // Everything else is reported and shrugged off: telemetry is how someone hears about a problem and
@@ -193,9 +164,7 @@ func TestOtherFailuresDoNotStopLaterSubmissions(t *testing.T) {
 	r.SubmitTelemetry(context.Background())
 	r.SubmitTelemetry(context.Background())
 
-	if s.calls != 2 {
-		t.Fatalf("stopped after a recoverable failure: %d calls", s.calls)
-	}
+	require.Equalf(t, 2, s.calls, "stopped after a recoverable failure: %d calls", s.calls)
 }
 
 // An install whose organization has no collector sends nothing at all.
@@ -206,7 +175,5 @@ func TestNoEndpointSendsNothing(t *testing.T) {
 	r.telemetry = s
 
 	r.SubmitTelemetry(context.Background())
-	if s.calls != 0 {
-		t.Fatal("submitted for an organization with no collector")
-	}
+	require.Equal(t, 0, s.calls, "submitted for an organization with no collector")
 }

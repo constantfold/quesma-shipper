@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
@@ -11,9 +14,7 @@ import (
 // that an unverified rule would fire on every number in a transcript.
 func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
 	rules, err := packs.Load(packs.PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	byID := map[string]*packs.Rule{}
 	for _, r := range rules {
 		byID[r.RuleID()] = r
@@ -36,12 +37,8 @@ func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
 			if !ok {
 				t.Fatalf("rule %q missing from the pack", c.rule)
 			}
-			if len(r.MatchScanned(c.valid)) == 0 {
-				t.Errorf("a checksum-valid value must match: %s", c.valid)
-			}
-			if len(r.MatchScanned(c.junk)) != 0 {
-				t.Errorf("a checksum-INVALID value of the same shape must not match: %s", c.junk)
-			}
+			assert.NotEqualf(t, 0, len(r.MatchScanned(c.valid)), "a checksum-valid value must match: %s", c.valid)
+			assert.Lenf(t, r.MatchScanned(c.junk), 0, "a checksum-INVALID value of the same shape must not match: %s", c.junk)
 		})
 	}
 }
@@ -49,38 +46,26 @@ func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
 // A PESEL-shaped number whose embedded month is impossible is an id, not an identity number.
 func TestPESELRejectsImpossibleDates(t *testing.T) {
 	rules, err := packs.Load(packs.PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var pesel *packs.Rule
 	for _, r := range rules {
 		if r.RuleID() == "pesel" {
 			pesel = r
 		}
 	}
-	if pesel == nil {
-		t.Fatal("pesel rule missing")
-	}
+	require.True(t, pesel != nil, "pesel rule missing")
 	// Month 99 cannot occur in any PESEL century encoding.
-	if len(pesel.MatchScanned("44991401351")) != 0 {
-		t.Error("a PESEL-shaped number with an impossible month must not match")
-	}
+	assert.Len(t, pesel.MatchScanned("44991401351"), 0, "a PESEL-shaped number with an impossible month must not match")
 }
 
 // A rule with no id would produce a sentinel of "__REDACTED:__", which tells a consumer nothing.
 func TestAllPacksCompileWithNamedRules(t *testing.T) {
 	for _, pack := range packs.PatternPacks {
 		rules, err := packs.Load(pack)
-		if err != nil {
-			t.Fatalf("%s: %v", pack, err)
-		}
-		if len(rules) == 0 {
-			t.Errorf("%s: no rules", pack)
-		}
+		require.NoErrorf(t, err, "%s: %v", pack, err)
+		assert.NotEqualf(t, 0, len(rules), "%s: no rules", pack)
 		for _, r := range rules {
-			if strings.TrimSpace(r.RuleID()) == "" {
-				t.Errorf("%s: a rule has no id", pack)
-			}
+			assert.NotEqualf(t, "", strings.TrimSpace(r.RuleID()), "%s: a rule has no id", pack)
 		}
 	}
 }
@@ -89,18 +74,14 @@ func TestAllPacksCompileWithNamedRules(t *testing.T) {
 // Each row below is a shape that rule redacted; real PANs, in every notation, must still match.
 func TestPanRejectsTheAuditedFalsePositiveClasses(t *testing.T) {
 	rules, err := packs.Load(packs.PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var pan *packs.Rule
 	for _, r := range rules {
 		if r.RuleID() == "card-pan" {
 			pan = r
 		}
 	}
-	if pan == nil {
-		t.Fatal("card-pan missing from the pack")
-	}
+	require.True(t, pan != nil, "card-pan missing from the pack")
 
 	stillCards := []struct{ name, text string }{
 		{"visa 16 contiguous", "pay with 4111111111111111 now"},
@@ -119,9 +100,7 @@ func TestPanRejectsTheAuditedFalsePositiveClasses(t *testing.T) {
 	}
 	for _, c := range stillCards {
 		t.Run("card/"+c.name, func(t *testing.T) {
-			if len(pan.MatchScanned(c.text)) == 0 {
-				t.Errorf("a real card notation stopped matching: %s", c.text)
-			}
+			assert.NotEqualf(t, 0, len(pan.MatchScanned(c.text)), "a real card notation stopped matching: %s", c.text)
 		})
 	}
 
@@ -153,9 +132,7 @@ func TestPanRejectsTheAuditedFalsePositiveClasses(t *testing.T) {
 	}
 	for _, c := range notCards {
 		t.Run("notcard/"+c.name, func(t *testing.T) {
-			if got := pan.MatchScanned(c.text); len(got) != 0 {
-				t.Errorf("an audited false-positive class matches again: %s (spans %v)", c.text, got)
-			}
+			assert.Len(t, pan.MatchScanned(c.text), 0)
 		})
 	}
 }

@@ -1,9 +1,5 @@
-// Submitting how collection is going, so an operator learns about a failing machine without
-// walking to it.
-//
-// The heartbeat carries the same record, sealed into the archive and opened with the organization's
-// key. This leaves in the clear through the control plane, so it sends LESS, and what it sends is
-// chosen rather than copied.
+// Telemetry reports selected operational facts in cleartext through the control plane.
+// The encrypted heartbeat carries the fuller failure record.
 package app
 
 import (
@@ -66,12 +62,8 @@ type telemetryFault struct {
 	Message string `json:"message,omitempty"`
 }
 
-// SubmitTelemetry sends one install-health event, if this install's organization has a collector.
-//
-// Called AFTER an outcome is judged, by the tick loop and by the drain, and off the collection and
-// upload path, so a slow collector can never delay shipping. Fail-open like the heartbeat beside it:
-// telemetry must never become the problem it reports. Nothing retries -- the next tick carries its
-// own batch id and the same bounded window.
+// SubmitTelemetry sends health after the tick is judged, outside the upload path.
+// It fails open; the next tick sends a new batch rather than retrying this one.
 func (r *Runtime) SubmitTelemetry(ctx context.Context) {
 	if r.eff.TelemetryEndpoint == "" || r.telemetry == nil || r.telemetryOff {
 		return

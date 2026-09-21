@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The narrow histogram and the fused hex test are only allowed to be faster, never different.
@@ -59,22 +61,14 @@ func TestEntropyClassTableMatchesTheByteTests(t *testing.T) {
 		b := byte(c)
 		got := entropyClass[c]
 		if !isCandidateByte(b) {
-			if got != 0 {
-				t.Fatalf("byte %d out of class but tabulated as %d", c, got)
-			}
+			require.Equalf(t, uint8(0), got, "byte %d out of class but tabulated as %d", c, got)
 			continue
 		}
 		rank++
-		if int(got&^entropyHexBit) != rank {
-			t.Fatalf("byte %d: rank %d, want %d", c, got&^entropyHexBit, rank)
-		}
-		if (got&entropyHexBit != 0) != isHexByte(b) {
-			t.Fatalf("byte %d: hex bit %v, want %v", c, got&entropyHexBit != 0, isHexByte(b))
-		}
+		require.Equalf(t, rank, int(got&^entropyHexBit), "byte %d: rank %d, want %d", c, got&^entropyHexBit, rank)
+		require.Equalf(t, isHexByte(b), (got&entropyHexBit != 0), "byte %d: hex bit %v, want %v", c, got&entropyHexBit != 0, isHexByte(b))
 	}
-	if rank != entropySymbols {
-		t.Fatalf("alphabet has %d symbols, entropySymbols is %d", rank, entropySymbols)
-	}
+	require.Equalf(t, entropySymbols, rank, "alphabet has %d symbols, entropySymbols is %d", rank, entropySymbols)
 }
 
 // The score must be bit-identical, not merely close: a last-ulp difference at the threshold is

@@ -83,15 +83,7 @@ func restartService(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// restartWanted reports whether there is a background service for `update` to restart.
-//
-// The predicate is Installed rather than Loaded. A service entry that exists is one to restart, and
-// whether the supervisor currently reports it loaded is exactly what a platform can get wrong: a
-// Windows install whose scheduled task could not be parsed reported Loaded false while that task
-// was running, so the restart was skipped and the daemon went on executing the previous binary.
-// Loaded is also legitimately false for a plist written but never bootstrapped, or an inactive
-// unit -- the state macOS calls "present but NOT loaded", which collects nothing while looking
-// installed. Restarting is the right answer in all three; only the absence of an entry is not.
+// restartWanted uses Installed: an unloaded or unparseable service still needs restarting.
 func restartWanted(st packaging.ServiceStatus) bool {
 	return st.Installed
 }

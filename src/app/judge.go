@@ -26,15 +26,9 @@ const (
 	maxFailureBytes = 1 << 16
 )
 
-// JudgeTick decides whether a flush counts as a failure and persists that decision. It RETURNS the
-// error the run should be judged by, which is not always the one passed in:
-//
-//   - lock contention becomes nil and records nothing, because another flush IS running
-//   - a nil error with every attempted upload failed becomes a failure, because that is the shape a
-//     real outage takes
-//
-// A locally-caused failure also ships a failure heartbeat, which can block up to
-// failureHeartbeatTimeout. Best-effort throughout: bookkeeping must never change a run's outcome.
+// JudgeTick persists the flush verdict: lock contention is harmless; all uploads failing is not.
+// Local failures also attempt a heartbeat, bounded by failureHeartbeatTimeout.
+// Bookkeeping never changes the verdict.
 func (r *Runtime) JudgeTick(err error, rep formats.Report, panicked bool, mem platform.Delta) error {
 	kind := formats.FailureTick
 	if panicked {
@@ -125,11 +119,8 @@ func (r *Runtime) loadRecordLocked() *formats.FailureRecord {
 	return r.rec
 }
 
-// persistRecord applies one mutation and writes the result. The in-memory copy is kept only while
-// the disk refuses the write: dropping it after a success means the next mutation re-reads the
-// file, so events appended by other processes merge instead of being clobbered by a stale
-// snapshot. The write runs outside the lock, so an fsync wedged on the very disk being diagnosed
-// cannot block the flush's own heartbeat, which reads the record under the same mutex.
+// persistRecord merges with disk unless a failed write left a newer in-memory record.
+// Writes run outside the mutex so a wedged fsync cannot block heartbeat readers.
 func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*formats.FailureRecord)) {
 	r.recMu.Lock()
 	rec := r.loadRecordLocked()

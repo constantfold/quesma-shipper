@@ -1,9 +1,5 @@
 package engine_test
 
-// The suite's upload port: an in-memory object store behind the loop's one boundary with the network.
-// A test file rather than a package, because a fake that ships in the module is a runtime adapter.
-// It records every group and every stored object, so a test can assert what a run TOUCHED.
-
 import (
 	"context"
 	"maps"
@@ -12,8 +8,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
+
+// The suite's upload port: an in-memory object store behind the loop's one boundary with the network.
+// A test file rather than a package, because a fake that ships in the module is a runtime adapter.
+// It records every group and every stored object, so a test can assert what a run TOUCHED.
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -169,8 +171,6 @@ func (p *fakePort) storedOnce(t *testing.T) {
 		t.Errorf("descriptor invariant broken: %s", f)
 	}
 	for key, obj := range p.objects {
-		if obj.Versions != 1 {
-			t.Errorf("%s was stored %d times; one prepared object is one PUT", key, obj.Versions)
-		}
+		assert.Equalf(t, 1, obj.Versions, "%s was stored %d times; one prepared object is one PUT", key, obj.Versions)
 	}
 }

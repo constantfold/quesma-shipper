@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
@@ -28,9 +31,7 @@ func keyB(t *testing.T) []byte {
 // Blinding is keyed, not a bare hash: a plaintext path hash in a listable key is an oracle.
 func TestBlindingIsKeyed(t *testing.T) {
 	const p = "projects/proj/a.jsonl"
-	if formats.MirrorName(keyA(t), p) == formats.MirrorName(keyB(t), p) {
-		t.Fatal("two name_keys produced the same mirror name")
-	}
+	require.NotEqual(t, formats.MirrorName(keyB(t), p), formats.MirrorName(keyA(t), p), "two name_keys produced the same mirror name")
 }
 
 // A pathologically long native path leaves the key length unchanged.
@@ -39,9 +40,7 @@ func TestNameLengthIsFixed(t *testing.T) {
 	short := formats.MirrorName(keyA(t), "a")
 	huge := formats.MirrorName(keyA(t), formats.CanonicalPath(long, "jane"))
 
-	if len(short) != 64 || len(huge) != 64 {
-		t.Fatalf("mirror names must be 64 hex chars, got %d and %d", len(short), len(huge))
-	}
+	require.Truef(t, len(short) == 64 && len(huge) == 64, "mirror names must be 64 hex chars, got %d and %d", len(short), len(huge))
 }
 
 // A file's whole history lands on one key, so a re-ship after state loss is an overwrite.
@@ -49,9 +48,7 @@ func TestNameIsStableAcrossCalls(t *testing.T) {
 	p := formats.CanonicalPath("projects/-Users-jane-work-api/3f2504e0.jsonl", "jane")
 	first := formats.MirrorName(keyA(t), p)
 	for range 100 {
-		if got := formats.MirrorName(keyA(t), p); got != first {
-			t.Fatalf("mirror name is not deterministic: %s != %s", got, first)
-		}
+		require.Equal(t, formats.MirrorName(keyA(t), p), first)
 	}
 }
 
@@ -59,9 +56,7 @@ func TestNameIsStableAcrossCalls(t *testing.T) {
 func TestUserPlaceholderMakesPathsConverge(t *testing.T) {
 	jane := formats.CanonicalPath("projects/-Users-jane-work-api/s.jsonl", "jane")
 	bob := formats.CanonicalPath("projects/-Users-bob-work-api/s.jsonl", "bob")
-	if jane != bob {
-		t.Errorf("canonical paths should converge:\n jane %q\n bob  %q", jane, bob)
-	}
+	assert.Equalf(t, bob, jane, "canonical paths should converge:\n jane %q\n bob  %q", jane, bob)
 }
 
 // Over-replacing is the worse failure: it merges two different files onto one key.
@@ -75,9 +70,7 @@ func TestUserPlaceholderDoesNotOverMatch(t *testing.T) {
 		{"projects/x.jsonl", "", "projects/x.jsonl"},
 	}
 	for _, c := range cases {
-		if got := formats.ApplyUserPlaceholder(c.in, c.username); got != c.want {
-			t.Errorf("ApplyUserPlaceholder(%q, %q) = %q, want %q", c.in, c.username, got, c.want)
-		}
+		assert.Equal(t, formats.ApplyUserPlaceholder(c.in, c.username), c.want)
 	}
 }
 
@@ -99,27 +92,19 @@ func TestSegmentEncodingIsInjective(t *testing.T) {
 func TestMirrorKeyLayout(t *testing.T) {
 	got, err := formats.MirrorKey("default", "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		"claude-code-transcripts", keyA(t), "projects/proj/a.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want := "v1/organization=default/install=3f2504e0-4f89-41d3-9a0c-0305e82c3301/" +
 		"mirror/source=claude-code-transcripts/" +
 		"28547a64a206a3b4d14d27ccbf75019e758fc176524ac0ea7b0a83ef7df78ef4.age"
-	if got != want {
-		t.Errorf("key layout:\n got %s\nwant %s", got, want)
-	}
+	assert.Equalf(t, want, got, "key layout:\n got %s\nwant %s", got, want)
 }
 
 // organization=default keeps every deployment's keys at one depth, so erasure is one sweep.
 func TestStandaloneAndOrgKeysShareDepth(t *testing.T) {
 	standalone, err := formats.MirrorKey("default", "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "s", keyA(t), "a.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	enterprise, err := formats.MirrorKey("acme", "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "s", keyA(t), "a.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if a, b := strings.Count(standalone, "/"), strings.Count(enterprise, "/"); a != b {
 		t.Errorf("key depth differs: standalone %d segments, enterprise %d", a, b)
 	}
@@ -155,17 +140,11 @@ func TestMirrorKeyRejectsWrongKeySize(t *testing.T) {
 func TestStateKeySharesTheInstallPrefix(t *testing.T) {
 	const install = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 	state, err := formats.StateKey("default", install, "heartbeat.json.age")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	mirror, err := formats.MirrorKey("default", install, "s", keyA(t), "a.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	prefix := "v1/organization=default/install=" + install + "/"
-	if !strings.HasPrefix(state, prefix) || !strings.HasPrefix(mirror, prefix) {
-		t.Errorf("state and mirror keys must share the install prefix:\n %s\n %s", state, mirror)
-	}
+	assert.Truef(t, strings.HasPrefix(state, prefix) && strings.HasPrefix(mirror, prefix), "state and mirror keys must share the install prefix:\n %s\n %s", state, mirror)
 	if _, err := formats.StateKey("default", install, "nested/name"); err == nil {
 		t.Error("a state object name containing a slash must be refused")
 	}
@@ -177,17 +156,11 @@ func TestKeyLeaksNothingAboutThePath(t *testing.T) {
 	rel := "projects/-Users-jane-work-secret-project/session.jsonl"
 	key, err := formats.MirrorKey("default", "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		"claude-code-transcripts", keyA(t), formats.CanonicalPath(rel, username))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	leaf := key[strings.LastIndex(key, "/")+1:]
 
 	for _, fragment := range []string{username, "secret-project", "session", "projects", "Users", ".jsonl"} {
-		if strings.Contains(leaf, fragment) {
-			t.Errorf("mirror name leaks %q: %s", fragment, leaf)
-		}
+		assert.NotContainsf(t, leaf, fragment, "mirror name leaks %q: %s", fragment, leaf)
 	}
-	if len(leaf) != 64+len(".age") {
-		t.Errorf("mirror name should be 64 hex chars plus .age, got %q", leaf)
-	}
+	assert.Lenf(t, leaf, 64+len(".age"), "mirror name should be 64 hex chars plus .age, got %q", leaf)
 }

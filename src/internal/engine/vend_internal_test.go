@@ -1,14 +1,16 @@
 package engine
 
-// The authorization accumulator, exercised directly: the byte bound needs objects too large to
-// produce through the loop, and overshooting it loses a whole group.
-
 import (
 	"context"
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
+
+// The authorization accumulator, exercised directly: the byte bound needs objects too large to
+// produce through the loop, and overshooting it loses a whole group.
 
 // sizePort records the ciphertext each group carried and stores everything.
 type sizePort struct {
@@ -92,19 +94,12 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 				for _, sz := range g {
 					bytes += sz
 				}
-				if len(g) > maxBatchObjects {
-					t.Errorf("a group carried %d objects, over the %d bound", len(g), maxBatchObjects)
-				}
+				assert.Truef(t, len(g) <= maxBatchObjects, "a group carried %d objects, over the %d bound", len(g), maxBatchObjects)
 				// An object larger than the whole bound is the one exception, and it rides alone.
-				if bytes > maxBatchBytes && len(g) != 1 {
-					t.Errorf("a group of %d carried %d bytes, over the %d bound",
-						len(g), bytes, maxBatchBytes)
-				}
+				assert.Truef(t, bytes <= maxBatchBytes || len(g) == 1, "a group of %d carried %d bytes, over the %d bound", len(g), bytes, maxBatchBytes)
 				objects += len(g)
 			}
-			if objects != len(c.sizes) {
-				t.Errorf("%d objects authorized for %d staged", objects, len(c.sizes))
-			}
+			assert.Equalf(t, len(c.sizes), objects, "%d objects authorized for %d staged", objects, len(c.sizes))
 		})
 	}
 }
@@ -116,16 +111,10 @@ func TestSourceHashIsLiftedOutOfTheMetadata(t *testing.T) {
 		"source-id":    "claude-code-transcripts",
 		"shipped-hash": "def",
 	})
-	if obj.SourceHash != "abc" {
-		t.Errorf("source hash = %q", obj.SourceHash)
-	}
+	assert.Equalf(t, "abc", obj.SourceHash, "source hash = %q", obj.SourceHash)
 	if _, ok := obj.Metadata["source-hash"]; ok {
 		t.Error("source-hash survived in the request metadata")
 	}
-	if len(obj.Metadata) != 2 {
-		t.Errorf("metadata lost or gained names: %v", obj.Metadata)
-	}
-	if preparedFrom(0, "k", nil, nil).Metadata == nil {
-		t.Error("nil metadata produced a nil map rather than an empty one")
-	}
+	assert.Lenf(t, obj.Metadata, 2, "metadata lost or gained names: %v", obj.Metadata)
+	assert.True(t, preparedFrom(0, "k", nil, nil).Metadata != nil, "nil metadata produced a nil map rather than an empty one")
 }

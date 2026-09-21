@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -21,9 +23,7 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 	cfg := transforms.DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := transforms.New(cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 
 	cases := []struct {
 		name    string
@@ -40,12 +40,8 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				res, err := s.Scrub(tc.payload, transforms.Hint{Family: "claude-code", JSONL: true})
-				if err != nil {
-					b.Fatal(err)
-				}
-				if len(res.Out) == 0 {
-					b.Fatal("empty output")
-				}
+				require.NoError(b, err)
+				require.NotEqual(b, 0, len(res.Out), "empty output")
 			}
 		})
 	}
@@ -280,20 +276,14 @@ func BenchmarkScrubRealData(b *testing.B) {
 		total += len(raw)
 		return nil
 	})
-	if err != nil {
-		b.Fatalf("load %s: %v", root, err)
-	}
-	if total == 0 {
-		b.Fatalf("no .jsonl files under %s", root)
-	}
+	require.NoErrorf(b, err, "load %s: %v", root, err)
+	require.NotEqualf(b, 0, total, "no .jsonl files under %s", root)
 	b.Logf("real corpus: %d files, %.1f MiB", len(files), float64(total)/(1<<20))
 
 	cfg := transforms.DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := transforms.New(cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	hint := transforms.Hint{Family: "claude-code", JSONL: true}
 	b.SetBytes(int64(total))
 	b.ReportAllocs()

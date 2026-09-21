@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
@@ -47,28 +50,19 @@ type mirrorKeyVector struct {
 func readJSON(t *testing.T, name string, into any) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(vectorDir, name))
-	if err != nil {
-		t.Fatalf("read vectors: %v", err)
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		t.Fatalf("parse vectors %s: %v", name, err)
-	}
+	require.NoErrorf(t, err, "read vectors: %v", err)
+	require.NoError(t, json.Unmarshal(raw, into))
 }
 
 // The canonical encoding is the HMAC input: one byte of disagreement re-keys every file.
 func TestConformanceCanonicalPath(t *testing.T) {
 	var v canonicalPathVectors
 	readJSON(t, "canonical-path.json", &v)
-	if len(v.Vectors) == 0 {
-		t.Fatal("no canonical-path vectors")
-	}
+	require.NotEqual(t, 0, len(v.Vectors), "no canonical-path vectors")
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			got := formats.CanonicalPath(c.SourceRelPath, c.Username)
-			if got != c.CanonicalPath {
-				t.Errorf("CanonicalPath(%q, %q)\n got %q\nwant %q",
-					c.SourceRelPath, c.Username, got, c.CanonicalPath)
-			}
+			assert.Equalf(t, c.CanonicalPath, got, "CanonicalPath(%q, %q)\n got %q\nwant %q", c.SourceRelPath, c.Username, got, c.CanonicalPath)
 		})
 	}
 }
@@ -77,17 +71,13 @@ func TestConformanceMirrorName(t *testing.T) {
 	path := filepath.Join(vectorDir, "mirror-key.json")
 
 	if *update {
-		if err := os.WriteFile(path, generateMirrorKeyVectors(t), 0o644); err != nil {
-			t.Fatalf("write vectors: %v", err)
-		}
+		require.NoError(t, os.WriteFile(path, generateMirrorKeyVectors(t), 0o644))
 		t.Logf("regenerated %s", path)
 	}
 
 	var v mirrorKeyVectors
 	readJSON(t, "mirror-key.json", &v)
-	if len(v.Vectors) == 0 {
-		t.Fatal("no mirror-key vectors")
-	}
+	require.NotEqual(t, 0, len(v.Vectors), "no mirror-key vectors")
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			keyHex, ok := v.Keys[c.Key]
@@ -95,13 +85,9 @@ func TestConformanceMirrorName(t *testing.T) {
 				t.Fatalf("vector names key %q, which is not in keys", c.Key)
 			}
 			key, err := hex.DecodeString(keyHex)
-			if err != nil {
-				t.Fatalf("key %q is not hex: %v", c.Key, err)
-			}
+			require.NoError(t, err)
 			got := formats.MirrorName(key, c.CanonicalPath)
-			if got != c.MirrorName {
-				t.Errorf("MirrorName(%s, %q)\n got %s\nwant %s", c.Key, c.CanonicalPath, got, c.MirrorName)
-			}
+			assert.Equalf(t, c.MirrorName, got, "MirrorName(%s, %q)\n got %s\nwant %s", c.Key, c.CanonicalPath, got, c.MirrorName)
 		})
 	}
 }
@@ -138,9 +124,7 @@ func generateMirrorKeyVectors(t *testing.T) []byte {
 	}
 	for _, c := range cases {
 		key, err := hex.DecodeString(keys[c.key])
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		out.Vectors = append(out.Vectors, mirrorKeyVector{
 			Name:          c.name,
 			Key:           c.key,
@@ -150,8 +134,6 @@ func generateMirrorKeyVectors(t *testing.T) []byte {
 	}
 
 	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return append(b, '\n')
 }

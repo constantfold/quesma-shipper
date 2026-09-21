@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
 
@@ -22,12 +25,8 @@ func TestRefreshWithNoEnrollmentMakesNoNetworkCall(t *testing.T) {
 		StateDir:   t.TempDir(),
 		Now:        time.Now(),
 	})
-	if remote.Origin != controlplane.OriginNone {
-		t.Errorf("origin = %q, want none", remote.Origin)
-	}
-	if p.configCalls != 0 {
-		t.Errorf("an unenrolled install made %d config calls", p.configCalls)
-	}
+	assert.Equalf(t, controlplane.OriginNone, remote.Origin, "origin = %q, want none", remote.Origin)
+	assert.Equalf(t, 0, p.configCalls, "an unenrolled install made %d config calls", p.configCalls)
 	_ = srv
 }
 
@@ -43,15 +42,9 @@ func TestRefreshCachesWhatItFetchedAndReusesItWhenTheServerIsGone(t *testing.T) 
 	first := controlplane.Refresh(context.Background(), controlplane.RefreshOptions{
 		Enrollment: e, StateDir: dir, Now: now,
 	})
-	if first.Origin != controlplane.OriginFetched {
-		t.Fatalf("origin = %q, want fetched", first.Origin)
-	}
-	if first.Doc == nil || first.Doc.MaxFilesPerRun == nil || *first.Doc.MaxFilesPerRun != 8 {
-		t.Fatalf("served field did not arrive: %+v", first.Doc)
-	}
-	if first.Expired {
-		t.Error("a config expiring in 24h was reported expired")
-	}
+	require.Equalf(t, controlplane.OriginFetched, first.Origin, "origin = %q, want fetched", first.Origin)
+	require.Truef(t, first.Doc != nil && first.Doc.MaxFilesPerRun != nil && *first.Doc.MaxFilesPerRun == 8, "served field did not arrive: %+v", first.Doc)
+	assert.True(t, !first.Expired, "a config expiring in 24h was reported expired")
 
 	// The ordinary case, a laptop off the VPN, and it must not stop collection: source stores are
 	// reaped on their own schedules, so a skipped run loses data permanently.
@@ -60,20 +53,12 @@ func TestRefreshCachesWhatItFetchedAndReusesItWhenTheServerIsGone(t *testing.T) 
 	second := controlplane.Refresh(context.Background(), controlplane.RefreshOptions{
 		Enrollment: e, StateDir: dir, Now: now,
 	})
-	if second.Origin != controlplane.OriginCached {
-		t.Fatalf("origin = %q, want cached", second.Origin)
-	}
-	if second.Doc == nil || second.Doc.MaxFilesPerRun == nil {
-		t.Fatalf("cached config did not come back: %+v", second.Doc)
-	}
+	require.Equalf(t, controlplane.OriginCached, second.Origin, "origin = %q, want cached", second.Origin)
+	require.Truef(t, second.Doc != nil && second.Doc.MaxFilesPerRun != nil, "cached config did not come back: %+v", second.Doc)
 	// The reason has to survive: a fallback that reported nothing would leave an operator
 	// who pushed a config change unable to tell it had not taken effect.
-	if second.Err == nil {
-		t.Error("fell back to the cache without saying why")
-	}
-	if second.Expired {
-		t.Error("a cached config inside its expiry was reported expired")
-	}
+	assert.Error(t, second.Err, "fell back to the cache without saying why")
+	assert.True(t, !second.Expired, "a cached config inside its expiry was reported expired")
 }
 
 func TestAnExpiredCachedConfigKeepsCollectingAndIsFlagged(t *testing.T) {
@@ -93,12 +78,8 @@ func TestAnExpiredCachedConfigKeepsCollectingAndIsFlagged(t *testing.T) {
 	remote := controlplane.Refresh(context.Background(), controlplane.RefreshOptions{
 		Enrollment: e, StateDir: dir, Now: later,
 	})
-	if remote.Doc == nil {
-		t.Fatal("an expired config produced no document; collection would lose its scope")
-	}
-	if !remote.Expired {
-		t.Error("collecting under an expired config was not flagged, so no manifest would carry config_expired")
-	}
+	require.True(t, remote.Doc != nil, "an expired config produced no document; collection would lose its scope")
+	assert.True(t, remote.Expired, "collecting under an expired config was not flagged, so no manifest would carry config_expired")
 }
 
 // A cache damaged on disk degrades to local config rather than stopping the run: collection
@@ -118,27 +99,17 @@ func TestRefreshDegradesWhenTheCacheNoLongerParses(t *testing.T) {
 	// parser refuses once its opening bracket has no close.
 	path := filepath.Join(dir, controlplane.CacheFile)
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	const encoded = "b3JnOiBhY21lCg==" // "org: acme\n"
-	if !strings.Contains(string(raw), encoded) {
-		t.Fatalf("cache does not hold the config where this test expects it:\n%s", raw)
-	}
+	require.Containsf(t, string(raw), encoded, "cache does not hold the config where this test expects it:\n%s", raw)
 	edited := strings.Replace(string(raw), encoded, "b3JnOiBbYWNtZQo=", 1) // "org: [acme\n"
-	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(edited), 0o600))
 
 	remote := controlplane.Refresh(context.Background(), controlplane.RefreshOptions{
 		Enrollment: e, StateDir: dir, Now: time.Now(),
 	})
-	if remote.Origin != controlplane.OriginNone || remote.Doc != nil {
-		t.Errorf("origin = %q with doc %+v, want no remote layer", remote.Origin, remote.Doc)
-	}
-	if remote.Err == nil || !strings.Contains(remote.Err.Error(), controlplane.CacheFile) {
-		t.Errorf("the unusable cache was not named: %v", remote.Err)
-	}
+	assert.Truef(t, remote.Origin == controlplane.OriginNone && remote.Doc == nil, "origin = %q with doc %+v, want no remote layer", remote.Origin, remote.Doc)
+	assert.Truef(t, remote.Err != nil && strings.Contains(remote.Err.Error(), controlplane.CacheFile), "the unusable cache was not named: %v", remote.Err)
 }
 
 func TestOfflineRefreshResolvesFromTheCacheWithoutCalling(t *testing.T) {
@@ -157,10 +128,6 @@ func TestOfflineRefreshResolvesFromTheCacheWithoutCalling(t *testing.T) {
 	remote := controlplane.Refresh(context.Background(), controlplane.RefreshOptions{
 		Enrollment: e, StateDir: dir, Now: time.Now(), Offline: true,
 	})
-	if remote.Origin != controlplane.OriginCached {
-		t.Errorf("origin = %q, want cached", remote.Origin)
-	}
-	if p.configCalls != calls {
-		t.Errorf("an offline refresh made %d extra config calls", p.configCalls-calls)
-	}
+	assert.Equalf(t, controlplane.OriginCached, remote.Origin, "origin = %q, want cached", remote.Origin)
+	assert.Equal(t, p.configCalls, calls)
 }

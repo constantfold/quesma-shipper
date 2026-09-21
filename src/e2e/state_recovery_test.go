@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
@@ -23,22 +26,16 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	writeConfig(t, w, "sources:\n  - id: project-map\n    enabled: false\n  - id: claude-account\n    enabled: false\n")
 
 	runOneShot(t)
-	if got := len(mirrorObjects(collect(t, w))); got != 2 {
-		t.Fatalf("the first run stored %d transcripts, want the two staged", got)
-	}
+	require.Equal(t, 2, len(mirrorObjects(collect(t, w))))
 
 	appendLine(t, grown, grownLine)
-	if err := os.WriteFile(filepath.Join(statePath(w), engine.FileName), []byte("this is not a document\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(statePath(w), engine.FileName), []byte("this is not a document\n"), 0o600))
 	runOneShot(t)
 	w.plane.assertClean(t)
 
 	// Both commit: the plane answered for the unchanged one and the grown one was PUT, so
 	// the unchanged key keeps its single version.
-	if got := countOf(shippedFromLog(t, w), claudeSource); got != 2 {
-		t.Errorf("the run over the lost document shipped %d transcripts, want both", got)
-	}
+	assert.Equal(t, 2, countOf(shippedFromLog(t, w), claudeSource))
 	present := w.plane.answeredPresent()
 	for _, o := range mirrorObjects(collect(t, w)) {
 		changed := strings.Contains(string(o.Payload), "one more")
@@ -46,12 +43,8 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		if changed {
 			want = 2
 		}
-		if got := w.store.versions(o.Key); got != want {
-			t.Errorf("%s has %d versions, want %d", o.Key, got, want)
-		}
-		if slices.Contains(present, o.Key) == changed {
-			t.Errorf("%s answered present=%v, changed=%v", o.Key, !changed, changed)
-		}
+		assert.Equal(t, w.store.versions(o.Key), want)
+		assert.NotEqual(t, slices.Contains(present, o.Key), changed)
 	}
 
 	// The replacement document loads, and the next run trusts it: nothing to send.
@@ -59,10 +52,6 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("the replacement document does not load: %v", err)
 	}
 	out := runOneShot(t)
-	if got := countOf(shippedFromLog(t, w), claudeSource); got != 0 {
-		t.Errorf("the run after recovery shipped %d transcripts again:\n%s", got, out)
-	}
-	if counts := summary(t, out); counts["unchanged"] == 0 {
-		t.Errorf("the run after recovery reported nothing unchanged:\n%s", out)
-	}
+	assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource))
+	assert.NotEqual(t, 0, summary(t, out)["unchanged"])
 }

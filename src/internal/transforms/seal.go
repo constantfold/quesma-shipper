@@ -1,10 +1,5 @@
-// Package seal builds and reads the object container:
-//
-//	tar( manifest.json, <payload> )  ->  zstd level 3  ->  age
-//
-// manifest.json must stay the FIRST tar entry: every layer decodes sequentially from
-// byte 0, so a ranged GET of the head yields the whole manifest without the payload,
-// which is why no manifest sidecar exists. The payload itself is never transformed.
+// Objects contain tar(manifest.json, payload), compressed with zstd and encrypted with age.
+// The manifest comes first so a ranged GET can read it without downloading the payload.
 package transforms
 
 import (

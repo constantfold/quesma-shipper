@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Goldens for the fields where the exact value is the point. What is pinned stays narrow, because a
@@ -124,9 +126,7 @@ func TestGolden(t *testing.T) {
 				got = append(got, g)
 				payloads[g.PayloadFile] = payload
 			}
-			if len(got) == 0 {
-				t.Fatal("nothing was collected; a golden of nothing proves nothing")
-			}
+			require.NotEqual(t, 0, len(got), "nothing was collected; a golden of nothing proves nothing")
 			compareGolden(t, tc.name, got, payloads)
 		})
 	}
@@ -218,69 +218,29 @@ func compareGolden(t *testing.T, name string, got []goldenObject, payloads map[s
 	indexPath := filepath.Join(dir, "objects.json")
 
 	encoded, err := json.MarshalIndent(got, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	encoded = append(encoded, '\n')
 
 	if *update {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(dir, "payloads"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(indexPath, encoded, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.RemoveAll(dir))
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "payloads"), 0o755))
+		require.NoError(t, os.WriteFile(indexPath, encoded, 0o644))
 		for file, body := range payloads {
-			if err := os.WriteFile(filepath.Join(dir, "payloads", file), body, 0o644); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "payloads", file), body, 0o644))
 		}
 		t.Logf("wrote %s", dir)
 		return
 	}
 
 	want, err := os.ReadFile(indexPath)
-	if err != nil {
-		t.Fatalf("no golden for %s: %v\nrun: go test ./e2e -update", name, err)
-	}
-	if string(want) != string(encoded) {
-		t.Errorf("%s: the manifest record changed.\n%s", name, firstDifference(string(want), string(encoded)))
-	}
+	require.NoErrorf(t, err, "no golden for %s: %v\nrun: go test ./e2e -update", name, err)
+	assert.Equal(t, string(want), string(encoded), "golden index %s", indexPath)
 	for file, body := range payloads {
 		wantBody, err := os.ReadFile(filepath.Join(dir, "payloads", file))
 		if err != nil {
 			t.Errorf("no golden payload %s: %v", file, err)
 			continue
 		}
-		if string(wantBody) != string(body) {
-			t.Errorf("%s/%s: the shipped payload changed.\n%s", name, file,
-				firstDifference(string(wantBody), string(body)))
-		}
+		assert.Equal(t, string(wantBody), string(body), "golden payload %s", file)
 	}
-}
-
-// The first line that moved, with a hint: a diff a reader has to eyeball is a diff that gets
-// skipped, and a skipped diff plus -update is how a regression becomes the expectation.
-func firstDifference(want, got string) string {
-	wantLines := strings.Split(want, "\n")
-	gotLines := strings.Split(got, "\n")
-	for i := 0; i < len(wantLines) || i < len(gotLines); i++ {
-		var w, g string
-		if i < len(wantLines) {
-			w = wantLines[i]
-		}
-		if i < len(gotLines) {
-			g = gotLines[i]
-		}
-		if w != g {
-			return "line " + strconv.Itoa(i+1) + ":\n  want: " + strings.TrimSpace(w) +
-				"\n  got:  " + strings.TrimSpace(g) +
-				"\n\nIf the vendor changed shape, add a fixture generation beside this one." +
-				"\nIf the shipper changed on purpose, read the whole diff, then -update."
-		}
-	}
-	return "(no line differs; check trailing whitespace)"
 }

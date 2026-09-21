@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testHome = "/home/u"
@@ -41,9 +44,7 @@ func TestMatchTreeOnlyAnswersForWholeTrees(t *testing.T) {
 func realTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return dir
 }
 
@@ -51,18 +52,14 @@ func TestMatchPairChecksBothForms(t *testing.T) {
 	home := realTempDir(t)
 	mkdir := func(p string) {
 		t.Helper()
-		if err := os.MkdirAll(p, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(p, 0o700))
 	}
 	mkdir(filepath.Join(home, ".ssh"))
 	mkdir(filepath.Join(home, "work"))
 	secret := filepath.Join(home, ".ssh", "id_secret")
 	plain := filepath.Join(home, "work", "notes.jsonl")
 	for _, p := range []string{secret, plain} {
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(p, []byte("x"), 0o600))
 	}
 	// A benign name that resolves into the denied tree.
 	intoDenied := filepath.Join(home, "work", "notes-link.jsonl")
@@ -71,9 +68,7 @@ func TestMatchPairChecksBothForms(t *testing.T) {
 	}
 	// And the other direction: a denied location pointing at a harmless file.
 	outOfDenied := filepath.Join(home, ".ssh", "link.jsonl")
-	if err := os.Symlink(plain, outOfDenied); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(plain, outOfDenied))
 
 	d := New(home)
 
@@ -191,14 +186,10 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 		path, want := exp(row.path), exp(row.want)
 		reported[want] = true
 		ok, pat := d.matchCandidate(path)
-		if ok != (want != "") || pat != want {
-			t.Errorf("%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
-		}
+		assert.Truef(t, ok == (want != "") && pat == want, "%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
 	}
 	// A new compiled pattern needs a path that reports against it, or the corpus stops covering the list.
 	for _, pat := range d.Patterns() {
-		if !reported[pat] {
-			t.Errorf("no corpus path is reported against %q: add one", pat)
-		}
+		assert.Truef(t, reported[pat], "no corpus path is reported against %q: add one", pat)
 	}
 }

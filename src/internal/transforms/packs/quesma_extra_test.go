@@ -3,6 +3,9 @@ package packs
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Adversarial coverage for every quesma-extra rule: true tokens the rule must redact as
@@ -225,9 +228,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 	}
 
 	rules, err := Load(QuesmaExtra)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	byID := map[string]*Rule{}
 	for _, r := range rules {
 		byID[r.id] = r
@@ -241,9 +242,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 		for _, p := range probes {
 			spans := r.MatchScanned(p.in)
 			if p.want == "" {
-				if len(spans) != 0 {
-					t.Errorf("%s: near-miss %q matched: %v", id, p.in, spans)
-				}
+				assert.Len(t, spans, 0)
 				continue
 			}
 			found := false

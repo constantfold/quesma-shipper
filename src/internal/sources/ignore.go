@@ -9,23 +9,14 @@ import (
 
 const notrajectories = ".notrajectories"
 
-// RepoFilter attributes candidates to the repository their session ran in and drops the
-// ones whose repository carries a .notrajectories marker.
-//
-// Not a glob: only Claude Code encodes the working directory in the path; Codex files a
-// rollout under its start date and the repository appears only in a cwd field inside the
-// file. So attribution asks the file, with the catalog's own bounded head probe, and only
-// for the sources that probe names.
+// RepoFilter skips sessions from repositories marked .notrajectories.
+// Attribution uses the catalog’s bounded cwd probe where paths do not encode the repository.
 type RepoFilter struct {
 	probe *CWDProbe
 	git   *GitRead
 	home  string
 
-	// cwds caches a hit per project directory (every session under an agent-encoded
-	// projects/<cwd> directory shares the answer) and hits and misses per file (a sidecar
-	// with no cwd field must not speak for its siblings); scopes caches the git resolution
-	// per cwd. Markers are deliberately not cached: a stat is cheap, and a marker created
-	// while the daemon runs must bite on the next flush, not the next restart.
+	// Cache cwd by encoded project directory or individual file, and git resolution by cwd; never cache markers.
 	cwds   map[string]string
 	scopes map[string]gitScope
 }

@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
-	"golang.org/x/sys/unix"
 )
 
 const macPackageTarget = "darwin/pkg"

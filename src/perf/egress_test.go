@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Three claims, in the order they can break: the store has no working address on the host, the
@@ -27,9 +29,7 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 		t.Logf("the store published no host port for 9000/tcp: %v", err)
 	} else {
 		host, err := minioCtr.Host(ctx)
-		if err != nil {
-			t.Fatalf("the store's host: %v", err)
-		}
+		require.NoErrorf(t, err, "the store's host: %v", err)
 		addr := net.JoinHostPort(host, port.Port())
 		conn, dialErr := net.DialTimeout("tcp", addr, 5*time.Second)
 		if dialErr == nil {
@@ -42,19 +42,13 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	}
 
 	resp, err := http.Get(storeEndpoint + "/minio/health/live")
-	if err != nil {
-		t.Fatalf("the proxied route to the store is down: %v", err)
-	}
+	require.Falsef(t, err != nil, "the proxied route to the store is down: %v", err)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the proxied route to the store answered HTTP %d", resp.StatusCode)
-	}
+	require.Falsef(t, resp.StatusCode != http.StatusOK, "the proxied route to the store answered HTTP %d", resp.StatusCode)
 
 	// An address, not a name: the claim is about routing, not about docker's resolver.
 	code, _, err := minioCtr.Exec(ctx, []string{"curl", "-sS", "--max-time", "5", "http://1.1.1.1/"})
-	if err != nil {
-		t.Fatalf("probe the store's egress: %v", err)
-	}
+	require.Falsef(t, err != nil, "probe the store's egress: %v", err)
 	if code == 0 {
 		t.Errorf("the store reached 1.1.1.1 from its own network: the network is not internal, " +
 			"and nothing here can claim the shipper's traffic is the only traffic")
@@ -69,9 +63,7 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 	bucket, err := createVersionedBucket(context.Background(),
 		fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
-	if err != nil {
-		t.Fatalf("create the second org's bucket: %v", err)
-	}
+	require.Falsef(t, err != nil, "create the second org's bucket: %v", err)
 	// Real, so the emptiness assertion below is an answer rather than a NoSuchBucket.
 	const slug = "nowhere"
 	w := stageWorldIn(t, slug, deadEndpoint, bucket)

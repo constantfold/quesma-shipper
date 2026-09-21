@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +14,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -117,9 +119,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 func (p *fakePlane) enrolled(t *testing.T, endpoint, installID string) *controlplane.Enrollment {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return &controlplane.Enrollment{
 		InstallID:    installID,
 		Organization: p.enrollOrg,
@@ -133,18 +133,14 @@ func (p *fakePlane) client(t *testing.T, endpoint, install string) *controlplane
 	t.Helper()
 	e := p.enrolled(t, endpoint, install)
 	priv, err := e.PrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	c, err := controlplane.New(controlplane.Options{
 		Endpoint:     endpoint,
 		InstallID:    install,
 		Organization: e.Organization,
 		DeviceKey:    priv,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return c
 }
 
@@ -155,21 +151,15 @@ func TestEnrollStoresWhatTheServerAssigns(t *testing.T) {
 	srv := p.start()
 
 	c, err := controlplane.New(controlplane.Options{Endpoint: srv.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	resp, err := c.Enroll(context.Background(), controlplane.EnrollRequest{
 		InstallID:       installID,
 		DevicePublicKey: "device-pub",
 		AgeRecipient:    "age1recipient",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// Organization is server-assigned: an install must not place itself in another org's subtree.
-	if resp.Organization != "acme" {
-		t.Errorf("organization = %q, want acme", resp.Organization)
-	}
+	assert.Equalf(t, "acme", resp.Organization, "organization = %q, want acme", resp.Organization)
 }
 
 // A document the client cannot parse is refused whole rather than partly applied.
@@ -193,9 +183,7 @@ func TestFetchConfigSurfacesAVersionConflict(t *testing.T) {
 	_, err := c.FetchConfig(context.Background(), controlplane.ConfigRequest{AgentVersion: "0.1.0"})
 	// A 409 has to be distinguishable from a transport failure: the operator's next step is
 	// to upgrade the client, not to check the network.
-	if !errors.Is(err, controlplane.ErrUnsupportedVersion) {
-		t.Fatalf("want ErrUnsupportedVersion, got %v", err)
-	}
+	require.ErrorIsf(t, err, controlplane.ErrUnsupportedVersion, "want ErrUnsupportedVersion, got %v", err)
 }
 
 func TestConfigFetchIsSignedAndCarriesTheRequest(t *testing.T) {
@@ -207,9 +195,7 @@ func TestConfigFetchIsSignedAndCarriesTheRequest(t *testing.T) {
 	if _, err := c.FetchConfig(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(p.lastAuth, "Shipper-Device org=acme, install="+installID) {
-		t.Errorf("request was not signed as this install: %q", p.lastAuth)
-	}
+	assert.Truef(t, strings.HasPrefix(p.lastAuth, "Shipper-Device org=acme, install="+installID), "request was not signed as this install: %q", p.lastAuth)
 	if p.lastReq.AgentVersion != "0.1.0" || len(p.lastReq.ConfigVersions) != 1 {
 		t.Errorf("the config request did not reach the server: %+v", p.lastReq)
 	}
@@ -222,9 +208,7 @@ func TestEveryRequestCarriesTheClientVersionHeader(t *testing.T) {
 	// One call to each endpoint the client has. If an endpoint is ever added and misses the
 	// header, it is post() that must have been bypassed, which is the actual bug.
 	c, err := controlplane.New(controlplane.Options{Endpoint: srv.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := c.Enroll(context.Background(), controlplane.EnrollRequest{
 		InstallID:       installID,
 		DevicePublicKey: "device-pub",
@@ -249,9 +233,7 @@ func TestEveryRequestCarriesTheClientVersionHeader(t *testing.T) {
 	}
 	for _, path := range []string{"/v1/enroll", "/v1/config"} {
 		for header, w := range want {
-			if got := p.headersByPath[path].Get(header); got != w {
-				t.Errorf("%s: %s = %q, want %q", path, header, got, w)
-			}
+			assert.Equal(t, p.headersByPath[path].Get(header), w)
 		}
 	}
 }
@@ -263,26 +245,18 @@ func TestEnrollmentRecordRoundTripsAndRefusesLoosePermissions(t *testing.T) {
 	dir := t.TempDir()
 	p := newPlane(t)
 	rec := p.enrolled(t, "https://plane.example", installID)
-	if err := rec.Save(dir); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, rec.Save(dir))
 
 	got, err := controlplane.LoadEnrollment(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Organization != rec.Organization || got.DeviceKey != rec.DeviceKey {
-		t.Errorf("record did not round-trip: %+v", got)
-	}
+	require.NoError(t, err)
+	assert.Truef(t, got.Organization == rec.Organization && got.DeviceKey == rec.DeviceKey, "record did not round-trip: %+v", got)
 	if _, err := got.PrivateKey(); err != nil {
 		t.Errorf("device key did not decode: %v", err)
 	}
 
 	// It holds a private signing key: a group-readable one is a finding, and the operator has to
 	// know it was exposed rather than have it repaired silently.
-	if err := os.Chmod(filepath.Join(dir, controlplane.EnrollmentFile), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Chmod(filepath.Join(dir, controlplane.EnrollmentFile), 0o644))
 	if _, err := controlplane.LoadEnrollment(dir); err == nil {
 		t.Fatal("loaded an enrollment record readable by everyone")
 	}
@@ -292,18 +266,14 @@ func TestMissingEnrollmentIsNotAnError(t *testing.T) {
 	// Standalone is a supported deployment, not a degraded one: LoadEnrollment must report
 	// plain os.ErrNotExist so callers can tell "no backend" from "broken backend".
 	_, err := controlplane.LoadEnrollment(t.TempDir())
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("want os.ErrNotExist, got %v", err)
-	}
+	require.ErrorIsf(t, err, os.ErrNotExist, "want os.ErrNotExist, got %v", err)
 }
 
 func TestEnrollmentSchemaMismatchIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	body := fmt.Sprintf(`{"enrollment_schema":99,"install_id":%q,"organization":"acme",`+
 		`"endpoint":"https://x","device_key":"","enrolled_at":"now"}`, installID)
-	if err := os.WriteFile(filepath.Join(dir, controlplane.EnrollmentFile), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, controlplane.EnrollmentFile), []byte(body), 0o600))
 	if _, err := controlplane.LoadEnrollment(dir); err == nil {
 		t.Fatal("accepted a record written by a version this client does not speak")
 	}
@@ -313,45 +283,29 @@ func TestEnrollmentSchemaMismatchIsRefused(t *testing.T) {
 // ladder: a fleet on auto-update meets old records routinely, never by hand-editing JSON.
 func TestHistoricalEnrollmentSchemasMigrateOnLoad(t *testing.T) {
 	fixtures, err := filepath.Glob(filepath.Join("testdata", "enrollment-schema-*.json"))
-	if err != nil || len(fixtures) == 0 {
-		t.Fatalf("no enrollment fixtures found: %v", err)
-	}
+	require.Truef(t, err == nil && len(fixtures) != 0, "no enrollment fixtures found: %v", err)
 	for _, fixture := range fixtures {
 		t.Run(filepath.Base(fixture), func(t *testing.T) {
 			dir := t.TempDir()
 			raw, err := os.ReadFile(fixture)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			path := filepath.Join(dir, controlplane.EnrollmentFile)
-			if err := os.WriteFile(path, raw, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, raw, 0o600))
 
 			e, err := controlplane.LoadEnrollment(dir)
-			if err != nil {
-				t.Fatalf("a known historical schema was refused: %v", err)
-			}
+			require.NoErrorf(t, err, "a known historical schema was refused: %v", err)
 			// The identity material must survive verbatim: a migration that loses the
 			// device key silently re-keys the install.
-			if e.InstallID != "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061" ||
-				e.Organization != "acme" || e.Endpoint != "https://cp.example.com" ||
-				e.EnrolledAt == "" {
-				t.Errorf("migrated record lost fields: %+v", e)
-			}
+			assert.Truef(t, e.InstallID == "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061" && e.Organization == "acme" && e.Endpoint == "https://cp.example.com" && e.EnrolledAt != "", "migrated record lost fields: %+v", e)
 			if _, err := e.PrivateKey(); err != nil {
 				t.Errorf("device key did not survive migration: %v", err)
 			}
 
 			// The upgrade is persisted once, at the current schema, still private.
 			persisted, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			var onDisk map[string]any
-			if err := json.Unmarshal(persisted, &onDisk); err != nil {
-				t.Fatalf("persisted record is not JSON: %v", err)
-			}
+			require.NoError(t, json.Unmarshal(persisted, &onDisk))
 			if _, stale := onDisk["sink"]; stale {
 				t.Error("persisted record still carries the schema-1 sink grant")
 			}
@@ -359,12 +313,8 @@ func TestHistoricalEnrollmentSchemasMigrateOnLoad(t *testing.T) {
 				t.Errorf("persisted record is not private: %v %v", info.Mode(), err)
 			}
 			again, err := controlplane.LoadEnrollment(dir)
-			if err != nil {
-				t.Fatalf("the persisted migration does not load back: %v", err)
-			}
-			if *again != *e {
-				t.Errorf("second load differs from first: %+v vs %+v", again, e)
-			}
+			require.NoErrorf(t, err, "the persisted migration does not load back: %v", err)
+			assert.Truef(t, *again == *e, "second load differs from first: %+v vs %+v", again, e)
 		})
 	}
 }
@@ -379,12 +329,8 @@ func TestARefusedInstallIsAMatchableError(t *testing.T) {
 	c := p.client(t, srv.URL, installID)
 	_, err := c.FetchConfig(context.Background(), controlplane.ConfigRequest{AgentVersion: "0.1.0"})
 
-	if !errors.Is(err, formats.ErrCredentialsRefused) {
-		t.Fatalf("want formats.ErrCredentialsRefused, got %v", err)
-	}
+	require.ErrorIsf(t, err, formats.ErrCredentialsRefused, "want formats.ErrCredentialsRefused, got %v", err)
 	// And it still says which endpoint and which status, because that is what an operator
 	// needs after they know what kind of failure it is.
-	if !strings.Contains(err.Error(), "403") {
-		t.Errorf("the error does not mention the status: %v", err)
-	}
+	assert.Containsf(t, err.Error(), "403", "the error does not mention the status: %v", err)
 }

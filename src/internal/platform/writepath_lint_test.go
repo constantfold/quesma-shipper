@@ -11,23 +11,22 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // moduleRoot is derived rather than a hardcoded relative depth, which a directory move silently misdirects.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the test's working directory")
-		}
+		require.NotEqual(t, dir, parent, "no go.mod above the test's working directory")
 		dir = parent
 	}
 }
@@ -69,9 +68,7 @@ func forEachModuleGoFile(t *testing.T, fn func(rel string, file *ast.File, fset 
 		fn(filepath.ToSlash(rel), file, fset)
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 // writeCapablePackages may open files for writing; everything else must route through safeio,
@@ -191,10 +188,7 @@ func TestNoExecOutsidePackaging(t *testing.T) {
 			return
 		}
 		for _, imp := range file.Imports {
-			if imp.Path.Value == `"os/exec"` {
-				t.Errorf("%s:%d: imports os/exec: the data path must not spawn subprocesses (allowed only under packaging/ or in the macOS Keychain reader)",
-					rel, fset.Position(imp.Pos()).Line)
-			}
+			assert.NotEqual(t, `"os/exec"`, imp.Path.Value)
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)

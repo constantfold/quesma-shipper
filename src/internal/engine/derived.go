@@ -79,15 +79,13 @@ func (o Options) enrichSource(
 	// A mismatch gets its own audit entry: a lost window must appear there, not only in a
 	// counter. Notes only — an info describes an object that ships, so stamping it "skipped"
 	// would record loss that did not happen.
-	if o.Log != nil {
-		for _, note := range res.Notes {
-			_ = o.Log.Append(auditlog.Entry{
-				Decision:      auditlog.DecisionSkipped,
-				SourceID:      src.ID,
-				ConfigVersion: o.Plan.ConfigVersion,
-				Reason:        "enrich: " + note,
-			})
-		}
+	for _, note := range res.Notes {
+		_ = o.Log.Append(auditlog.Entry{
+			Decision:      auditlog.DecisionSkipped,
+			SourceID:      src.ID,
+			ConfigVersion: o.Plan.ConfigVersion,
+			Reason:        "enrich: " + note,
+		})
 	}
 
 	shipped, halted := o.shipDerivedGroups(ctx, store, src, e, dbPath, res.Objects, out)
@@ -96,14 +94,12 @@ func (o Options) enrichSource(
 	if halted != nil {
 		// The same line the raw pass records, so the outcome itself says why the run stopped.
 		out.Reason = "uploads stopped: " + halted.Error()
-		if o.Log != nil {
-			_ = o.Log.Append(auditlog.Entry{
-				Decision:      auditlog.DecisionFailed,
-				SourceID:      src.ID,
-				ConfigVersion: o.Plan.ConfigVersion,
-				Reason:        out.Reason,
-			})
-		}
+		_ = o.Log.Append(auditlog.Entry{
+			Decision:      auditlog.DecisionFailed,
+			SourceID:      src.ID,
+			ConfigVersion: o.Plan.ConfigVersion,
+			Reason:        out.Reason,
+		})
 		return fmt.Errorf("enricher %s stopped: %w", e.ID(), halted)
 	}
 	return nil

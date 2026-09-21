@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Also the keys in the results file, and append-only: a rename is a silently reset series.
@@ -75,9 +77,7 @@ type perfResult struct {
 // Provenance is filled in here: a scenario knows what it measured, not which commit it runs on.
 func recordResult(t *testing.T, r perfResult) {
 	t.Helper()
-	if r.Scenario == "" {
-		t.Fatalf("a result row with no scenario name: nothing downstream can key on it")
-	}
+	require.Falsef(t, r.Scenario == "", "a result row with no scenario name: nothing downstream can key on it")
 	if r.RecordedAt.IsZero() {
 		r.RecordedAt = time.Now().UTC()
 	}
@@ -92,9 +92,7 @@ func recordResult(t *testing.T, r perfResult) {
 
 	path := resultsPath(t)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatalf("open the results file %s: %v", path, err)
-	}
+	require.Falsef(t, err != nil, "open the results file %s: %v", path, err)
 	defer f.Close()
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		t.Fatalf("append to the results file %s: %v", path, err)

@@ -33,26 +33,14 @@ const sentinelPrefix = "__REDACTED"
 // paths match exactly rather than by key name, since additions here weaken scrubbing.
 type ExemptionSet struct {
 	byFamily map[string]map[FieldPath]bool
-	global   map[FieldPath]bool
 }
 
 // NewExemptionSet builds the set from the resolved config's structural_exempt map, keyed
 // by source family or "*" for all.
 func NewExemptionSet(spec map[string][]string) *ExemptionSet {
-	e := &ExemptionSet{
-		byFamily: map[string]map[FieldPath]bool{},
-		global:   map[FieldPath]bool{},
-	}
+	e := &ExemptionSet{byFamily: map[string]map[FieldPath]bool{}}
 	for family, paths := range spec {
-		if family == "*" {
-			for _, p := range paths {
-				e.global[FieldPath(p)] = true
-			}
-			continue
-		}
-		if e.byFamily[family] == nil {
-			e.byFamily[family] = map[FieldPath]bool{}
-		}
+		e.byFamily[family] = map[FieldPath]bool{}
 		for _, p := range paths {
 			e.byFamily[family][FieldPath(p)] = true
 		}
@@ -64,10 +52,7 @@ func NewExemptionSet(spec map[string][]string) *ExemptionSet {
 // nil-receiver tolerance: New always builds the set, and answering from a nil one would
 // fail open.
 func (e *ExemptionSet) Exempt(family string, field FieldPath) bool {
-	if e.global[field] {
-		return true
-	}
-	return e.byFamily[family][field]
+	return e.byFamily["*"][field] || e.byFamily[family][field]
 }
 
 // prioritizedSpan carries the matcher class alongside the span, so overlapping
@@ -78,10 +63,7 @@ type prioritizedSpan struct {
 	priority int
 }
 
-// resolveSpans merges overlapping spans into one placeholder rather than nesting them.
-// The surviving attribution must be the HIGHEST-CONFIDENCE rule covering the region: the
-// entropy backstop fires on nearly every provider key too, so any other tie-break turns
-// the ledger into "something high-entropy happened".
+// resolveSpans merges overlaps into one placeholder attributed to the highest-confidence rule.
 func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, int, map[string]int) {
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 {
 		return nil, 0, nil

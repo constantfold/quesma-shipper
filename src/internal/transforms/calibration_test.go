@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -25,12 +28,8 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	corpus = append(corpus, benign...)
 	for i, line := range benign {
 		res := scrubJSONL(t, s, "claude-code", line+"\n")
-		if res.RuleHits["generic-entropy"] != 0 {
-			t.Errorf("benign line %d drew an entropy hit:\n in %s\nout %s", i, line, res.Out)
-		}
-		if strings.Contains(string(res.Out), "__REDACTED:") {
-			t.Errorf("benign line %d was redacted by %v:\n in %s\nout %s", i, res.RuleHits, line, res.Out)
-		}
+		assert.Equal(t, 0, res.RuleHits["generic-entropy"])
+		assert.NotContainsf(t, string(res.Out), "__REDACTED:", "benign line %d was redacted by %v:\n in %s\nout %s", i, res.RuleHits, line, res.Out)
 	}
 
 	// --- population 2: git SHAs, budgeted ------------------------------------
@@ -49,9 +48,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 			fired++
 		}
 	}
-	if fired != shaFireWithThisSeed {
-		t.Errorf("%d of %d random SHAs drew entropy hits, calibrated count is %d — the hex threshold moved; re-measure and update this note", fired, shaLines, shaFireWithThisSeed)
-	}
+	assert.Equalf(t, shaFireWithThisSeed, fired, "%d of %d random SHAs drew entropy hits, calibrated count is %d — the hex threshold moved; re-measure and update this note", fired, shaLines, shaFireWithThisSeed)
 
 	// --- population 3: planted secrets, 100%% recall --------------------------
 	planted := []struct {
@@ -79,9 +76,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 			line := `{"type":"user","uuid":"p1","toolUseResult":{"stdout":"` + p.text + `"}}`
 			corpus = append(corpus, line)
 			res := scrubJSONL(t, s, "claude-code", line+"\n")
-			if strings.Contains(string(res.Out), secret) {
-				t.Errorf("planted secret survived:\n in %s\nout %s", line, res.Out)
-			}
+			assert.NotContainsf(t, string(res.Out), secret, "planted secret survived:\n in %s\nout %s", line, res.Out)
 			if p.rule != "" && res.RuleHits[p.rule] == 0 {
 				t.Errorf("expected %q to claim the hit, ledger was %v", p.rule, res.RuleHits)
 			}
@@ -92,9 +87,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	// Whole-corpus density is the fleet signal the manifests carry; the ceiling exists to catch a
 	// rule that starts eating content.
 	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if d := res.Density(); d >= 0.05 {
 		t.Errorf("whole-corpus redaction density %.4f crossed the 0.05 alarm — a rule is eating content", d)
 	}

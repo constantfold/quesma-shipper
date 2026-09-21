@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -41,51 +44,33 @@ type scrubVector struct {
 
 func TestConformanceRedaction(t *testing.T) {
 	if *update {
-		if err := os.MkdirAll(filepath.Dir(scrubVectorPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(scrubVectorPath, generateScrubVectors(t), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(scrubVectorPath), 0o755))
+		require.NoError(t, os.WriteFile(scrubVectorPath, generateScrubVectors(t), 0o644))
 		t.Logf("regenerated %s", scrubVectorPath)
 	}
 
 	raw, err := os.ReadFile(scrubVectorPath)
-	if err != nil {
-		t.Fatalf("read vectors: %v", err)
-	}
+	require.NoErrorf(t, err, "read vectors: %v", err)
 	var v scrubVectors
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatal(err)
-	}
-	if v.Sentinel != transforms.Sentinel("{rule_id}") {
-		t.Errorf("sentinel form drifted: vector %q, code %q", v.Sentinel, transforms.Sentinel("{rule_id}"))
-	}
+	require.NoError(t, json.Unmarshal(raw, &v))
+	assert.Equalf(t, transforms.Sentinel("{rule_id}"), v.Sentinel, "sentinel form drifted: vector %q, code %q", v.Sentinel, transforms.Sentinel("{rule_id}"))
 
 	cfg := transforms.DefaultConfig()
 	cfg.Exemptions = v.Exemptions
 	cfg.Username = v.Username
 	s, err := transforms.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			res, err := s.Scrub([]byte(c.Before), transforms.Hint{Family: c.Family, JSONL: c.JSONL})
-			if err != nil {
-				t.Fatalf("engine error: %v", err)
-			}
-			if string(res.Out) != c.After {
-				t.Errorf("output drifted:\n got %q\nwant %q", res.Out, c.After)
-			}
+			require.NoErrorf(t, err, "engine error: %v", err)
+			assert.Equalf(t, c.After, string(res.Out), "output drifted:\n got %q\nwant %q", res.Out, c.After)
 			if c.ScanMode != "" && res.ScanMode != c.ScanMode {
 				t.Errorf("scan_mode: got %q want %q", res.ScanMode, c.ScanMode)
 			}
 			for rule, want := range c.RuleHits {
-				if res.RuleHits[rule] != want {
-					t.Errorf("rule %q: %d hits, want %d (all: %v)", rule, res.RuleHits[rule], want, res.RuleHits)
-				}
+				assert.Equal(t, res.RuleHits[rule], want)
 			}
 		})
 	}
@@ -94,18 +79,12 @@ func TestConformanceRedaction(t *testing.T) {
 // The vector file is committed, so it must not become a place secrets live.
 func TestConformanceVectorsCarryNoSecrets(t *testing.T) {
 	raw, err := os.ReadFile(scrubVectorPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var v scrubVectors
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &v))
 	for _, c := range v.Vectors {
 		for _, planted := range plantedValues() {
-			if contains(c.After, planted) {
-				t.Errorf("vector %q records a secret in its AFTER value: %q", c.Name, planted)
-			}
+			assert.Truef(t, !contains(c.After, planted), "vector %q records a secret in its AFTER value: %q", c.Name, planted)
 		}
 	}
 }
@@ -143,9 +122,7 @@ func generateScrubVectors(t *testing.T) []byte {
 	cfg.Exemptions = exemptions()
 	cfg.Username = "jane"
 	s, err := transforms.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	cases := []struct {
 		name   string
@@ -293,9 +270,7 @@ func generateScrubVectors(t *testing.T) []byte {
 
 	for _, c := range cases {
 		res, err := s.Scrub([]byte(c.before), transforms.Hint{Family: c.family, JSONL: c.jsonl})
-		if err != nil {
-			t.Fatalf("%s: engine error: %v", c.name, err)
-		}
+		require.NoError(t, err)
 		out.Vectors = append(out.Vectors, scrubVector{
 			Name:     c.name,
 			Family:   c.family,
@@ -309,8 +284,6 @@ func generateScrubVectors(t *testing.T) []byte {
 	}
 
 	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return append(b, '\n')
 }

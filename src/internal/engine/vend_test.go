@@ -1,19 +1,22 @@
 package engine_test
 
-// The upload path: bounded authorization groups, unconditional PUTs, per-object commits. Every
-// test here runs the real loop against fakePort, which stands in for the whole network leg.
-
 import (
 	"context"
 	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
 )
+
+// The upload path: bounded authorization groups, unconditional PUTs, per-object commits. Every
+// test here runs the real loop against fakePort, which stands in for the whole network leg.
 
 // vendRun runs the loop with the port wired and returns the report and the run's error.
 func vendRun(f *fixture, port *fakePort, adjust func(*engine.Options)) (engine.Report, error) {
@@ -34,13 +37,9 @@ func TestTheUploadPathShipsOneGroupForASmallRun(t *testing.T) {
 	port := newPort()
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 4 })
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
 
-	if rep.Shipped != 5 {
-		t.Errorf("shipped %d of 5: %+v", rep.Shipped, rep)
-	}
+	assert.Equalf(t, 5, rep.Shipped, "shipped %d of 5: %+v", rep.Shipped, rep)
 	if got := port.sizes(); len(got) != 1 || got[0] != 5 {
 		t.Errorf("groups %v; five files fit in one authorization", got)
 	}
@@ -61,27 +60,17 @@ func TestAnOversizedRunSplitsIntoBoundedGroups(t *testing.T) {
 	port := newPort()
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 8 })
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
 
-	if rep.Shipped != 40 {
-		t.Errorf("shipped %d of 40: %+v", rep.Shipped, rep)
-	}
+	assert.Equalf(t, 40, rep.Shipped, "shipped %d of 40: %+v", rep.Shipped, rep)
 	sizes := port.sizes()
-	if len(sizes) < 2 {
-		t.Fatalf("40 files were authorized in %d group(s); the bound is 32", len(sizes))
-	}
+	require.Truef(t, len(sizes) >= 2, "40 files were authorized in %d group(s); the bound is 32", len(sizes))
 	total := 0
 	for _, n := range sizes {
-		if n > 32 {
-			t.Errorf("a group carried %d objects, over the 32 bound; groups were %v", n, sizes)
-		}
+		assert.Truef(t, n <= 32, "a group carried %d objects, over the 32 bound; groups were %v", n, sizes)
 		total += n
 	}
-	if total != 40 {
-		t.Errorf("groups carried %d objects for 40 files: %v", total, sizes)
-	}
+	assert.Equalf(t, 40, total, "groups carried %d objects for 40 files: %v", total, sizes)
 	port.storedOnce(t)
 }
 
@@ -104,25 +93,15 @@ func TestAFailedObjectDoesNotDiscardItsSiblings(t *testing.T) {
 	}
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 4 })
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if rep.Shipped != 4 || rep.Failed != 1 {
-		t.Errorf("want 4 shipped and 1 failed, got %d and %d", rep.Shipped, rep.Failed)
-	}
-	if rep.Parked != 0 {
-		t.Errorf("%d objects parked; an unconditional PUT has no precondition to park on", rep.Parked)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
+	assert.Truef(t, rep.Shipped == 4 && rep.Failed == 1, "want 4 shipped and 1 failed, got %d and %d", rep.Shipped, rep.Failed)
+	assert.Equalf(t, 0, rep.Parked, "%d objects parked; an unconditional PUT has no precondition to park on", rep.Parked)
 
 	// The failure persisted nothing, so the second run re-prepares exactly that one file.
 	healthy := newPort()
 	rep2, err := vendRun(f, healthy, nil)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if rep2.Shipped != 1 || rep2.Unchanged != 4 {
-		t.Errorf("second run shipped %d and left %d unchanged, want 1 and 4", rep2.Shipped, rep2.Unchanged)
-	}
+	require.NoErrorf(t, err, "second run: %v", err)
+	assert.Truef(t, rep2.Shipped == 1 && rep2.Unchanged == 4, "second run shipped %d and left %d unchanged, want 1 and 4", rep2.Shipped, rep2.Unchanged)
 	if got := healthy.groups; len(got) != 1 || len(got[0]) != 1 || got[0][0] != failed {
 		t.Errorf("second run authorized %v; only the failed object had anything to send", got)
 	}
@@ -145,18 +124,10 @@ func TestARefusedAuthorizationStopsTheRun(t *testing.T) {
 		o.Heartbeat = func(context.Context, engine.Report) error { beat++; return nil }
 	})
 
-	if !errors.Is(err, formats.ErrCredentialsRefused) {
-		t.Fatalf("want a refusal from the run, got %v", err)
-	}
-	if rep.Failed != 1 {
-		t.Errorf("%d refusals counted; duplicates are the same fact about the same install", rep.Failed)
-	}
-	if beat != 0 {
-		t.Errorf("the heartbeat ran %d times after a refusal", beat)
-	}
-	if rep.Shipped != 0 {
-		t.Errorf("%d objects shipped against a refused install", rep.Shipped)
-	}
+	require.ErrorIsf(t, err, formats.ErrCredentialsRefused, "want a refusal from the run, got %v", err)
+	assert.Equalf(t, 1, rep.Failed, "%d refusals counted; duplicates are the same fact about the same install", rep.Failed)
+	assert.Equalf(t, 0, beat, "the heartbeat ran %d times after a refusal", beat)
+	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped against a refused install", rep.Shipped)
 }
 
 // An unavailable control plane is NOT a kill: nothing new commits, and the next run ships it.
@@ -172,27 +143,15 @@ func TestAnUnavailableControlPlaneStopsUploadsWithoutKillingTheInstall(t *testin
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 4 })
 
-	if !errors.Is(err, engine.ErrUploadUnavailable) {
-		t.Fatalf("want an unavailable-authorization error, got %v", err)
-	}
-	if errors.Is(err, formats.ErrCredentialsRefused) {
-		t.Fatal("an unavailable control plane wrapped ErrCredentialsRefused; that kills the install")
-	}
-	if rep.Shipped != 0 {
-		t.Errorf("%d objects shipped while authorization was unavailable", rep.Shipped)
-	}
-	if rep.Failed != 1 {
-		t.Errorf("%d failures counted; one refused group is one fact about the control plane", rep.Failed)
-	}
+	require.ErrorIsf(t, err, engine.ErrUploadUnavailable, "want an unavailable-authorization error, got %v", err)
+	require.True(t, !errors.Is(err, formats.ErrCredentialsRefused), "an unavailable control plane wrapped ErrCredentialsRefused; that kills the install")
+	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped while authorization was unavailable", rep.Shipped)
+	assert.Equalf(t, 1, rep.Failed, "%d failures counted; one refused group is one fact about the control plane", rep.Failed)
 
 	healthy := newPort()
 	rep2, err := vendRun(f, healthy, func(o *engine.Options) { o.Workers = 4 })
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if rep2.Shipped != 12 {
-		t.Errorf("second run shipped %d of the 12 held back: %+v", rep2.Shipped, rep2)
-	}
+	require.NoErrorf(t, err, "second run: %v", err)
+	assert.Equalf(t, 12, rep2.Shipped, "second run shipped %d of the 12 held back: %+v", rep2.Shipped, rep2)
 	healthy.storedOnce(t)
 }
 
@@ -210,18 +169,10 @@ func TestAnUnavailableControlPlaneCountsOnceAcrossManyGroups(t *testing.T) {
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 8 })
 
-	if !errors.Is(err, engine.ErrUploadUnavailable) {
-		t.Fatalf("want an unavailable-authorization error, got %v", err)
-	}
-	if rep.Failed != 1 {
-		t.Errorf("%d failures counted over 40 files; one halted run is one fact", rep.Failed)
-	}
-	if rep.Shipped != 0 {
-		t.Errorf("%d objects shipped while authorization was unavailable", rep.Shipped)
-	}
-	if f.store.Len() != 0 {
-		t.Errorf("%d fingerprints committed by a run that sent nothing", f.store.Len())
-	}
+	require.ErrorIsf(t, err, engine.ErrUploadUnavailable, "want an unavailable-authorization error, got %v", err)
+	assert.Equalf(t, 1, rep.Failed, "%d failures counted over 40 files; one halted run is one fact", rep.Failed)
+	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped while authorization was unavailable", rep.Shipped)
+	assert.Equalf(t, 0, f.store.Len(), "%d fingerprints committed by a run that sent nothing", f.store.Len())
 }
 
 // An expired ticket earns exactly one more authorization, and the object ships on it.
@@ -237,15 +188,9 @@ func TestAnExpiredTicketIsReauthorizedOnce(t *testing.T) {
 	}
 
 	rep, err := vendRun(f, port, nil)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if rep.Shipped != 1 {
-		t.Errorf("the reauthorized object did not ship: %+v", rep)
-	}
-	if got := port.sizes(); len(got) != 2 {
-		t.Errorf("%d authorizations for one expiry, want 2: %v", len(got), got)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
+	assert.Equalf(t, 1, rep.Shipped, "the reauthorized object did not ship: %+v", rep)
+	assert.Len(t, port.sizes(), 2)
 	port.storedOnce(t)
 }
 
@@ -259,16 +204,9 @@ func TestReauthorizationDoesNotLoop(t *testing.T) {
 	}
 
 	rep, err := vendRun(f, port, nil)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if rep.Failed != 1 || rep.Shipped != 0 {
-		t.Errorf("want the object failed and nothing shipped, got %d failed and %d shipped",
-			rep.Failed, rep.Shipped)
-	}
-	if got := len(port.sizes()); got != 2 {
-		t.Errorf("%d authorizations for a permanently expired ticket, want exactly 2", got)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
+	assert.Truef(t, rep.Failed == 1 && rep.Shipped == 0, "want the object failed and nothing shipped, got %d failed and %d shipped", rep.Failed, rep.Shipped)
+	assert.Equal(t, 2, len(port.sizes()))
 	if _, ok := f.store.Get(engine.Key{SourceID: "claude-code-transcripts",
 		NativePath: f.home + "/.claude/projects/p/e1.jsonl"}); ok {
 		t.Error("a ticket that never uploaded committed a fingerprint")
@@ -284,18 +222,10 @@ func TestPreviewAuthorizesNothing(t *testing.T) {
 	port := newPort()
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.DryRun = true })
-	if err != nil {
-		t.Fatalf("preview: %v", err)
-	}
-	if rep.Shipped != 3 {
-		t.Errorf("preview reported %d would-ship files of 3", rep.Shipped)
-	}
-	if got := len(port.sizes()); got != 0 {
-		t.Errorf("preview made %d authorization calls", got)
-	}
-	if f.store.Len() != 0 {
-		t.Errorf("preview committed %d fingerprints", f.store.Len())
-	}
+	require.NoErrorf(t, err, "preview: %v", err)
+	assert.Equalf(t, 3, rep.Shipped, "preview reported %d would-ship files of 3", rep.Shipped)
+	assert.Equal(t, 0, len(port.sizes()))
+	assert.Equalf(t, 0, f.store.Len(), "preview committed %d fingerprints", f.store.Len())
 }
 
 // What the race detector is here for: overlapping compute and groups, one PUT and one commit per
@@ -314,28 +244,18 @@ func TestTheUploadPathShipsEachKeyExactlyOnceUnderRace(t *testing.T) {
 		o.Workers = 8
 		o.UploadWorkers = 3
 	})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if rep.Shipped != files {
-		t.Fatalf("shipped %d of %d: %+v", rep.Shipped, files, rep)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
+	require.Equalf(t, files, rep.Shipped, "shipped %d of %d: %+v", rep.Shipped, files, rep)
 	port.storedOnce(t)
 
 	port.mu.Lock()
 	distinct := len(port.objects)
 	port.mu.Unlock()
-	if distinct != files {
-		t.Errorf("%d distinct keys stored for %d files", distinct, files)
-	}
+	assert.Equalf(t, files, distinct, "%d distinct keys stored for %d files", distinct, files)
 	for _, n := range port.sizes() {
-		if n > 32 {
-			t.Errorf("a group carried %d objects, over the 32 bound", n)
-		}
+		assert.Truef(t, n <= 32, "a group carried %d objects, over the 32 bound", n)
 	}
-	if f.store.Len() != files {
-		t.Errorf("%d fingerprints committed for %d shipped files", f.store.Len(), files)
-	}
+	assert.Equalf(t, files, f.store.Len(), "%d fingerprints committed for %d shipped files", f.store.Len(), files)
 }
 
 // Derived objects take the upload path too, after every raw unit of the source has shipped.
@@ -347,23 +267,15 @@ func TestDerivedObjectsShipThroughTheUploadPath(t *testing.T) {
 	o := enrichOpts(t, f, db, true)
 	o.Upload = port
 	rep, err := engine.Run(context.Background(), f.store, o)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
+	require.NoErrorf(t, err, "run: %v", err)
 
-	if rep.Shipped != 2 {
-		t.Fatalf("expected a raw + derived pair, shipped %d: %+v", rep.Shipped, rep.Sources)
-	}
+	require.Equalf(t, 2, rep.Shipped, "expected a raw + derived pair, shipped %d: %+v", rep.Shipped, rep.Sources)
 	port.storedOnce(t)
 
 	port.mu.Lock()
 	defer port.mu.Unlock()
-	if len(port.objects) != 2 {
-		t.Errorf("%d distinct keys authorized for a raw + derived pair", len(port.objects))
-	}
-	if len(port.groups) != 2 {
-		t.Errorf("groups %v; the raw pass and the enricher each authorize their own", port.groups)
-	}
+	assert.Lenf(t, port.objects, 2, "%d distinct keys authorized for a raw + derived pair", len(port.objects))
+	assert.Lenf(t, port.groups, 2, "groups %v; the raw pass and the enricher each authorize their own", port.groups)
 }
 
 // An unauthorized enricher group reports once and commits nothing, while raw objects keep their
@@ -383,28 +295,18 @@ func TestAnUnavailableControlPlaneStopsTheDerivedGroup(t *testing.T) {
 	o := enrichOpts(t, f, db, true)
 	o.Upload = port
 	rep, err := engine.Run(context.Background(), f.store, o)
-	if !errors.Is(err, engine.ErrUploadUnavailable) {
-		t.Fatalf("the derived halt did not reach the caller: %v", err)
-	}
-	if errors.Is(err, formats.ErrCredentialsRefused) {
-		t.Error("an unavailable control plane killed the install from the derived path")
-	}
-	if rep.Shipped != 1 {
-		t.Errorf("shipped %d; the raw object ships and the derived one does not", rep.Shipped)
-	}
+	require.ErrorIsf(t, err, engine.ErrUploadUnavailable, "the derived halt did not reach the caller: %v", err)
+	assert.True(t, !errors.Is(err, formats.ErrCredentialsRefused), "an unavailable control plane killed the install from the derived path")
+	assert.Equalf(t, 1, rep.Shipped, "shipped %d; the raw object ships and the derived one does not", rep.Shipped)
 	derived := 0
 	for _, fo := range rep.Sources[0].Files {
 		if !fo.Derived {
 			continue
 		}
 		derived++
-		if fo.Decision != formats.DecisionFailed {
-			t.Errorf("the derived object decided %q while authorization was unavailable", fo.Decision)
-		}
+		assert.Equalf(t, formats.DecisionFailed, fo.Decision, "the derived object decided %q while authorization was unavailable", fo.Decision)
 	}
-	if derived != 1 {
-		t.Errorf("%d derived outcomes reported, want 1", derived)
-	}
+	assert.Equalf(t, 1, derived, "%d derived outcomes reported, want 1", derived)
 }
 
 // The halt latch belongs to the source, not to one enricher: a second enricher must not ship
@@ -431,9 +333,7 @@ func TestARefusedDerivedGroupStopsTheRemainingEnrichers(t *testing.T) {
 	if _, err := engine.Run(context.Background(), f.store, o); !errors.Is(err, formats.ErrCredentialsRefused) {
 		t.Fatalf("a refused derived group did not stop the run: %v", err)
 	}
-	if second.calls != 0 {
-		t.Errorf("the second enricher ran %d time(s) after the first was refused", second.calls)
-	}
+	assert.Equalf(t, 0, second.calls, "the second enricher ran %d time(s) after the first was refused", second.calls)
 }
 
 // countingEnricher derives nothing and records whether it was asked to.

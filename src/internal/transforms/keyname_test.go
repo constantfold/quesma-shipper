@@ -1,6 +1,11 @@
 package transforms
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 // The key-name rule is the only backstop for a credential with no recognisable shape: letters
 // and digits, in a field whose name says what it is.
@@ -18,9 +23,7 @@ func TestFieldNamesThatSayTheirValueIsACredential(t *testing.T) {
 		// These matched before and must keep matching.
 		"access_token", "client_secret", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "MY_TOKEN",
 	} {
-		if !m.MatchesKeyName(key) {
-			t.Errorf("%q does not name a secret, and it does", key)
-		}
+		assert.Truef(t, m.MatchesKeyName(key), "%q does not name a secret, and it does", key)
 	}
 }
 
@@ -44,9 +47,7 @@ func TestFieldNamesThatOnlyLookLikeCredentials(t *testing.T) {
 		// A setting about secrets is not a secret.
 		"secret_count", "secret_scanning_enabled",
 	} {
-		if m.MatchesKeyName(key) {
-			t.Errorf("%q is not a credential and would be redacted", key)
-		}
+		assert.Truef(t, !m.MatchesKeyName(key), "%q is not a credential and would be redacted", key)
 	}
 }
 
@@ -83,16 +84,10 @@ func TestAConfiguredNameIsHonoured(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SecretKeyNames = append(cfg.SecretKeyNames, "ACME_DEPLOY_SIG")
 	s, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	res, err := s.Scrub([]byte(`{"ACME_DEPLOY_SIG":"zx81-plain-value"}`+"\n"),
 		Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(res.Out) == `{"ACME_DEPLOY_SIG":"zx81-plain-value"}`+"\n" {
-		t.Errorf("a configured secret key name did not redact:\n%s", res.Out)
-	}
+	require.NoError(t, err)
+	assert.NotEqualf(t, `{"ACME_DEPLOY_SIG":"zx81-plain-value"}`+"\n", string(res.Out), "a configured secret key name did not redact:\n%s", res.Out)
 }

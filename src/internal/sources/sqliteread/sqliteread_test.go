@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	_ "modernc.org/sqlite"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
@@ -22,9 +25,7 @@ func newStore(t *testing.T, rows map[string]string) string {
 	path := filepath.Join(dir, "state.vscdb")
 
 	db, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
 	for _, stmt := range []string{
@@ -45,9 +46,7 @@ func newStore(t *testing.T, rows map[string]string) string {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Close())
 	return path
 }
 
@@ -63,9 +62,7 @@ func read(t *testing.T, path string, opts ...func(*sqliteread.Options)) sqlitere
 		f(&o)
 	}
 	res, err := sqliteread.Read(o)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	require.NoErrorf(t, err, "read: %v", err)
 	return res
 }
 
@@ -76,12 +73,8 @@ func TestTheFastPathReadsInPlace(t *testing.T) {
 	})
 
 	res := read(t, path)
-	if res.Method != sqliteread.ReadInPlace {
-		t.Errorf("method = %q, want the in-place fast path", res.Method)
-	}
-	if len(res.Rows) != 2 {
-		t.Errorf("read %d rows, want 2", len(res.Rows))
-	}
+	assert.Equalf(t, sqliteread.ReadInPlace, res.Method, "method = %q, want the in-place fast path", res.Method)
+	assert.Lenf(t, res.Rows, 2, "read %d rows, want 2", len(res.Rows))
 }
 
 func TestTheDeclaredScopeIsTheOnlyThingRead(t *testing.T) {
@@ -95,13 +88,9 @@ func TestTheDeclaredScopeIsTheOnlyThingRead(t *testing.T) {
 	res := read(t, path)
 	// Scope is declared at registration, not discovered: returning the whole table would make the declaration decorative.
 	for _, r := range res.Rows {
-		if !strings.HasPrefix(r.Key, "composerData:") && !strings.HasPrefix(r.Key, "bubbleId:") {
-			t.Errorf("read outside the declared keyspaces: %s", r.Key)
-		}
+		assert.Truef(t, strings.HasPrefix(r.Key, "composerData:") || strings.HasPrefix(r.Key, "bubbleId:"), "read outside the declared keyspaces: %s", r.Key)
 	}
-	if len(res.Rows) != 2 {
-		t.Errorf("read %d rows, want 2", len(res.Rows))
-	}
+	assert.Lenf(t, res.Rows, 2, "read %d rows, want 2", len(res.Rows))
 }
 
 // The exact-key exceptions, stated in both directions: the four named keys pass, and a token key never does.
@@ -132,13 +121,9 @@ func TestTheAuthNamespaceExceptionsAreExactKeysOnly(t *testing.T) {
 		}
 	}
 	for k, v := range got {
-		if strings.Contains(v, token) {
-			t.Errorf("a token survived under %s", k)
-		}
+		assert.NotContainsf(t, v, token, "a token survived under %s", k)
 	}
-	if len(got) != 4 {
-		t.Errorf("want exactly the 4 allowed keys, got %d: %v", len(got), got)
-	}
+	assert.Lenf(t, got, 4, "want exactly the 4 allowed keys, got %d: %v", len(got), got)
 }
 
 // THE FILTER TEST. Auth material lives in the same database as the trajectories.
@@ -164,22 +149,12 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	})
 
 	for _, r := range res.Rows {
-		if strings.Contains(strings.ToLower(r.Key), "cursorauth") {
-			t.Errorf("an auth key survived the filter: %s", r.Key)
-		}
-		if strings.Contains(string(r.Value), token) {
-			t.Errorf("the token survived in %s: %s", r.Key, r.Value)
-		}
-		if strings.Contains(string(r.Value), "EncryptionKey") {
-			t.Errorf("an encryption-key field survived in %s", r.Key)
-		}
+		assert.NotContainsf(t, strings.ToLower(r.Key), "cursorauth", "an auth key survived the filter: %s", r.Key)
+		assert.NotContainsf(t, string(r.Value), token, "the token survived in %s: %s", r.Key, r.Value)
+		assert.NotContainsf(t, string(r.Value), "EncryptionKey", "an encryption-key field survived in %s", r.Key)
 	}
-	if res.DeniedKeys == 0 {
-		t.Error("no keys were reported denied, so the filter's operation is invisible")
-	}
-	if res.StrippedFields == 0 {
-		t.Error("no fields were reported stripped")
-	}
+	assert.NotEqual(t, 0, res.DeniedKeys, "no keys were reported denied, so the filter's operation is invisible")
+	assert.NotEqual(t, 0, res.StrippedFields, "no fields were reported stripped")
 
 	// The rest of the row has to survive: dropping the whole composerData row would take the conversation with it.
 	found := false
@@ -187,20 +162,12 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 		if r.Key == "composerData:c1" {
 			found = true
 			var m map[string]any
-			if err := json.Unmarshal(r.Value, &m); err != nil {
-				t.Fatalf("the stripped row is no longer JSON: %v", err)
-			}
-			if m["composerId"] != "c1" {
-				t.Error("stripping removed the fields the join needs")
-			}
-			if m["fullConversationHeadersOnly"] == nil {
-				t.Error("stripping removed the bubble ordering")
-			}
+			require.NoError(t, json.Unmarshal(r.Value, &m))
+			assert.True(t, m["composerId"] == "c1", "stripping removed the fields the join needs")
+			assert.True(t, m["fullConversationHeadersOnly"] != nil, "stripping removed the bubble ordering")
 		}
 	}
-	if !found {
-		t.Error("the composerData row was dropped entirely")
-	}
+	assert.True(t, found, "the composerData row was dropped entirely")
 }
 
 func TestNestedEncryptionKeysAreStrippedAtAnyDepth(t *testing.T) {
@@ -211,9 +178,7 @@ func TestNestedEncryptionKeysAreStrippedAtAnyDepth(t *testing.T) {
 	res := read(t, path)
 	for _, r := range res.Rows {
 		// Nested inside arrays inside objects, as the real fields are: a shallow filter would pass this.
-		if strings.Contains(string(r.Value), secret) {
-			t.Errorf("a nested encryption key survived: %s", r.Value)
-		}
+		assert.NotContainsf(t, string(r.Value), secret, "a nested encryption key survived: %s", r.Value)
 	}
 }
 
@@ -223,13 +188,8 @@ func TestRowsThatNeedNoStrippingAreReturnedVerbatim(t *testing.T) {
 	path := newStore(t, map[string]string{"composerData:c1": value})
 
 	res := read(t, path)
-	if len(res.Rows) != 1 {
-		t.Fatalf("read %d rows", len(res.Rows))
-	}
-	if string(res.Rows[0].Value) != value {
-		t.Errorf("a row that needed no stripping was re-encoded:\n got %s\nwant %s",
-			res.Rows[0].Value, value)
-	}
+	require.Lenf(t, res.Rows, 1, "read %d rows", len(res.Rows))
+	assert.Equalf(t, value, string(res.Rows[0].Value), "a row that needed no stripping was re-encoded:\n got %s\nwant %s", res.Rows[0].Value, value)
 }
 
 func TestRowsComeBackInAStableOrder(t *testing.T) {
@@ -243,13 +203,9 @@ func TestRowsComeBackInAStableOrder(t *testing.T) {
 	second := read(t, path)
 
 	// Determinism starts here: a varying read order would vary the derived output bytes and the output hash with them.
-	if len(first.Rows) != len(second.Rows) {
-		t.Fatalf("row counts differ: %d vs %d", len(first.Rows), len(second.Rows))
-	}
+	require.Lenf(t, first.Rows, len(second.Rows), "row counts differ: %d vs %d", len(first.Rows), len(second.Rows))
 	for i := range first.Rows {
-		if first.Rows[i].Key != second.Rows[i].Key {
-			t.Fatalf("row %d differs between reads: %s vs %s", i, first.Rows[i].Key, second.Rows[i].Key)
-		}
+		require.Equalf(t, second.Rows[i].Key, first.Rows[i].Key, "row %d differs between reads: %s vs %s", i, first.Rows[i].Key, second.Rows[i].Key)
 	}
 }
 
@@ -265,9 +221,7 @@ func TestTheSnapshotReadProducesTheSameRowsAndLeavesNoFilesBehind(t *testing.T) 
 	scratch := filepath.Join(t.TempDir(), "scratch")
 
 	inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
-	if inPlace.Method != sqliteread.ReadInPlace {
-		t.Fatalf("expected the fast path first, got %q", inPlace.Method)
-	}
+	require.Equalf(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first, got %q", inPlace.Method)
 
 	// Force a fallback: whichever method answers, the ROWS must be identical.
 	if err := os.Chmod(path, 0o000); err != nil {
@@ -282,12 +236,8 @@ func TestTheSnapshotReadProducesTheSameRowsAndLeavesNoFilesBehind(t *testing.T) 
 		KeyPrefixes: []string{"composerData:", "bubbleId:"},
 	})
 	// Unreadable by every method must be reported as a failure, not as an empty successful read.
-	if err == nil {
-		t.Fatal("an unreadable database produced a successful read")
-	}
-	if !strings.Contains(err.Error(), "every read method failed") {
-		t.Errorf("the error does not name every method: %v", err)
-	}
+	require.Error(t, err, "an unreadable database produced a successful read")
+	assert.Containsf(t, err.Error(), "every read method failed", "the error does not name every method: %v", err)
 }
 
 // THE NO-FILES-BESIDE-THE-SOURCE GATE: the compensating control for putting this package on the write-path lint's allow-list.
@@ -314,13 +264,9 @@ func TestAReadNeverWritesBesideTheSource(t *testing.T) {
 	}
 
 	after := listDir(t, dir)
-	if len(after) != len(before) {
-		t.Errorf("a read changed the source directory:\n before %v\n after  %v", before, after)
-	}
+	assert.Lenf(t, after, len(before), "a read changed the source directory:\n before %v\n after  %v", before, after)
 	for i := range after {
-		if after[i] != before[i] {
-			t.Errorf("a read created %s beside the source", after[i])
-		}
+		assert.Equalf(t, before[i], after[i], "a read created %s beside the source", after[i])
 	}
 }
 
@@ -330,13 +276,9 @@ func TestTheSnapshotIsDeletedAfterUse(t *testing.T) {
 	scratch := filepath.Join(t.TempDir(), "scratch")
 
 	// Pre-create what a crash mid-VACUUM leaves: resuming into it would query a corrupt partial database.
-	if err := os.MkdirAll(scratch, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(scratch, 0o700))
 	leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
-	if err := os.WriteFile(leftover, []byte("corrupt partial"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
 
 	if _, err := sqliteread.Read(sqliteread.Options{
 		Path:        path,
@@ -349,9 +291,7 @@ func TestTheSnapshotIsDeletedAfterUse(t *testing.T) {
 	// The fast path answered, so the leftover was untouched, but no snapshot may have been added either.
 	entries := listDir(t, scratch)
 	for _, e := range entries {
-		if e != "snapshot-state.vscdb.sqlite" {
-			t.Errorf("the scratch directory gained %s", e)
-		}
+		assert.Equalf(t, "snapshot-state.vscdb.sqlite", e, "the scratch directory gained %s", e)
 	}
 }
 
@@ -360,16 +300,12 @@ func TestAColdCopyKeepsSidecarBasenames(t *testing.T) {
 	src := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
 	// Give it a WAL and an SHM, as a live database has.
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := os.WriteFile(src+suffix, []byte("sidecar"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(src+suffix, []byte("sidecar"), 0o600))
 	}
 
 	dst := t.TempDir()
 	copied, err := sqliteread.CopyCold(src, dst)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// A copy that omits or RENAMES the -wal opens without the WAL's contents, since SQLite finds the sidecar by basename.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -378,9 +314,7 @@ func TestAColdCopyKeepsSidecarBasenames(t *testing.T) {
 			t.Errorf("%s did not land beside the copy: %v", filepath.Base(want), err)
 		}
 	}
-	if filepath.Base(copied) != filepath.Base(src) {
-		t.Errorf("the copy was renamed: %s vs %s", filepath.Base(copied), filepath.Base(src))
-	}
+	assert.Equalf(t, filepath.Base(src), filepath.Base(copied), "the copy was renamed: %s vs %s", filepath.Base(copied), filepath.Base(src))
 }
 
 func TestAColdCopyRefusesToOverwriteAnExistingTarget(t *testing.T) {
@@ -401,9 +335,7 @@ func TestALiveDatabaseIsNotCopiedRaw(t *testing.T) {
 		t.Skip("no POSIX modes")
 	}
 	path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
 	// The raw copy is cold-only and must refuse here: a raw copy of a database being written is not consistent.
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Skipf("cannot chmod: %v", err)
@@ -417,12 +349,8 @@ func TestALiveDatabaseIsNotCopiedRaw(t *testing.T) {
 		KeyPrefixes: []string{"composerData:"},
 		Now:         func() time.Time { return time.Now() },
 	})
-	if err == nil {
-		t.Fatal("a live database was read by raw copy")
-	}
-	if !strings.Contains(err.Error(), "not cold enough") {
-		t.Errorf("the refusal does not name coldness: %v", err)
-	}
+	require.Error(t, err, "a live database was read by raw copy")
+	assert.Containsf(t, err.Error(), "not cold enough", "the refusal does not name coldness: %v", err)
 }
 
 func TestAnUndeclaredTableIsRefused(t *testing.T) {
@@ -432,9 +360,7 @@ func TestAnUndeclaredTableIsRefused(t *testing.T) {
 		ScratchDir: t.TempDir(),
 	})
 	// Scope is declared: a read with no table is a programming fault, not something to guess at.
-	if err == nil {
-		t.Fatal("a read with no declared table was accepted")
-	}
+	require.Error(t, err, "a read with no declared table was accepted")
 }
 
 func TestALikeWildcardInAPrefixMatchesLiterally(t *testing.T) {
@@ -446,17 +372,13 @@ func TestALikeWildcardInAPrefixMatchesLiterally(t *testing.T) {
 		// A prefix containing % must not sweep in every key: declared scope has to mean what it says.
 		o.KeyPrefixes = []string{"%"}
 	})
-	if len(res.Rows) != 0 {
-		t.Errorf("a %% prefix matched %d rows; wildcards in a declared prefix must be literal", len(res.Rows))
-	}
+	assert.Lenf(t, res.Rows, 0, "a %% prefix matched %d rows; wildcards in a declared prefix must be literal", len(res.Rows))
 }
 
 func listDir(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, e.Name())
@@ -473,9 +395,7 @@ func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
 	})
 	// Old enough for the cold copy to accept it.
 	old := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Chtimes(path, old, old))
 
 	methods := []sqliteread.ReadMethod{
 		sqliteread.ReadInPlace,
@@ -492,27 +412,16 @@ func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
 			KeyPrefixes: []string{"composerData:", "bubbleId:"},
 			StartAt:     want,
 		})
-		if err != nil {
-			t.Fatalf("method %s: %v", want, err)
-		}
-		if res.Method != want {
-			t.Fatalf("asked for method %s, got %s", want, res.Method)
-		}
+		require.NoErrorf(t, err, "method %s: %v", want, err)
+		require.Equalf(t, want, res.Method, "asked for method %s, got %s", want, res.Method)
 		if reference == nil {
 			reference = res.Rows
 			continue
 		}
-		if len(res.Rows) != len(reference) {
-			t.Fatalf("method %s returned %d rows, method %s returned %d",
-				want, len(res.Rows), methods[0], len(reference))
-		}
+		require.Len(t, res.Rows, len(reference))
 		for i := range res.Rows {
-			if res.Rows[i].Key != reference[i].Key {
-				t.Errorf("method %s row %d key = %s, want %s", want, i, res.Rows[i].Key, reference[i].Key)
-			}
-			if string(res.Rows[i].Value) != string(reference[i].Value) {
-				t.Errorf("method %s row %s value differs from the in-place read", want, res.Rows[i].Key)
-			}
+			assert.Equalf(t, reference[i].Key, res.Rows[i].Key, "method %s row %d key = %s, want %s", want, i, res.Rows[i].Key, reference[i].Key)
+			assert.Equal(t, string(res.Rows[i].Value), string(reference[i].Value))
 		}
 	}
 }
@@ -528,29 +437,19 @@ func TestTheSnapshotReadLeavesNothingInTheScratchDirectory(t *testing.T) {
 		KeyPrefixes: []string{"composerData:"},
 		StartAt:     sqliteread.ReadSnapshot,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Method != sqliteread.ReadSnapshot {
-		t.Fatalf("method = %s", res.Method)
-	}
+	require.NoError(t, err)
+	require.Equalf(t, sqliteread.ReadSnapshot, res.Method, "method = %s", res.Method)
 	// A snapshot left behind is a copy of an agent's database accumulating in the state directory.
-	if left := listDir(t, scratch); len(left) != 0 {
-		t.Errorf("the scratch directory still holds %v", left)
-	}
+	assert.Len(t, listDir(t, scratch), 0)
 }
 
 func TestALeftoverSnapshotIsDeletedRatherThanResumedInto(t *testing.T) {
 	path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
 	scratch := filepath.Join(t.TempDir(), "scratch")
-	if err := os.MkdirAll(scratch, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(scratch, 0o700))
 	// What a crash mid-VACUUM leaves: a file with the snapshot's name that is not a valid database.
 	leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
-	if err := os.WriteFile(leftover, []byte("corrupt partial"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
 
 	res, err := sqliteread.Read(sqliteread.Options{
 		Path:        path,
@@ -559,10 +458,6 @@ func TestALeftoverSnapshotIsDeletedRatherThanResumedInto(t *testing.T) {
 		KeyPrefixes: []string{"composerData:"},
 		StartAt:     sqliteread.ReadSnapshot,
 	})
-	if err != nil {
-		t.Fatalf("a leftover snapshot broke the read instead of being replaced: %v", err)
-	}
-	if len(res.Rows) != 1 {
-		t.Errorf("read %d rows from the fresh snapshot, want 1", len(res.Rows))
-	}
+	require.NoErrorf(t, err, "a leftover snapshot broke the read instead of being replaced: %v", err)
+	assert.Lenf(t, res.Rows, 1, "read %d rows from the fresh snapshot, want 1", len(res.Rows))
 }

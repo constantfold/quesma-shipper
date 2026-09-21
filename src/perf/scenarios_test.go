@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // A plausible cross-region hop, far enough above loopback noise to not be an artifact.
@@ -41,14 +44,9 @@ func TestBacklogFirstSyncOverlapsRoundTrips(t *testing.T) {
 
 	assertSameKeys(t, base.currentKeys(t), shaped.currentKeys(t))
 	for _, k := range []string{"shipped", "unchanged", "skipped", "parked", "failed"} {
-		if baseCounts[k] != shapedCounts[k] {
-			t.Errorf("%s: %d unshaped, %d shaped; the two runs did different work",
-				k, baseCounts[k], shapedCounts[k])
-		}
+		assert.Falsef(t, baseCounts[k] != shapedCounts[k], "%s: %d unshaped, %d shaped; the two runs did different work", k, baseCounts[k], shapedCounts[k])
 	}
-	if baseCounts["shipped"] < files {
-		t.Fatalf("the backlog run shipped %d of %d files", baseCounts["shipped"], files)
-	}
+	require.Falsef(t, baseCounts["shipped"] < files, "the backlog run shipped %d of %d files", baseCounts["shipped"], files)
 
 	added := shapedElapsed - baseElapsed
 	// One round trip per file over half the compute pool: slack for a loaded machine, still far
@@ -148,9 +146,7 @@ func TestLatencySensitivity(t *testing.T) {
 				float64(time.Duration(files)*rtt)/float64(max(added, time.Millisecond)),
 				time.Duration(files)*rtt)
 
-			if added >= bound {
-				t.Errorf("%v of latency added %v, over the %v bound", rtt, added, bound)
-			}
+			assert.Falsef(t, added >= bound, "%v of latency added %v, over the %v bound", rtt, added, bound)
 		})
 	}
 }
@@ -174,12 +170,8 @@ func assertSameKeys(t *testing.T, a, b []string) {
 	t.Helper()
 	slices.Sort(a)
 	slices.Sort(b)
-	if len(a) != len(b) {
-		t.Fatalf("the two runs landed %d and %d keys", len(a), len(b))
-	}
+	require.Falsef(t, len(a) != len(b), "the two runs landed %d and %d keys", len(a), len(b))
 	for i := range a {
-		if a[i] != b[i] {
-			t.Fatalf("the two runs disagree at key %d: %q and %q", i, a[i], b[i])
-		}
+		require.Falsef(t, a[i] != b[i], "the two runs disagree at key %d: %q and %q", i, a[i], b[i])
 	}
 }

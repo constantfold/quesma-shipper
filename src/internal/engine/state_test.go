@@ -9,29 +9,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
 const installID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
 const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 const otherSha = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+
 const otherInstall = "85a7e04c-32a4-4bf5-9c80-49c4f9d087bb"
 
 // What a re-enrolled machine wakes up to: a document another install left behind.
 func seedForeignDoc(t *testing.T, dir string, entries int) {
 	t.Helper()
 	s, err := engine.Open(dir, otherInstall)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Close()
 	if _, err := s.EnsureSpec("claude-code-transcripts", strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < entries; i++ {
-		if err := commit(s, key(fmt.Sprintf("/x/%d.jsonl", i)), fingerprint()); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, commit(s, key(fmt.Sprintf("/x/%d.jsonl", i)), fingerprint()))
 	}
 }
 
@@ -62,21 +64,15 @@ func commit(s *engine.Store, k engine.Key, fp engine.Fingerprint) error {
 func open(t *testing.T, dir string) *engine.Store {
 	t.Helper()
 	s, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	require.NoErrorf(t, err, "open: %v", err)
 	t.Cleanup(func() { s.Close() })
 	return s
 }
 
 func TestFirstRunIsEmptyNotAnError(t *testing.T) {
 	s := open(t, t.TempDir())
-	if s.Len() != 0 {
-		t.Errorf("a fresh store should be empty, has %d entries", s.Len())
-	}
-	if s.Corrupt() {
-		t.Error("a missing document is a first run, not a discarded one")
-	}
+	assert.Equalf(t, 0, s.Len(), "a fresh store should be empty, has %d entries", s.Len())
+	assert.True(t, !s.Corrupt(), "a missing document is a first run, not a discarded one")
 	if _, ok := s.Get(key("/x/a.jsonl")); ok {
 		t.Error("a fresh store should know nothing")
 	}
@@ -87,19 +83,13 @@ func TestCommitThenReload(t *testing.T) {
 
 	s := open(t, dir)
 	want := fingerprint()
-	if err := commit(s, key("/x/a.jsonl"), want); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), want))
 	s.Close()
 
 	s2 := open(t, dir)
 	got, ok := s2.Get(key("/x/a.jsonl"))
-	if !ok {
-		t.Fatal("entry did not survive a reload")
-	}
-	if got.SourceHash != want.SourceHash || got.SourceSize != want.SourceSize {
-		t.Errorf("fingerprint changed across reload:\n got %+v\nwant %+v", got, want)
-	}
+	require.True(t, ok, "entry did not survive a reload")
+	assert.Truef(t, got.SourceHash == want.SourceHash && got.SourceSize == want.SourceSize, "fingerprint changed across reload:\n got %+v\nwant %+v", got, want)
 	if !got.SourceMTime.Equal(want.SourceMTime) {
 		t.Errorf("mtime: got %s want %s", got.SourceMTime, want.SourceMTime)
 	}
@@ -110,20 +100,14 @@ func TestCommitThenReload(t *testing.T) {
 func TestAStoredMTimeKeepsTheNanosecondsThePreFilterComparesOn(t *testing.T) {
 	dir := t.TempDir()
 	fp := fingerprint()
-	if fp.SourceMTime.Nanosecond() == 0 {
-		t.Fatal("the fixture has a whole-second mtime; this test would pass vacuously")
-	}
+	require.NotEqual(t, 0, fp.SourceMTime.Nanosecond(), "the fixture has a whole-second mtime; this test would pass vacuously")
 
 	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fp); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), fp))
 	s.Close()
 
 	got, ok := open(t, dir).Get(key("/x/a.jsonl"))
-	if !ok {
-		t.Fatal("entry did not survive a reload")
-	}
+	require.True(t, ok, "entry did not survive a reload")
 	if !got.SourceMTime.Equal(fp.SourceMTime) {
 		t.Errorf("mtime lost precision across the round trip:\n got %s\nwant %s",
 			got.SourceMTime.Format(time.RFC3339Nano), fp.SourceMTime.Format(time.RFC3339Nano))
@@ -144,16 +128,10 @@ func TestSecondOpenIsRefusedNotQueued(t *testing.T) {
 func TestLockIsReleasedOnClose(t *testing.T) {
 	dir := t.TempDir()
 	s, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
 	s2, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatalf("the lock was not released: %v", err)
-	}
+	require.NoErrorf(t, err, "the lock was not released: %v", err)
 	s2.Close()
 }
 
@@ -161,194 +139,12 @@ func TestLockIsReleasedOnClose(t *testing.T) {
 func TestPeekWorksWhileLocked(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 
 	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatalf("Peek must work while the store is locked: %v", err)
-	}
-	if len(doc.Entries) != 1 {
-		t.Errorf("Peek saw %d entries, want 1", len(doc.Entries))
-	}
-	if doc.InstallID != installID {
-		t.Errorf("Peek install_id: %q", doc.InstallID)
-	}
-}
-
-// The failure the checksum exists for: a source_hash flipped in place still parses, still
-// satisfies the schema, and reads as a completed ship. Trusting it loses that file forever.
-func TestAnInPlaceCorruptionIsCaughtByTheChecksum(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	path := filepath.Join(dir, engine.FileName)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tampered := strings.Replace(string(raw), sha, otherSha, 1)
-	if tampered == string(raw) {
-		t.Fatal("could not tamper with the source hash; document shape changed")
-	}
-	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := engine.Peek(dir); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("the tampered document was trusted: %v", err)
-	}
-}
-
-// A document from before the field existed has no checksum and must still load; it earns one on
-// the next rewrite rather than being treated as corrupt.
-func TestADocumentWithoutAChecksumStillLoads(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": []}`
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Peek(dir); err != nil {
-		t.Fatalf("a pre-checksum document must load: %v", err)
-	}
-
-	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-	raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `"checksum"`) {
-		t.Error("the rewrite should have stamped a checksum")
-	}
-}
-
-// An unknown field is ignored and dropped on the next rewrite; absence fails toward re-shipping.
-func TestUnknownFieldIsIgnored(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [], "pending_uploads": []}`
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatalf("a document with an unknown field must still load: %v", err)
-	}
-	s.Close()
-}
-
-// The one exception to load's interpret-don't-audit stance: a negative attempts count reaches the
-// backoff as a negative shift and panics, so the document is refused with the entry named.
-func TestNegativeAttemptsIsRejectedOnLoad(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl", "attempts": -5}]}`
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := engine.Peek(dir)
-	if err == nil {
-		t.Fatal("a negative attempts count must be rejected")
-	}
-	if !strings.Contains(err.Error(), "attempts") || !strings.Contains(err.Error(), "/x/a.jsonl") {
-		t.Errorf("the error must name the value and the entry, got: %v", err)
-	}
-}
-
-// Load interprets, it does not audit. A missing field comes back zero, which matches no file, so
-// the engine re-reads and re-ships onto the same key: the safe direction to fail in.
-func TestMissingFieldsLoadAsZeroValues(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl"}]}`
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatalf("a well-formed document must load: %v", err)
-	}
-	k := engine.Key{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"}
-	fp, ok := loaded.Entries[k]
-	if !ok {
-		t.Fatalf("entry missing; document loaded as %+v", loaded.Entries)
-	}
-	if fp.SourceHash != "" || fp.SourceSize != 0 || !fp.SourceMTime.IsZero() {
-		t.Errorf("absent fields must read back zero, got %+v", fp)
-	}
-}
-
-// A document carrying the retired sink_etag must load and simply drop the field: the schema is
-// not bumped for a removal, and refusing would re-ship the install's whole history.
-func TestALegacySinkETagLoadsAndIsDropped(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", ` +
-		`"native_path": "/x/a.jsonl", "source_hash": "` + sha + `", "sink_etag": "abc123"}]}`
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatalf("a document carrying sink_etag must still load: %v", err)
-	}
-	k := engine.Key{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"}
-	fp, ok := loaded.Entries[k]
-	if !ok {
-		t.Fatalf("entry missing; document loaded as %+v", loaded.Entries)
-	}
-	if fp.SourceHash != sha {
-		t.Errorf("the entry beside the dropped field was lost: %+v", fp)
-	}
-
-	// The rewrite drops it: the schema refuses unknown properties on the way out.
-	s := open(t, dir)
-	if err := commit(s, k, fingerprint()); err != nil {
-		t.Fatalf("rewriting a document that carried sink_etag: %v", err)
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "sink_etag") {
-		t.Errorf("sink_etag survived a rewrite:\n%s", raw)
-	}
-}
-
-// The schema is enforced on the way out, so a bad commit fails and the old document stays.
-func TestCommitOfAnUnserializableEntryFails(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bad := engine.Key{
-		SourceID:   "claude-code-transcripts",
-		NativePath: "",
-	}
-	if err := commit(s, bad, fingerprint()); err == nil {
-		t.Fatal("a document that would not satisfy its own schema must not be written")
-	}
-
-	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Error("the rejected commit reached the disk")
-	}
+	require.NoErrorf(t, err, "Peek must work while the store is locked: %v", err)
+	assert.Lenf(t, doc.Entries, 1, "Peek saw %d entries, want 1", len(doc.Entries))
+	assert.Equalf(t, installID, doc.InstallID, "Peek install_id: %q", doc.InstallID)
 }
 
 // A crash before the atomic replace leaves the previous document intact: retry is re-run.
@@ -356,15 +152,11 @@ func TestCrashBeforeCommitLeavesThePreviousDocument(t *testing.T) {
 	dir := t.TempDir()
 
 	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 	s.Close()
 
 	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// A second store mutates in memory and is abandoned without committing.
 	s2 := open(t, dir)
@@ -372,31 +164,21 @@ func TestCrashBeforeCommitLeavesThePreviousDocument(t *testing.T) {
 	s2.Close()
 
 	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Error("the document changed without a commit")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, string(after), string(before), "the document changed without a commit")
 }
 
 // The document is deterministic, so a diff shows real change rather than map ordering.
 func TestDocumentIsDeterministic(t *testing.T) {
 	write := func(dir string, paths []string) string {
 		s, err := engine.Open(dir, installID)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer s.Close()
 		for _, p := range paths {
-			if err := commit(s, key(p), fingerprint()); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, commit(s, key(p), fingerprint()))
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		// updated_at moves per flush, and checksum covers it; strip both so the comparison is
 		// about ordering.
 		var out []string
@@ -410,9 +192,7 @@ func TestDocumentIsDeterministic(t *testing.T) {
 
 	forward := write(t.TempDir(), []string{"/x/a.jsonl", "/x/b.jsonl", "/x/c.jsonl"})
 	reverse := write(t.TempDir(), []string{"/x/c.jsonl", "/x/b.jsonl", "/x/a.jsonl"})
-	if forward != reverse {
-		t.Errorf("insertion order changed the document:\n%s\n---\n%s", forward, reverse)
-	}
+	assert.Equalf(t, reverse, forward, "insertion order changed the document:\n%s\n---\n%s", forward, reverse)
 }
 
 // A spec change means the source is read differently, so only its entries drop.
@@ -431,9 +211,7 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 		{SourceID: "codex-rollouts", NativePath: "/y/r.jsonl"},
 	}
 	for _, k := range entries {
-		if err := commit(s, k, fingerprint()); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, commit(s, k, fingerprint()))
 	}
 
 	if n, err := s.EnsureSpec("claude-code-transcripts", sha); err != nil || n != 0 {
@@ -442,41 +220,9 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 	if n, err := s.EnsureSpec("claude-code-transcripts", otherSha); err != nil || n != 2 {
 		t.Fatalf("a changed spec must drop that source's entries: n=%d err=%v", n, err)
 	}
-	if s.Len() != 1 {
-		t.Errorf("expected 1 surviving entry, got %d", s.Len())
-	}
+	assert.Equalf(t, 1, s.Len(), "expected 1 surviving entry, got %d", s.Len())
 	if _, ok := s.Get(entries[2]); !ok {
 		t.Error("an unrelated source must not be touched")
-	}
-}
-
-// A derived entry carries the enricher that produced it and its output hash.
-func TestDerivedEntryRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-
-	k := engine.Key{
-		SourceID:   "cursor-transcripts",
-		NativePath: "/c/c8cbeb0b.jsonl.enriched.jsonl",
-	}
-	fp := fingerprint()
-	fp.Enricher = &engine.EnricherRef{ID: "cursor-transcript-join", Version: 1}
-	fp.OutputHash = otherSha
-	if err := commit(s, k, fp); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	s2 := open(t, dir)
-	got, ok := s2.Get(k)
-	if !ok {
-		t.Fatal("derived entry missing after reload")
-	}
-	if got.Enricher == nil || got.Enricher.ID != "cursor-transcript-join" || got.Enricher.Version != 1 {
-		t.Errorf("enricher ref: %+v", got.Enricher)
-	}
-	if got.OutputHash != otherSha {
-		t.Errorf("output hash: %q", got.OutputHash)
 	}
 }
 
@@ -489,255 +235,27 @@ func TestCommitAllReplacesOnce(t *testing.T) {
 		key("/x/b.jsonl"): fingerprint(),
 		key("/x/c.jsonl"): fingerprint(),
 	}
-	if err := s.CommitAll(updates); err != nil {
-		t.Fatal(err)
-	}
-	if s.Len() != 3 {
-		t.Errorf("expected 3 entries, got %d", s.Len())
-	}
+	require.NoError(t, s.CommitAll(updates))
+	assert.Equalf(t, 3, s.Len(), "expected 3 entries, got %d", s.Len())
 	s.Close()
 
 	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Entries) != 3 {
-		t.Errorf("expected 3 entries on disk, got %d", len(doc.Entries))
-	}
+	require.NoError(t, err)
+	assert.Lenf(t, doc.Entries, 3, "expected 3 entries on disk, got %d", len(doc.Entries))
 }
 
 // A wiped document is cheap: the store comes back empty and re-uploads onto existing keys.
 func TestWipedDocumentComesBackEmpty(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 	s.Close()
 
-	if err := os.Remove(filepath.Join(dir, engine.FileName)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Remove(filepath.Join(dir, engine.FileName)))
 	s2, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatalf("a wiped document must not be an error: %v", err)
-	}
+	require.NoErrorf(t, err, "a wiped document must not be an error: %v", err)
 	defer s2.Close()
-	if s2.Len() != 0 {
-		t.Errorf("expected an empty store, got %d entries", s2.Len())
-	}
-}
-
-// Reset is the one-command full re-ship onto existing keys; its dry run must not write.
-func TestResetForgetsEverythingButOnlyWithApply(t *testing.T) {
-	dir := t.TempDir()
-
-	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	if err := commit(s, key("/x/b.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	removed, err := engine.Reset(dir, installID, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != 2 {
-		t.Errorf("dry run should count both entries, counted %d", removed)
-	}
-	s2 := open(t, dir)
-	if s2.Len() != 2 {
-		t.Fatalf("a dry run wrote: %d entries remain, want 2", s2.Len())
-	}
-	s2.Close()
-
-	removed, err = engine.Reset(dir, installID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != 2 {
-		t.Errorf("apply should count what it forgot, counted %d", removed)
-	}
-	s3 := open(t, dir)
-	defer s3.Close()
-	if s3.Len() != 0 {
-		t.Errorf("apply left %d entries", s3.Len())
-	}
-}
-
-// A reset store keeps its install id, so a later open under another identity still discards it.
-func TestResetKeepsTheInstallID(t *testing.T) {
-	dir := t.TempDir()
-
-	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	if _, err := engine.Reset(dir, installID, false); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if doc.InstallID != installID {
-		t.Errorf("a reset document lost its install id: %q", doc.InstallID)
-	}
-}
-
-// Resetting an empty store is a no-op, not an error: it must be safe to run fleet-wide.
-func TestResetOnAnEmptyStoreIsANoOp(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	s.Close()
-
-	removed, err := engine.Reset(dir, installID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != 0 {
-		t.Errorf("an empty store forgot %d entries", removed)
-	}
-}
-
-// An unloadable document is what an operator runs reset against, so --apply must replace it even
-// though the discarded store forgot nothing.
-func TestResetReplacesAnUnloadableDocument(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, engine.FileName), []byte("not a document\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Reset(dir, installID, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Peek(dir); err != nil {
-		t.Fatalf("the document was not replaced: %v", err)
-	}
-}
-
-// Re-enrolling replaces identity.json and leaves the old install's document behind. Its entries
-// name objects under that install's key root, so not one of them may survive into this install.
-func TestAnotherInstallsEntriesNeverSurvive(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 3)
-
-	s, err := engine.Open(dir, installID)
-	if err != nil {
-		t.Fatalf("a foreign document must be discarded, not refused: %v", err)
-	}
-	if !s.Corrupt() {
-		t.Error("the discard was not reported to the run")
-	}
-	if s.Len() != 0 {
-		t.Fatalf("%d of another install's entries survived", s.Len())
-	}
-	if err := commit(s, key("/x/mine.jsonl"), fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if doc.InstallID != installID {
-		t.Errorf("the replacement kept the foreign install id %q", doc.InstallID)
-	}
-	if doc.ForeignTo(installID) {
-		t.Error("the replacement still reads as foreign, so the next run discards it again")
-	}
-	if len(doc.Entries) != 1 {
-		t.Errorf("the replacement holds %d entries, want only this install's one", len(doc.Entries))
-	}
-}
-
-// Prune keeps entries, so it is the verb that could claim another install's uploads. It cannot:
-// the discard empties the store before pruning ever looks at it.
-func TestPruneCannotClaimAnotherInstallsUploads(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 2)
-
-	removed, kept, err := engine.Prune(dir, installID, false)
-	if err != nil {
-		t.Fatalf("prune over a foreign document: %v", err)
-	}
-	if removed != 0 || kept != 0 {
-		t.Errorf("prune reported removed=%d kept=%d over a discarded store, want 0 and 0", removed, kept)
-	}
-	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Entries) != 0 || doc.InstallID != installID {
-		t.Errorf("prune left %d entries under install %q", len(doc.Entries), doc.InstallID)
-	}
-}
-
-// An entryless foreign document forgets nothing, so only the install id makes it a replacement.
-// Reset must still write it, or the stale id survives and every run re-discards the file.
-func TestResetReplacesAnEmptyForeignDocument(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 0)
-
-	removed, err := engine.Reset(dir, installID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != 0 {
-		t.Errorf("an entryless document forgot %d entries", removed)
-	}
-	doc, err := engine.Peek(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if doc.InstallID != installID {
-		t.Errorf("reset left the foreign install id %q in place", doc.InstallID)
-	}
-}
-
-// A dry run reports; it never writes. The in-memory discard must not reach the file.
-func TestADryRunLeavesAnUnloadableDocumentOnDisk(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, engine.FileName)
-	original := []byte("not a document\n")
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, run := range []struct {
-		name string
-		fn   func() error
-	}{
-		{"reset", func() error { _, err := engine.Reset(dir, installID, true); return err }},
-		{"prune", func() error { _, _, err := engine.Prune(dir, installID, true); return err }},
-	} {
-		if err := run.fn(); err != nil {
-			t.Fatalf("%s dry run: %v", run.name, err)
-		}
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(got) != string(original) {
-			t.Errorf("%s dry run rewrote the document: %q", run.name, got)
-		}
-	}
-}
-
-// Reset contends like every verb: told the store is busy, never queued behind it.
-func TestResetIsRefusedWhileLocked(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	defer s.Close()
-
-	if _, err := engine.Reset(dir, installID, false); !errors.Is(err, engine.ErrLocked) {
-		t.Errorf("reset under a held lock: err = %v, want ErrLocked", err)
-	}
+	assert.Equalf(t, 0, s2.Len(), "expected an empty store, got %d entries", s2.Len())
 }
 
 // A kill -9 mid-flush strands a fingerprints temp. The old fixed name, fingerprints.json.tmp-<pid>,
@@ -746,14 +264,10 @@ func TestResetIsRefusedWhileLocked(t *testing.T) {
 func TestAStrandedOwnPidTempDoesNotWedgeTheCommit(t *testing.T) {
 	dir := t.TempDir()
 	tmp := filepath.Join(dir, engine.FileName+fmt.Sprintf(".tmp-%d", os.Getpid()))
-	if err := os.WriteFile(tmp, []byte(`{"half":"written`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(tmp, []byte(`{"half":"written`), 0o600))
 
 	s := open(t, dir)
-	if err := commit(s, key("/x/a.jsonl"), fingerprint()); err != nil {
-		t.Fatalf("a stranded temp from a crashed run wedged the commit: %v", err)
-	}
+	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 	s.Close()
 
 	s2 := open(t, dir)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -167,9 +169,7 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 		row.BaselineSeconds = baseline.Seconds()
 		recordResult(t, row)
 
-		if counts["shipped"] < m.files {
-			t.Fatalf("the backlog run shipped %d of %d files", counts["shipped"], m.files)
-		}
+		require.Falsef(t, counts["shipped"] < m.files, "the backlog run shipped %d of %d files", counts["shipped"], m.files)
 		if counts["failed"] != 0 {
 			t.Fatalf("the backlog run failed %d files:\n%s", counts["failed"], meas.last.Output)
 		}

@@ -10,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const stubShipper = `#!/bin/sh
@@ -35,18 +38,14 @@ func (w installWorld) stubLog() string { return filepath.Join(w.Home, "stub.log"
 func stageStub(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "shipper-local")
-	if err := os.WriteFile(path, []byte(stubShipper), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(stubShipper), 0o600))
 	return path
 }
 
 func runInstall(t *testing.T, w installWorld, args ...string) (string, error) {
 	t.Helper()
 	script, err := filepath.Abs(filepath.Join("..", "packaging", "linux", "install.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	cmd := exec.Command("sh", append([]string{script, "--bin-dir", w.bin()}, args...)...)
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -64,28 +63,20 @@ func stubCalls(t *testing.T, w installWorld) []string {
 	if os.IsNotExist(err) {
 		return nil
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return strings.Split(strings.TrimSpace(string(raw)), "\n")
 }
 
 func markEnrolled(t *testing.T, w installWorld) {
 	t.Helper()
-	if err := os.MkdirAll(statePath(w.world), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(statePath(w.world), "enrollment.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(statePath(w.world), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(statePath(w.world), "enrollment.json"), []byte("{}"), 0o600))
 }
 
 func TestInstallScriptPlacesALocalBinaryAndLogsIn(t *testing.T) {
 	w := stageInstall(t)
 	out, err := runInstall(t, w, "--from", stageStub(t), "inv-1", "--server", "http://cp.example")
-	if err != nil {
-		t.Fatalf("install.sh failed: %v\n%s", err, out)
-	}
+	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
 	if calls := stubCalls(t, w); !slices.Equal(calls, []string{
 		"--version",
 		"login --server http://cp.example inv-1",
@@ -102,12 +93,8 @@ func TestInstallScriptKeepsAnExistingLogin(t *testing.T) {
 	w := stageInstall(t)
 	markEnrolled(t, w)
 	out, err := runInstall(t, w, "--from", stageStub(t), "--no-service")
-	if err != nil {
-		t.Fatalf("install.sh failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "already logged in") {
-		t.Errorf("missing existing-login message:\n%s", out)
-	}
+	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
+	assert.Containsf(t, out, "already logged in", "missing existing-login message:\n%s", out)
 	if calls := stubCalls(t, w); !slices.Equal(calls, []string{"--version"}) {
 		t.Errorf("stub calls = %v", calls)
 	}
@@ -116,12 +103,8 @@ func TestInstallScriptKeepsAnExistingLogin(t *testing.T) {
 func TestInstallScriptDoesNotRequireEnrollment(t *testing.T) {
 	w := stageInstall(t)
 	out, err := runInstall(t, w, "--from", stageStub(t), "--no-service")
-	if err != nil {
-		t.Fatalf("install.sh failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "not enrolled") {
-		t.Errorf("missing enrollment instructions:\n%s", out)
-	}
+	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
+	assert.Containsf(t, out, "not enrolled", "missing enrollment instructions:\n%s", out)
 	if calls := stubCalls(t, w); !slices.Equal(calls, []string{"--version"}) {
 		t.Errorf("stub calls = %v", calls)
 	}
@@ -130,9 +113,7 @@ func TestInstallScriptDoesNotRequireEnrollment(t *testing.T) {
 func TestInstallScriptRequiresServerBeforeChangingAnything(t *testing.T) {
 	w := stageInstall(t)
 	out, err := runInstall(t, w, "--from", stageStub(t), "token", "--no-service")
-	if err == nil || !strings.Contains(out, "pass --server URL") {
-		t.Fatalf("first install without --server was not refused: %v\n%s", err, out)
-	}
+	require.Truef(t, err != nil && strings.Contains(out, "pass --server URL"), "first install without --server was not refused: %v\n%s", err, out)
 	if _, err := os.Stat(w.shipper()); !os.IsNotExist(err) {
 		t.Errorf("destination changed: %v", err)
 	}
@@ -144,9 +125,7 @@ func TestInstallScriptRequiresServerBeforeChangingAnything(t *testing.T) {
 func TestInstallScriptChecksLocalInputBeforeChangingAnything(t *testing.T) {
 	w := stageInstall(t)
 	out, err := runInstall(t, w, "--from", w.shipper()+".missing", "token", "--no-service")
-	if err == nil || !strings.Contains(out, "no such file") {
-		t.Fatalf("missing --from file was not refused: %v\n%s", err, out)
-	}
+	require.Truef(t, err != nil && strings.Contains(out, "no such file"), "missing --from file was not refused: %v\n%s", err, out)
 	if _, err := os.Stat(w.shipper()); !os.IsNotExist(err) {
 		t.Errorf("destination changed: %v", err)
 	}

@@ -1,8 +1,5 @@
 package app
 
-// The classifications the vend port owes the engine: each decides whether a run stops for good,
-// stops until the next tick, or asks for one fresh ticket, so each is asserted on its own.
-
 import (
 	"context"
 	"crypto/ed25519"
@@ -14,19 +11,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
+// The classifications the vend port owes the engine: each decides whether a run stops for good,
+// stops until the next tick, or asks for one fresh ticket, so each is asserted on its own.
+
 func TestAlreadyPresentCommitsWithoutSpendingACapability(t *testing.T) {
 	p := &vendPort{}
 	err := p.send(context.Background(), engine.PreparedObject{ObjectID: "trajectory-1"},
 		controlplane.Ticket{TicketID: "b1bd1a73-f16d-4a51-aac6-29f1f48b0658", ObjectID: "trajectory-1", AlreadyPresent: true})
-	if err != nil {
-		t.Fatalf("already-present answer tried to validate or upload a capability: %v", err)
-	}
+	require.NoErrorf(t, err, "already-present answer tried to validate or upload a capability: %v", err)
 }
 
 // A refusal kills the install, an outage stops only this run: conflating them turns a rate limit
@@ -43,12 +44,8 @@ func TestAuthorizeFailuresKeepRefusalAndUnavailabilityApart(t *testing.T) {
 
 	unavailable := fmt.Errorf("%w (HTTP 503)", controlplane.ErrAuthorizeUnavailable)
 	got := classifyAuthorize(unavailable)
-	if !errors.Is(got, engine.ErrUploadUnavailable) {
-		t.Errorf("%v was not classified as unavailable: %v", unavailable, got)
-	}
-	if errors.Is(got, formats.ErrCredentialsRefused) {
-		t.Errorf("%v reads as a credentials refusal, which would kill the install", unavailable)
-	}
+	assert.ErrorIsf(t, got, engine.ErrUploadUnavailable, "%v was not classified as unavailable: %v", unavailable, got)
+	assert.Truef(t, !errors.Is(got, formats.ErrCredentialsRefused), "%v reads as a credentials refusal, which would kill the install", unavailable)
 
 	// Everything else is one batch's failure: no sentinel, so the next run retries it.
 	for _, other := range []error{
@@ -102,23 +99,17 @@ func portAgainst(t *testing.T, fn http.HandlerFunc) *vendPort {
 	srv := httptest.NewServer(fn)
 	t.Cleanup(srv.Close)
 	_, key, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	client, err := controlplane.New(controlplane.Options{
 		Endpoint:  srv.URL,
 		InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", Organization: "acme",
 		DeviceKey: key,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	target, err := upload.NewUploadTarget(upload.TargetSpec{
 		Origin: srv.URL, Addressing: upload.PathStyle, PathPrefix: "/b", AllowLoopbackHTTP: true,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return &vendPort{client: client, uploader: upload.New(), targets: upload.UploadTargetList{target},
 		writerID: "writer", now: time.Now}
 }
@@ -144,12 +135,8 @@ func TestAnAlreadyPresentAnswerSkipsThePutAndTheRestStillShips(t *testing.T) {
 	})
 
 	out := p.AuthorizeAndUpload(context.Background(), []engine.PreparedObject{preparedObject("0"), preparedObject("1")})
-	if len(out) != 2 || !errors.Is(out[0], engine.ErrAlreadyPresent) || out[1] != nil {
-		t.Fatalf("the batch did not succeed whole: %v", out)
-	}
-	if len(puts) != 1 || puts[0] != "/b/k1" {
-		t.Errorf("the port PUT %v, want the absent object alone", puts)
-	}
+	require.Truef(t, len(out) == 2 && errors.Is(out[0], engine.ErrAlreadyPresent) && out[1] == nil, "the batch did not succeed whole: %v", out)
+	assert.Truef(t, len(puts) == 1 && puts[0] == "/b/k1", "the port PUT %v, want the absent object alone", puts)
 }
 
 // The request metadata set is closed: a name outside it fails the whole batch, because dropping
@@ -162,12 +149,8 @@ func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
 		"artifact-class":   "trajectory",
 		"derived":          "true",
 	})
-	if err != nil {
-		t.Fatalf("the manifest's own metadata was refused: %v", err)
-	}
-	if md.ManifestVersion != "1" || md.SourceID != "claude-code-transcripts" || md.Derived != "true" {
-		t.Errorf("metadata did not map across: %+v", md)
-	}
+	require.NoErrorf(t, err, "the manifest's own metadata was refused: %v", err)
+	assert.Truef(t, md.ManifestVersion == "1" && md.SourceID == "claude-code-transcripts" && md.Derived == "true", "metadata did not map across: %+v", md)
 
 	// Both are named specifically: "unknown name" would send an operator hunting a typo that is
 	// not there.
@@ -191,23 +174,15 @@ func TestAnOutOfGrammarAgentVersionIsDroppedRatherThanShipped(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			md, dropped, err := uploadMetadata(map[string]string{"agent-version": tc.value})
-			if err != nil {
-				t.Fatalf("one bad agent-version failed the whole batch: %v", err)
-			}
-			if md.AgentVersion != "" {
-				t.Errorf("an out-of-grammar agent-version was sent: %q", md.AgentVersion)
-			}
-			if len(dropped) != 1 || !strings.Contains(dropped[0], "agent-version") {
-				t.Errorf("the drop was not reported: %v", dropped)
-			}
+			require.NoErrorf(t, err, "one bad agent-version failed the whole batch: %v", err)
+			assert.Equalf(t, "", md.AgentVersion, "an out-of-grammar agent-version was sent: %q", md.AgentVersion)
+			assert.Truef(t, len(dropped) == 1 && strings.Contains(dropped[0], "agent-version"), "the drop was not reported: %v", dropped)
 		})
 	}
 
 	// The values a real agent writes still travel: this drops the ungrammatical, not the unfamiliar.
 	for _, ok := range []string{"1.0.0", "0.2.145-beta+build.7", strings.Repeat("9", 128)} {
 		md, dropped, err := uploadMetadata(map[string]string{"agent-version": ok})
-		if err != nil || md.AgentVersion != ok || len(dropped) != 0 {
-			t.Errorf("agent-version %q was dropped: %+v %v %v", ok, md, dropped, err)
-		}
+		assert.Truef(t, err == nil && md.AgentVersion == ok && len(dropped) == 0, "agent-version %q was dropped: %+v %v %v", ok, md, dropped, err)
 	}
 }

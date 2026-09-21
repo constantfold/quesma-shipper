@@ -5,6 +5,8 @@ import (
 	"maps"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateTicketAcceptsGolden(t *testing.T) {
@@ -14,9 +16,7 @@ func TestValidateTicketAcceptsGolden(t *testing.T) {
 	} {
 		t.Run(pair.request, func(t *testing.T) {
 			prepared, ticket := goldenPair(t, pair.request, pair.response)
-			if err := ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket); err != nil {
-				t.Fatalf("golden ticket refused: %v", err)
-			}
+			require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket))
 		})
 	}
 }
@@ -54,9 +54,7 @@ func TestValidateTicketAcceptsEveryProviderDialect(t *testing.T) {
 			for name, value := range tc.extra {
 				ticket.RequiredHeaders[name] = value
 			}
-			if err := ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket); err != nil {
-				t.Fatalf("%s ticket refused: %v", tc.name, err)
-			}
+			require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket))
 		})
 	}
 }
@@ -171,12 +169,8 @@ func TestValidateTicketRejects(t *testing.T) {
 			c.mutate(&prepared, &ticket)
 
 			err := ValidateTicket(targets, prepared, ticket)
-			if err == nil {
-				t.Fatalf("ValidateTicket accepted the %s case", c.name)
-			}
-			if c.wantErr != nil && !errors.Is(err, c.wantErr) {
-				t.Fatalf("error is %v, want %v", err, c.wantErr)
-			}
+			require.Error(t, err)
+			require.Truef(t, c.wantErr == nil || errors.Is(err, c.wantErr), "error is %v, want %v", err, c.wantErr)
 			assertNoURLLeak(t, err, ticket.URL)
 		})
 	}
@@ -188,16 +182,12 @@ func TestValidateTicketPathStyle(t *testing.T) {
 		Addressing: PathStyle,
 		PathPrefix: "/trajectories",
 	})
-	if err != nil {
-		t.Fatalf("build target: %v", err)
-	}
+	require.NoErrorf(t, err, "build target: %v", err)
 	targets := UploadTargetList{target}
 	prepared, ticket := goldenPair(t, "request.json", "response.json")
 	origin := "https://minio.example.invalid:9000"
 	ticket.URL = origin + "/trajectories/" + canonicalPath(prepared.Key) + "?X-Amz-Signature=FIXTURE"
-	if err := ValidateTicket(targets, prepared, ticket); err != nil {
-		t.Fatalf("path-style ticket refused: %v", err)
-	}
+	require.NoError(t, ValidateTicket(targets, prepared, ticket))
 
 	refused := map[string]string{
 		"bucket prefix missing":   origin + "/" + canonicalPath(prepared.Key),
@@ -208,9 +198,7 @@ func TestValidateTicketPathStyle(t *testing.T) {
 	for name, raw := range refused {
 		t.Run(name, func(t *testing.T) {
 			ticket.URL = raw
-			if err := ValidateTicket(targets, prepared, ticket); err == nil {
-				t.Fatalf("path-style validation accepted %q", raw)
-			}
+			require.Error(t, ValidateTicket(targets, prepared, ticket))
 		})
 	}
 }
@@ -222,16 +210,12 @@ func TestValidateTicketUnpinned(t *testing.T) {
 	unpinned := UploadTargetList{}
 
 	// The golden ticket as issued: virtual-hosted spelling.
-	if err := ValidateTicket(unpinned, prepared, ticket); err != nil {
-		t.Fatalf("unpinned virtual-hosted ticket refused: %v", err)
-	}
+	require.NoError(t, ValidateTicket(unpinned, prepared, ticket))
 
 	// The same key below exactly one bucket segment: path-style spelling.
 	origin := "https://minio.example.invalid:9000"
 	ticket.URL = origin + "/trajectories/" + canonicalPath(prepared.Key) + "?X-Amz-Signature=FIXTURE"
-	if err := ValidateTicket(unpinned, prepared, ticket); err != nil {
-		t.Fatalf("unpinned path-style ticket refused: %v", err)
-	}
+	require.NoError(t, ValidateTicket(unpinned, prepared, ticket))
 
 	refused := map[string]string{
 		"two bucket segments":  origin + "/a/b/" + canonicalPath(prepared.Key),
@@ -243,9 +227,7 @@ func TestValidateTicketUnpinned(t *testing.T) {
 	for name, raw := range refused {
 		t.Run(name, func(t *testing.T) {
 			ticket.URL = raw
-			if err := ValidateTicket(unpinned, prepared, ticket); err == nil {
-				t.Fatalf("unpinned validation accepted %q", raw)
-			}
+			require.Error(t, ValidateTicket(unpinned, prepared, ticket))
 		})
 	}
 }
@@ -255,7 +237,5 @@ func TestValidateTicketUnknownAddressing(t *testing.T) {
 	prepared, ticket := goldenPair(t, "request.json", "response.json")
 	target := goldenTarget(t)
 	target.addressing = Addressing("dns-style")
-	if err := ValidateTicket(UploadTargetList{target}, prepared, ticket); err == nil {
-		t.Fatal("unknown addressing was accepted")
-	}
+	require.Error(t, ValidateTicket(UploadTargetList{target}, prepared, ticket), "unknown addressing was accepted")
 }

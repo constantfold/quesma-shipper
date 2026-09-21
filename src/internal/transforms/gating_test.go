@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
@@ -17,31 +20,19 @@ func TestNonASCIIKeyNameStillRedacts(t *testing.T) {
 	cfg := transforms.DefaultConfig()
 	cfg.SecretKeyNames = append(transforms.DefaultSecretKeyNames(), "CLÉ_SECRÈTE")
 	s, err := transforms.New(cfg)
-	if err != nil {
-		t.Fatalf("a non-ASCII key name must compile, got %v", err)
-	}
+	require.NoErrorf(t, err, "a non-ASCII key name must compile, got %v", err)
 
 	line := []byte(`{"type":"user","text":"CLÉ_SECRÈTE=hunter2"}` + "\n")
 	res, err := s.Scrub(line, transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(res.Out), transforms.Sentinel("key-name")) {
-		t.Errorf("the secret survived: %s", res.Out)
-	}
-	if strings.Contains(string(res.Out), "hunter2") {
-		t.Errorf("the secret survived verbatim: %s", res.Out)
-	}
+	require.NoError(t, err)
+	assert.Containsf(t, string(res.Out), transforms.Sentinel("key-name"), "the secret survived: %s", res.Out)
+	assert.NotContainsf(t, string(res.Out), "hunter2", "the secret survived verbatim: %s", res.Out)
 
 	// Dropping the whole gate is the fallback; dropping a rule is not.
 	res, err = s.Scrub([]byte(`{"type":"user","text":"GITHUB_TOKEN=hunter2"}`+"\n"),
 		transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(res.Out), "hunter2") {
-		t.Errorf("an ASCII name stopped firing next to a non-ASCII one: %s", res.Out)
-	}
+	require.NoError(t, err)
+	assert.NotContainsf(t, string(res.Out), "hunter2", "an ASCII name stopped firing next to a non-ASCII one: %s", res.Out)
 }
 
 // A negative floor is refused: `{-3,}` compiles as literal text ("never fires") while the
@@ -65,9 +56,7 @@ func TestNegativeEntropyMinLengthFailsTheBuild(t *testing.T) {
 // The token walk visits duplicate members independently instead of collapsing them into a map.
 func TestWideObjectKeepsDuplicateKeySemantics(t *testing.T) {
 	s, err := transforms.New(transforms.DefaultConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Widths either side of the threshold where the parse switches to an index.
 	for _, width := range []int{8, 63, 64, 65, 200} {
@@ -83,27 +72,15 @@ func TestWideObjectKeepsDuplicateKeySemantics(t *testing.T) {
 			b.WriteString("}\n")
 
 			res, err := s.Scrub([]byte(b.String()), transforms.Hint{Family: "claude-code", JSONL: true})
-			if err != nil {
-				t.Fatalf("width %d dup %v: %v", width, dup, err)
-			}
+			require.NoErrorf(t, err, "width %d dup %v: %v", width, dup, err)
 			name := fmt.Sprintf("width %d dup %v", width, dup)
 			if dup {
-				if res.LinesParsed != 1 || res.LinesRawScanned != 0 {
-					t.Errorf("%s: expected the line to stay decoded, got parsed=%d raw=%d",
-						name, res.LinesParsed, res.LinesRawScanned)
-				}
-				if strings.Contains(string(res.Out), "AKIAIOSFODNN7EXAMPLE") {
-					t.Errorf("%s: the secret survived: %s", name, res.Out)
-				}
+				assert.Truef(t, res.LinesParsed == 1 && res.LinesRawScanned == 0, "%s: expected the line to stay decoded, got parsed=%d raw=%d", name, res.LinesParsed, res.LinesRawScanned)
+				assert.NotContainsf(t, string(res.Out), "AKIAIOSFODNN7EXAMPLE", "%s: the secret survived: %s", name, res.Out)
 				continue
 			}
-			if res.LinesParsed != 1 || res.LinesRawScanned != 0 {
-				t.Errorf("%s: expected a parsed line, got parsed=%d raw=%d",
-					name, res.LinesParsed, res.LinesRawScanned)
-			}
-			if string(res.Out) != b.String() {
-				t.Errorf("%s: a record with nothing to redact must come out verbatim", name)
-			}
+			assert.Truef(t, res.LinesParsed == 1 && res.LinesRawScanned == 0, "%s: expected a parsed line, got parsed=%d raw=%d", name, res.LinesParsed, res.LinesRawScanned)
+			assert.Equalf(t, b.String(), string(res.Out), "%s: a record with nothing to redact must come out verbatim", name)
 		}
 	}
 }

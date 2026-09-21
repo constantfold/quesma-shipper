@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTickIntervalHonoursTheSupportedShapes(t *testing.T) {
@@ -19,9 +21,7 @@ func TestTickIntervalHonoursTheSupportedShapes(t *testing.T) {
 	}
 	for _, c := range cases {
 		got, warn := TickInterval(c.in)
-		if got != c.want || warn != "" {
-			t.Errorf("TickInterval(%q) = %v, warn=%q; want %v, no warning", c.in, got, warn, c.want)
-		}
+		assert.Truef(t, got == c.want && warn == "", "TickInterval(%q) = %v, warn=%q; want %v, no warning", c.in, got, warn, c.want)
 	}
 }
 
@@ -32,15 +32,11 @@ func TestTickIntervalRefusesUnparseableValues(t *testing.T) {
 		"-5m", // negative
 	} {
 		_, warn := TickInterval(in)
-		if warn == "" || !strings.Contains(warn, in) {
-			t.Errorf("TickInterval(%q) must warn naming the rejected value, got %q", in, warn)
-		}
+		assert.Truef(t, warn != "" && strings.Contains(warn, in), "TickInterval(%q) must warn naming the rejected value, got %q", in, warn)
 	}
 }
 
 func TestTickIntervalFloorsHotLoops(t *testing.T) {
 	got, warn := TickInterval("5s")
-	if got != MinTick || warn == "" {
-		t.Errorf("TickInterval(5s) = %v, warn=%q; want the %v floor and a warning", got, warn, MinTick)
-	}
+	assert.Truef(t, got == MinTick && warn != "", "TickInterval(5s) = %v, warn=%q; want the %v floor and a warning", got, warn, MinTick)
 }

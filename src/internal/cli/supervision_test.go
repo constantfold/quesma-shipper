@@ -1,11 +1,13 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestServiceInstallationBelongsToThePackager(t *testing.T) {
 	for _, cmd := range serviceCmd().Commands() {
-		if cmd.Name() == "install" {
-			t.Fatal("service install is exposed through the CLI")
-		}
+		require.NotEqual(t, "install", cmd.Name(), "service install is exposed through the CLI")
 	}
 }

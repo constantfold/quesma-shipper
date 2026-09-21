@@ -24,6 +24,8 @@ import (
 
 	"filippo.io/age"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/stretchr/testify/require"
+
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -97,9 +99,7 @@ func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
 		gomaxprocs: childGOMAXPROCS,
 	}
 	for _, dir := range []string{w.Home, w.Config, w.State} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
 	w.reset(t)
 	return w
@@ -123,13 +123,9 @@ func (w *world) reset(t *testing.T) {
 func seedIdentity(t *testing.T, w *world) {
 	t.Helper()
 	id, err := age.ParseX25519Identity(testAgeIdentity)
-	if err != nil {
-		t.Fatalf("the test identity does not parse: %v", err)
-	}
+	require.Falsef(t, err != nil, "the test identity does not parse: %v", err)
 	dir := filepath.Join(w.State, "trajectory-shipper")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o700))
 	unit := map[string]any{
 		"identity_schema": 1,
 		"install_id":      w.installID,
@@ -139,37 +135,27 @@ func seedIdentity(t *testing.T, w *world) {
 		"created_at":      fixtureMTime.Format(time.RFC3339),
 	}
 	raw, err := json.Marshal(unit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// 0600: Load refuses a unit any wider.
-	if err := os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600))
 }
 
 // Carries no send block on purpose: the destination arrives in the signed document.
 func writeClientConfig(t *testing.T, w *world) {
 	t.Helper()
 	dir := filepath.Join(w.Config, "trajectory-shipper")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o700))
 	body := "config_version: 1\n" +
 		// The 64-file default would truncate the corpus; this must stay above corpusFiles.
 		"max_files_per_run: 100000\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600))
 }
 
 // Enrollment is fixture state here: performance measures the shipper, not a particular control plane.
 func seedEnrollment(t *testing.T, w *world) {
 	t.Helper()
 	pub, private, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	peer.register(w.installID, w.org, pub, w.origin, w.bucket)
 	record := map[string]any{
 		"enrollment_schema": 2,
@@ -180,13 +166,9 @@ func seedEnrollment(t *testing.T, w *world) {
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
 	}
 	raw, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	path := filepath.Join(w.State, "trajectory-shipper", "enrollment.json")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
 }
 
 // The machine owner's half of the presigned path: this list alone decides whether a ticket's origin
@@ -195,18 +177,14 @@ func allowUploadTarget(t *testing.T, w *world) {
 	t.Helper()
 	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
 	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("no user config to pin an upload target in: %v", err)
-	}
+	require.Falsef(t, err != nil, "no user config to pin an upload target in: %v", err)
 	// The proxy serves plain HTTP, and the client refuses a cleartext origin nobody opted into.
 	block := "upload_targets:\n" +
 		"  - origin: " + w.origin + "\n" +
 		"    addressing: path-style\n" +
 		"    path_prefix: /" + w.bucket + "\n" +
 		"    allow_loopback_http: true\n"
-	if err := os.WriteFile(path, append(body, block...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, append(body, block...), 0o600))
 }
 
 // --- the binaries, built once ------------------------------------------------
@@ -243,9 +221,7 @@ func buildBinaries() {
 func shipperBinary(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(buildBinaries)
-	if buildErr != nil {
-		t.Fatalf("%v", buildErr)
-	}
+	require.Falsef(t, buildErr != nil, "%v", buildErr)
 	return shipperPath
 }
 
@@ -301,9 +277,7 @@ func measuredVar(kv string) bool {
 func (w *world) mustSync(t *testing.T) childObservation {
 	t.Helper()
 	obs := w.observedSync(t)
-	if obs.Err != nil {
-		t.Fatalf("quesma-shipper run --once: %v\n%s", obs.Err, obs.Output)
-	}
+	require.Falsef(t, obs.Err != nil, "quesma-shipper run --once: %v\n%s", obs.Err, obs.Output)
 	return obs
 }
 
@@ -360,9 +334,7 @@ func (w *world) currentKeys(t *testing.T) []string {
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(context.Background())
-		if err != nil {
-			t.Fatalf("list keys: %v", err)
-		}
+		require.Falsef(t, err != nil, "list keys: %v", err)
 		for _, o := range page.Contents {
 			keys = append(keys, strings.TrimPrefix(aws.ToString(o.Key), w.keyRoot+"/"))
 		}
@@ -380,9 +352,7 @@ func (w *world) versionCounts(t *testing.T) map[string]int {
 	}
 	for {
 		out, err := adminS3.ListObjectVersions(context.Background(), in)
-		if err != nil {
-			t.Fatalf("list versions: %v", err)
-		}
+		require.Falsef(t, err != nil, "list versions: %v", err)
 		for _, v := range out.Versions {
 			counts[strings.TrimPrefix(aws.ToString(v.Key), w.keyRoot+"/")]++
 		}

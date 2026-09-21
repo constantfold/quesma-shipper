@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
@@ -22,18 +25,14 @@ func authorizeAgainst(t *testing.T, handler http.HandlerFunc) (controlplane.Auth
 	t.Cleanup(srv.Close)
 
 	_, key, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	client, err := controlplane.New(controlplane.Options{
 		Endpoint:     srv.URL,
 		InstallID:    fixtureInstallID,
 		Organization: "acme",
 		DeviceKey:    key,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return client.AuthorizeUploads(context.Background(), sampleAuthorizeRequest())
 }
 
@@ -81,14 +80,10 @@ func TestAuthorizeUploadsStatusMapping(t *testing.T) {
 			_, err := authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "refused for the test", tc.status)
 			})
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("HTTP %d produced %v, want %v", tc.status, err, tc.want)
-			}
+			require.ErrorIsf(t, err, tc.want, "HTTP %d produced %v, want %v", tc.status, err, tc.want)
 			// An unavailable server must never look like a revoked install: that would
 			// turn a bounded wait into a permanently dead run.
-			if got := errors.Is(err, formats.ErrCredentialsRefused); got != tc.wantRefused {
-				t.Errorf("HTTP %d reports refused credentials %v, want %v", tc.status, got, tc.wantRefused)
-			}
+			assert.Equal(t, errors.Is(err, formats.ErrCredentialsRefused), tc.wantRefused)
 		})
 	}
 }
@@ -101,12 +96,8 @@ func TestAuthorizeUploadsIgnoresUnknownResponseFields(t *testing.T) {
 		ticket := strings.TrimSuffix(alreadyPresentTicketJSON(), "}") + `,"future_field":"unknown"}`
 		w.Write([]byte(`{"tickets":[` + ticket + `],"future_top_level":1}`))
 	})
-	if err != nil {
-		t.Fatalf("an unknown v2 response field was refused: %v", err)
-	}
-	if len(resp.Tickets) != 1 || !resp.Tickets[0].AlreadyPresent {
-		t.Fatalf("want one already-present ticket, got %+v", resp.Tickets)
-	}
+	require.NoErrorf(t, err, "an unknown v2 response field was refused: %v", err)
+	require.Truef(t, len(resp.Tickets) == 1 && resp.Tickets[0].AlreadyPresent, "want one already-present ticket, got %+v", resp.Tickets)
 }
 
 func TestAuthorizeUploadsAcceptsAlreadyPresentAndRejectsMixedCapability(t *testing.T) {
@@ -115,18 +106,14 @@ func TestAuthorizeUploadsAcceptsAlreadyPresentAndRejectsMixedCapability(t *testi
 		w.Write([]byte(`{"tickets":[{"ticket_id":"` + fixtureTicketID +
 			`","object_id":"trajectory-1","already_present":true}]}`))
 	})
-	if err != nil || !response.Tickets[0].AlreadyPresent {
-		t.Fatalf("valid already-present answer: response=%+v error=%v", response, err)
-	}
+	require.Truef(t, err == nil && response.Tickets[0].AlreadyPresent, "valid already-present answer: response=%+v error=%v", response, err)
 
 	_, err = authorizeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"tickets":[{"ticket_id":"` + fixtureTicketID +
 			`","object_id":"trajectory-1","already_present":true,"method":"PUT"}]}`))
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid already-present") {
-		t.Fatalf("a mixed already-present capability must be refused, got %v", err)
-	}
+	require.Truef(t, err != nil && strings.Contains(err.Error(), "invalid already-present"), "a mixed already-present capability must be refused, got %v", err)
 }
 
 // A batch is authorized whole or not at all, so a short ticket list is a partial authorization
@@ -136,9 +123,7 @@ func TestAuthorizeUploadsRejectsMismatchedBatch(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"tickets":[]}`))
 	})
-	if err == nil || !strings.Contains(err.Error(), "issued 0 tickets for 1 objects") {
-		t.Fatalf("want an error naming the ticket and object counts, got %v", err)
-	}
+	require.Truef(t, err != nil && strings.Contains(err.Error(), "issued 0 tickets for 1 objects"), "want an error naming the ticket and object counts, got %v", err)
 }
 
 // A redirect is refused rather than followed: following one either strips the device signature
@@ -149,15 +134,9 @@ func TestAuthorizeUploadsRefusesRedirect(t *testing.T) {
 		hops++
 		http.Redirect(w, r, "https://elsewhere.example.invalid"+r.URL.Path, http.StatusTemporaryRedirect)
 	})
-	if err == nil {
-		t.Fatal("a redirected authorization must fail")
-	}
-	if hops != 1 {
-		t.Errorf("the client made %d requests, a refused redirect is exactly 1", hops)
-	}
-	if !strings.Contains(err.Error(), "refusing redirect to elsewhere.example.invalid") {
-		t.Errorf("the error should name the host it refused to follow: %v", err)
-	}
+	require.Error(t, err, "a redirected authorization must fail")
+	assert.Equalf(t, 1, hops, "the client made %d requests, a refused redirect is exactly 1", hops)
+	assert.Containsf(t, err.Error(), "refusing redirect to elsewhere.example.invalid", "the error should name the host it refused to follow: %v", err)
 }
 
 // The guards run before any network call, so a malformed batch cannot reach the control plane.
@@ -170,24 +149,18 @@ func TestAuthorizeUploadsRefusesIncompleteRequest(t *testing.T) {
 	for field, blank := range cases {
 		t.Run(field, func(t *testing.T) {
 			_, key, err := ed25519.GenerateKey(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			client, err := controlplane.New(controlplane.Options{
 				Endpoint:     "https://control.example.invalid",
 				InstallID:    fixtureInstallID,
 				Organization: "acme",
 				DeviceKey:    key,
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			req := sampleAuthorizeRequest()
 			blank(&req)
 			_, err = client.AuthorizeUploads(context.Background(), req)
-			if err == nil || !strings.Contains(err.Error(), field) {
-				t.Fatalf("a batch missing %s must be refused by name, got %v", field, err)
-			}
+			require.Truef(t, err != nil && strings.Contains(err.Error(), field), "a batch missing %s must be refused by name, got %v", field, err)
 		})
 	}
 }
@@ -197,12 +170,8 @@ func TestAuthorizeUploadsAcceptsAnAlreadyPresentTicket(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"tickets":[` + alreadyPresentTicketJSON() + `]}`))
 	})
-	if err != nil {
-		t.Fatalf("an already-present answer must decode: %v", err)
-	}
-	if len(resp.Tickets) != 1 || !resp.Tickets[0].AlreadyPresent {
-		t.Fatalf("want one already-present ticket, got %+v", resp.Tickets)
-	}
+	require.NoErrorf(t, err, "an already-present answer must decode: %v", err)
+	require.Truef(t, len(resp.Tickets) == 1 && resp.Tickets[0].AlreadyPresent, "want one already-present ticket, got %+v", resp.Tickets)
 	if resp.Tickets[0].URL != "" || len(resp.Tickets[0].RequiredHeaders) != 0 {
 		t.Errorf("an already-present ticket carried a capability: %+v", resp.Tickets[0])
 	}
@@ -212,10 +181,6 @@ func TestAuthorizeUploadsAcceptsAnAlreadyPresentTicket(t *testing.T) {
 func TestNewWriterIDIsFresh(t *testing.T) {
 	first := controlplane.NewWriterID()
 	second := controlplane.NewWriterID()
-	if first == second {
-		t.Fatalf("two writer ids agree: %s", first)
-	}
-	if len(first) != len("00000000-0000-0000-0000-000000000000") {
-		t.Errorf("writer id %q is not a uuid", first)
-	}
+	require.NotEqualf(t, second, first, "two writer ids agree: %s", first)
+	assert.Lenf(t, first, len("00000000-0000-0000-0000-000000000000"), "writer id %q is not a uuid", first)
 }

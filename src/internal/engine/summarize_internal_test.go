@@ -3,6 +3,8 @@ package engine
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
@@ -22,16 +24,10 @@ func TestSummarizeTotalsWhatTheOutcomesRecord(t *testing.T) {
 	}}
 	summarize(&rep)
 
-	if rep.BytesRead != 4700 {
-		t.Errorf("BytesRead = %d, want 4700", rep.BytesRead)
-	}
-	if rep.BytesSealed != 1300 {
-		t.Errorf("BytesSealed = %d, want 1300", rep.BytesSealed)
-	}
+	assert.Equalf(t, int64(4700), rep.BytesRead, "BytesRead = %d, want 4700", rep.BytesRead)
+	assert.Equalf(t, int64(1300), rep.BytesSealed, "BytesSealed = %d, want 1300", rep.BytesSealed)
 	// Over shipped files only: a failed 200-byte read does not pull the median down.
-	if rep.MedianFileBytes != 3000 {
-		t.Errorf("MedianFileBytes = %d, want 3000", rep.MedianFileBytes)
-	}
+	assert.Equalf(t, int64(3000), rep.MedianFileBytes, "MedianFileBytes = %d, want 3000", rep.MedianFileBytes)
 }
 
 // An enricher payload is built from a database and carries a BytesIn even when nothing ships, so
@@ -49,14 +45,9 @@ func TestSummarizeLeavesOutDerivedObjects(t *testing.T) {
 	}}}
 	summarize(&rep)
 
-	if rep.BytesRead != 1000 || rep.BytesSealed != 400 {
-		t.Errorf("derived bytes leaked into the totals: read %d sealed %d, want 1000 and 400",
-			rep.BytesRead, rep.BytesSealed)
-	}
+	assert.Truef(t, rep.BytesRead == 1000 && rep.BytesSealed == 400, "derived bytes leaked into the totals: read %d sealed %d, want 1000 and 400", rep.BytesRead, rep.BytesSealed)
 	// The median is over the input size of files the run read; 8000 was never a file.
-	if rep.MedianFileBytes != 1000 {
-		t.Errorf("MedianFileBytes = %d, want 1000", rep.MedianFileBytes)
-	}
+	assert.Equalf(t, int64(1000), rep.MedianFileBytes, "MedianFileBytes = %d, want 1000", rep.MedianFileBytes)
 }
 
 // The project map is written by the shipper itself and re-ships on every run, so counting it
@@ -69,16 +60,11 @@ func TestSummarizeLeavesOutWhatTheShipperWroteItself(t *testing.T) {
 	}}
 	summarize(&rep)
 
-	if rep.BytesRead != 0 || rep.BytesSealed != 0 || rep.MedianFileBytes != 0 {
-		t.Errorf("an idle run totalled read %d sealed %d median %d, want zeroes",
-			rep.BytesRead, rep.BytesSealed, rep.MedianFileBytes)
-	}
+	assert.Truef(t, rep.BytesRead == 0 && rep.BytesSealed == 0 && rep.MedianFileBytes == 0, "an idle run totalled read %d sealed %d median %d, want zeroes", rep.BytesRead, rep.BytesSealed, rep.MedianFileBytes)
 }
 
 func TestSummarizeOfAnEmptyRunIsAllZeroes(t *testing.T) {
 	rep := Report{}
 	summarize(&rep)
-	if rep.BytesRead != 0 || rep.BytesSealed != 0 || rep.MedianFileBytes != 0 {
-		t.Errorf("an empty run summarised to %+v", rep)
-	}
+	assert.Truef(t, rep.BytesRead == 0 && rep.BytesSealed == 0 && rep.MedianFileBytes == 0, "an empty run summarised to %+v", rep)
 }

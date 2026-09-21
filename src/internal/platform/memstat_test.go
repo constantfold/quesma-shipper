@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
@@ -16,15 +19,9 @@ func TestTheDefaultLimitIsApplied(t *testing.T) {
 	t.Cleanup(func() { debug.SetMemoryLimit(previous) })
 
 	applied, fromEnv := platform.SetSoftLimit(platform.DefaultSoftLimit)
-	if fromEnv {
-		t.Fatal("reported GOMEMLIMIT with none set")
-	}
-	if applied != platform.DefaultSoftLimit {
-		t.Errorf("applied %d, want %d", applied, platform.DefaultSoftLimit)
-	}
-	if got := debug.SetMemoryLimit(-1); got != platform.DefaultSoftLimit {
-		t.Errorf("the runtime has %d, want %d — the limit was never set", got, platform.DefaultSoftLimit)
-	}
+	require.True(t, !fromEnv, "reported GOMEMLIMIT with none set")
+	assert.Equalf(t, int64(platform.DefaultSoftLimit), applied, "applied %d, want %d", applied, platform.DefaultSoftLimit)
+	assert.Equal(t, int64(platform.DefaultSoftLimit), debug.SetMemoryLimit(-1))
 }
 
 // An operator who set GOMEMLIMIT has decided what this process may use; overriding them silently would be worse.
@@ -37,21 +34,15 @@ func TestGOMEMLIMITWins(t *testing.T) {
 	debug.SetMemoryLimit(operatorChoice) // what the runtime does with the variable at startup
 
 	applied, fromEnv := platform.SetSoftLimit(platform.DefaultSoftLimit)
-	if !fromEnv {
-		t.Error("GOMEMLIMIT was set and the default was applied anyway")
-	}
-	if applied != operatorChoice {
-		t.Errorf("reported %d, want the operator's %d", applied, operatorChoice)
-	}
+	assert.True(t, fromEnv, "GOMEMLIMIT was set and the default was applied anyway")
+	assert.Equalf(t, int64(operatorChoice), applied, "reported %d, want the operator's %d", applied, operatorChoice)
 }
 
 // The cap is process-wide, so a test that moves it puts it back, registered before the t.Setenv that follows.
 func capFromEnv(t *testing.T, value string) {
 	t.Helper()
 	t.Cleanup(func() {
-		if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-			t.Fatalf("restoring the cap: %v", err)
-		}
+		require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
 	})
 	t.Setenv(platform.EnvMaxInFlightBytes, value)
 }
@@ -59,12 +50,8 @@ func capFromEnv(t *testing.T, value string) {
 func TestTheInFlightCapTakesTheEnvironmentOverride(t *testing.T) {
 	capFromEnv(t, "4194304")
 
-	if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-		t.Fatalf("applying a valid cap: %v", err)
-	}
-	if got := platform.MaxInFlightBytes(); got != 4<<20 {
-		t.Errorf("cap = %d, want %d", got, 4<<20)
-	}
+	require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
+	assert.Equal(t, int64(4<<20), platform.MaxInFlightBytes())
 }
 
 // Unset is the production path; blank is what a cleared shell variable leaves behind and must read the same.
@@ -77,17 +64,11 @@ func TestTheInFlightCapDefaultsWithoutTheEnvironment(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Moved off the default first, so the call below reports a cap it restored rather than one it never touched.
 			capFromEnv(t, "4194304")
-			if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-				t.Fatalf("applying a valid cap: %v", err)
-			}
+			require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
 
 			clearIt(t)
-			if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-				t.Fatalf("applying %s: %v", name, err)
-			}
-			if got := platform.MaxInFlightBytes(); got != platform.DefaultMaxInFlightBytes {
-				t.Errorf("cap = %d, want the default %d", got, platform.DefaultMaxInFlightBytes)
-			}
+			require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
+			assert.Equal(t, int64(platform.DefaultMaxInFlightBytes), platform.MaxInFlightBytes())
 		})
 	}
 }
@@ -100,15 +81,9 @@ func TestAnUnusableInFlightCapIsRefused(t *testing.T) {
 			capFromEnv(t, value)
 
 			err := platform.ApplyMaxInFlightBytesFromEnv()
-			if err == nil {
-				t.Fatalf("%s=%q was accepted", platform.EnvMaxInFlightBytes, value)
-			}
-			if !strings.Contains(err.Error(), platform.EnvMaxInFlightBytes) || !strings.Contains(err.Error(), value) {
-				t.Errorf("diagnostic %q names neither the variable nor the value", err)
-			}
-			if got := platform.MaxInFlightBytes(); got != before {
-				t.Errorf("cap moved to %d on a refused value; it must stay at %d", got, before)
-			}
+			require.Error(t, err)
+			assert.Truef(t, strings.Contains(err.Error(), platform.EnvMaxInFlightBytes) && strings.Contains(err.Error(), value), "diagnostic %q names neither the variable nor the value", err)
+			assert.Equal(t, platform.MaxInFlightBytes(), before)
 		})
 	}
 }
@@ -120,12 +95,8 @@ func TestAReadingDescribesTheRun(t *testing.T) {
 		junk[i] = byte(i)
 	}
 	d := platform.Delta{Before: before, After: platform.ReadMemStats()}
-	if d.Growth() <= 0 {
-		t.Errorf("allocating 32 MB showed growth of %d", d.Growth())
-	}
-	if d.String() == "" {
-		t.Error("empty summary")
-	}
+	assert.Truef(t, d.Growth() > 0, "allocating 32 MB showed growth of %d", d.Growth())
+	assert.NotEqual(t, "", d.String(), "empty summary")
 	runtimeKeepAlive(junk)
 }
 

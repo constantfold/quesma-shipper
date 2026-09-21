@@ -7,19 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
 func TestServiceStateTimeoutSaysNoRestartWasRequested(t *testing.T) {
 	err := serviceStateTimeoutError(context.DeadlineExceeded)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("service-state timeout = %v, want deadline exceeded", err)
-	}
+	require.ErrorIsf(t, err, context.DeadlineExceeded, "service-state timeout = %v, want deadline exceeded", err)
 	for _, want := range []string{"5s", "update is installed", "restart was not requested"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("service-state timeout %q does not contain %q", err, want)
-		}
+		assert.Containsf(t, err.Error(), want, "service-state timeout %q does not contain %q", err, want)
 	}
 	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(err.Error(), cmd) {
 		t.Errorf("service-state timeout %q does not offer %q", err, cmd)
@@ -31,9 +30,7 @@ func TestServiceStateTimeoutSaysNoRestartWasRequested(t *testing.T) {
 func TestRestartTimeoutKeepsTheSuccessfulUpdateClear(t *testing.T) {
 	got := restartTimeoutWarning(5*time.Minute + 30*time.Second)
 	for _, want := range []string{"5m30s", "update is installed", "new version"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("restart timeout warning %q does not contain %q", got, want)
-		}
+		assert.Containsf(t, got, want, "restart timeout warning %q does not contain %q", got, want)
 	}
 	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(got, cmd) {
 		t.Errorf("restart timeout warning %q does not offer %q", got, cmd)
@@ -56,9 +53,7 @@ func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) 
 		{"no service entry is the one case with nothing to restart", packaging.ServiceStatus{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := restartWanted(tc.st); got != tc.want {
-				t.Errorf("restartWanted(%+v) = %v, want %v", tc.st, got, tc.want)
-			}
+			assert.Equal(t, restartWanted(tc.st), tc.want)
 		})
 	}
 }
@@ -68,9 +63,7 @@ func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) 
 func TestConfigUnreadableWarningKeepsTheStaleDaemonVisible(t *testing.T) {
 	got := configUnreadableWarning(errors.New("state_dir is not absolute"))
 	for _, want := range []string{"state_dir is not absolute", "not restarted", "previous version"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("config-unreadable warning %q does not contain %q", got, want)
-		}
+		assert.Containsf(t, got, want, "config-unreadable warning %q does not contain %q", got, want)
 	}
 	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(got, cmd) {
 		t.Errorf("config-unreadable warning %q does not offer %q", got, cmd)
@@ -110,12 +103,8 @@ func TestTheBootGateKeepsItsPromises(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run, why := selfUpdateGate(tc.build, env(tc.vars), tc.hop)
-			if run != tc.wantRun {
-				t.Errorf("run = %v, want %v", run, tc.wantRun)
-			}
-			if (why != "") != tc.loud {
-				t.Errorf("why = %q, want loud=%v", why, tc.loud)
-			}
+			assert.Equalf(t, tc.wantRun, run, "run = %v, want %v", run, tc.wantRun)
+			assert.Equalf(t, tc.loud, (why != ""), "why = %q, want loud=%v", why, tc.loud)
 		})
 	}
 }

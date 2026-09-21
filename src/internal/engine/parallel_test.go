@@ -2,13 +2,14 @@ package engine_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"filippo.io/age"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -29,15 +30,9 @@ func TestTheBudgetIsNotOvershotByFilesInFlight(t *testing.T) {
 
 	rep := f.runWith(func(o *engine.Options) { o.Workers = 8 })
 
-	if rep.Shipped != 2 {
-		t.Errorf("budget 2 shipped %d files", rep.Shipped)
-	}
-	if !rep.Truncated {
-		t.Error("a run that left 18 files behind did not say so")
-	}
-	if got := len(f.port.keys()); got != 2 {
-		t.Errorf("%d objects reached the store; the budget allows 2", got)
-	}
+	assert.Equalf(t, 2, rep.Shipped, "budget 2 shipped %d files", rep.Shipped)
+	assert.True(t, rep.Truncated, "a run that left 18 files behind did not say so")
+	assert.Equal(t, 2, len(f.port.keys()))
 }
 
 // out.Files is index-addressed, so the report reads in candidate order however work interleaved.
@@ -53,13 +48,9 @@ func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
 	rep := f.runWith(func(o *engine.Options) { o.Workers = 8 })
 
 	files := rep.Sources[0].Files
-	if len(files) != len(want) {
-		t.Fatalf("want %d files in the report, got %d", len(want), len(files))
-	}
+	require.Lenf(t, files, len(want), "want %d files in the report, got %d", len(want), len(files))
 	for i, fo := range files {
-		if fo.RelPath != want[i] {
-			t.Errorf("position %d: want %s, got %s", i, want[i], fo.RelPath)
-		}
+		assert.Equalf(t, want[i], fo.RelPath, "position %d: want %s, got %s", i, want[i], fo.RelPath)
 	}
 }
 
@@ -75,15 +66,9 @@ func TestARefusedInstallDoesNotAttemptEveryFile(t *testing.T) {
 	o.Workers = 4
 	rep, err := engine.Run(context.Background(), f.store, o)
 
-	if !errors.Is(err, formats.ErrCredentialsRefused) {
-		t.Fatalf("want a refusal error from the run, got %v", err)
-	}
-	if rep.Failed != 1 {
-		t.Errorf("%d refusals counted; duplicates in flight are the same fact about the same install", rep.Failed)
-	}
-	if got := f.port.putCount(); got != 0 {
-		t.Errorf("%d objects stored against a revoked install", got)
-	}
+	require.ErrorIsf(t, err, formats.ErrCredentialsRefused, "want a refusal error from the run, got %v", err)
+	assert.Equalf(t, 1, rep.Failed, "%d refusals counted; duplicates in flight are the same fact about the same install", rep.Failed)
+	assert.Equal(t, 0, f.port.putCount())
 	if got := len(f.port.sizes()); got >= 20 {
 		t.Errorf("%d authorizations against a revoked install; admission never stopped", got)
 	}
@@ -179,12 +164,8 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 		o.Recipients = []age.Recipient{slow}
 	})
 
-	if rep.Shipped != 8 {
-		t.Fatalf("want 8 shipped, got %+v", rep)
-	}
-	if slow.Peak() < 2 {
-		t.Errorf("peak concurrent seals %d; the pass ran sequentially", slow.Peak())
-	}
+	require.Equalf(t, 8, rep.Shipped, "want 8 shipped, got %+v", rep)
+	assert.Truef(t, slow.Peak() >= 2, "peak concurrent seals %d; the pass ran sequentially", slow.Peak())
 }
 
 // Authorization groups are not bound by the compute pool: a sealed object leaves its compute slot
@@ -205,12 +186,8 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 		o.Upload = port
 	})
 
-	if rep.Shipped != files {
-		t.Fatalf("want %d shipped, got %+v", files, rep)
-	}
-	if port.Peak() < 2 {
-		t.Errorf("peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.Peak())
-	}
+	require.Equalf(t, files, rep.Shipped, "want %d shipped, got %+v", files, rep)
+	assert.Truef(t, port.Peak() >= 2, "peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.Peak())
 }
 
 // Workers=1, UploadWorkers=1 pins both pools to one file: same decisions, same order, same
@@ -223,12 +200,8 @@ func TestOneWorkerBehavesExactlyLikeTheOldLoop(t *testing.T) {
 
 	pin := func(o *engine.Options) { o.Workers, o.UploadWorkers = 1, 1 }
 	rep := f.runWith(pin)
-	if rep.Shipped != 6 || rep.Failed != 0 {
-		t.Fatalf("first pass: want 6 shipped, got %+v", rep)
-	}
+	require.Truef(t, rep.Shipped == 6 && rep.Failed == 0, "first pass: want 6 shipped, got %+v", rep)
 
 	again := f.runWith(pin)
-	if again.Unchanged != 6 || again.Shipped != 0 {
-		t.Errorf("second pass: want 6 unchanged, got %+v", again)
-	}
+	assert.Truef(t, again.Unchanged == 6 && again.Shipped == 0, "second pass: want 6 unchanged, got %+v", again)
 }

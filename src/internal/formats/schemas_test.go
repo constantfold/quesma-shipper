@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
@@ -20,20 +22,14 @@ func TestAllCompile(t *testing.T) {
 	}
 
 	entries, err := fs.Glob(formats.FS, "*.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != len(formats.All) {
-		t.Errorf("embedded schemas %v, All lists %v — keep them in step", entries, formats.All)
-	}
+	require.NoError(t, err)
+	assert.Lenf(t, entries, len(formats.All), "embedded schemas %v, All lists %v — keep them in step", entries, formats.All)
 }
 
 func decode(t *testing.T, doc string) any {
 	t.Helper()
 	v, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(doc)))
-	if err != nil {
-		t.Fatalf("test document is not valid JSON: %v", err)
-	}
+	require.NoErrorf(t, err, "test document is not valid JSON: %v", err)
 	return v
 }
 
@@ -44,9 +40,7 @@ const anotherSha = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6
 
 func TestFingerprintStateMinimal(t *testing.T) {
 	doc := `{"state_schema": 1, "entries": []}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err != nil {
-		t.Fatalf("minimal document should validate: %v", err)
-	}
+	require.NoError(t, formats.Validate(formats.FingerprintState, decode(t, doc)))
 }
 
 func TestFingerprintStateFull(t *testing.T) {
@@ -69,24 +63,18 @@ func TestFingerprintStateFull(t *testing.T) {
 	    "backoff_until": "2026-07-30T11:00:00Z"
 	  }]
 	}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err != nil {
-		t.Fatalf("full document should validate: %v", err)
-	}
+	require.NoError(t, formats.Validate(formats.FingerprintState, decode(t, doc)))
 }
 
 // An unknown state_schema means downgrade or corruption, refused rather than guessed at.
 func TestFingerprintStateRejectsForeignSchemaVersion(t *testing.T) {
 	doc := `{"state_schema": 2, "entries": []}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err == nil {
-		t.Fatal("state_schema 2 must be rejected, never guessed at")
-	}
+	require.Error(t, formats.Validate(formats.FingerprintState, decode(t, doc)), "state_schema 2 must be rejected, never guessed at")
 }
 
 func TestFingerprintStateRejectsUnknownField(t *testing.T) {
 	doc := `{"state_schema": 1, "entries": [], "pending_uploads": []}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err == nil {
-		t.Fatal("unknown top-level fields must be rejected")
-	}
+	require.Error(t, formats.Validate(formats.FingerprintState, decode(t, doc)), "unknown top-level fields must be rejected")
 }
 
 // The entry key is (source_id, native_path). A path-less entry keys on nothing.
@@ -94,9 +82,7 @@ func TestFingerprintStateRequiresFullKey(t *testing.T) {
 	doc := `{"state_schema": 1, "entries": [{
 	  "source_id": "claude-code-transcripts"
 	}]}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err == nil {
-		t.Fatal("an entry without native_path must be rejected")
-	}
+	require.Error(t, formats.Validate(formats.FingerprintState, decode(t, doc)), "an entry without native_path must be rejected")
 }
 
 func TestFingerprintStateRejectsNonSHA256Hash(t *testing.T) {
@@ -105,9 +91,7 @@ func TestFingerprintStateRejectsNonSHA256Hash(t *testing.T) {
 	  "native_path": "/x/a.jsonl",
 	  "source_hash": "deadbeef"
 	}]}`
-	if err := formats.Validate(formats.FingerprintState, decode(t, doc)); err == nil {
-		t.Fatal("a truncated or non-hex hash must be rejected")
-	}
+	require.Error(t, formats.Validate(formats.FingerprintState, decode(t, doc)), "a truncated or non-hex hash must be rejected")
 }
 
 // --- manifest ---------------------------------------------------------------
@@ -130,17 +114,13 @@ func minimalManifest() string {
 }
 
 func TestManifestMinimal(t *testing.T) {
-	if err := formats.Validate(formats.Manifest, decode(t, minimalManifest())); err != nil {
-		t.Fatalf("minimal manifest should validate: %v", err)
-	}
+	require.NoError(t, formats.Validate(formats.Manifest, decode(t, minimalManifest())))
 }
 
 // source_hash is the pre-redaction identity, shipped_hash the post-redaction check; both required.
 func TestManifestRequiresBothHashes(t *testing.T) {
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(minimalManifest()), &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(minimalManifest()), &doc))
 	for _, missing := range []string{"source_hash", "shipped_hash"} {
 		t.Run(missing, func(t *testing.T) {
 			clone := map[string]any{}
@@ -150,12 +130,8 @@ func TestManifestRequiresBothHashes(t *testing.T) {
 				}
 			}
 			b, err := json.Marshal(clone)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := formats.Validate(formats.Manifest, decode(t, string(b))); err == nil {
-				t.Fatalf("a manifest without %s must be rejected", missing)
-			}
+			require.NoError(t, err)
+			require.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 		})
 	}
 }
@@ -163,14 +139,10 @@ func TestManifestRequiresBothHashes(t *testing.T) {
 // A derived object without provenance is unverifiable, and it is the only carrier of DB fields.
 func TestManifestDerivedRequiresProvenance(t *testing.T) {
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(minimalManifest()), &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(minimalManifest()), &doc))
 	doc["derived"] = true
 	b, _ := json.Marshal(doc)
-	if err := formats.Validate(formats.Manifest, decode(t, string(b))); err == nil {
-		t.Fatal("derived: true without enricher/derived_from/enrich_status must be rejected")
-	}
+	require.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))), "derived: true without enricher/derived_from/enrich_status must be rejected")
 
 	doc["enricher"] = map[string]any{"id": "cursor-transcript-join", "version": 1}
 	doc["derived_from"] = []string{sha}
@@ -182,62 +154,46 @@ func TestManifestDerivedRequiresProvenance(t *testing.T) {
 		"rows_read":   148,
 	}
 	b, _ = json.Marshal(doc)
-	if err := formats.Validate(formats.Manifest, decode(t, string(b))); err != nil {
-		t.Fatalf("a fully attributed derived manifest should validate: %v", err)
-	}
+	require.NoError(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 }
 
 // Rule-id and count granularity only: byte ranges would locate and size each redacted secret.
 func TestManifestRedactionSummaryRejectsByteRanges(t *testing.T) {
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(minimalManifest()), &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(minimalManifest()), &doc))
 	doc["redaction"] = map[string]any{
 		"density":   0.012,
 		"rule_hits": map[string]int{"aws-secret-key": 4, "email": 2},
 		"scan_mode": "decoded_json_values",
 	}
 	b, _ := json.Marshal(doc)
-	if err := formats.Validate(formats.Manifest, decode(t, string(b))); err != nil {
-		t.Fatalf("rule-id + count summary should validate: %v", err)
-	}
+	require.NoError(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 
 	doc["redaction"] = map[string]any{
 		"density": 0.012,
 		"spans":   []any{map[string]int{"offset": 128, "length": 40}},
 	}
 	b, _ = json.Marshal(doc)
-	if err := formats.Validate(formats.Manifest, decode(t, string(b))); err == nil {
-		t.Fatal("byte-range spans in a redaction summary must be rejected")
-	}
+	require.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))), "byte-range spans in a redaction summary must be rejected")
 }
 
 func TestManifestShapeSniffIsAClosedEnum(t *testing.T) {
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(minimalManifest()), &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(minimalManifest()), &doc))
 	for _, v := range []string{"ok", "empty", "unexpected_shape", "unreadable"} {
 		doc["shape_sniff"] = v
 		b, _ := json.Marshal(doc)
-		if err := formats.Validate(formats.Manifest, decode(t, string(b))); err != nil {
-			t.Errorf("shape_sniff %q should validate: %v", v, err)
-		}
+		assert.NoError(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 	}
 	doc["shape_sniff"] = "probably_fine"
 	b, _ := json.Marshal(doc)
-	if err := formats.Validate(formats.Manifest, decode(t, string(b))); err == nil {
-		t.Fatal("shape_sniff must be a closed enum (pin 11)")
-	}
+	require.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))), "shape_sniff must be a closed enum (pin 11)")
 }
 
 // A retired container's fields must not reappear by accident.
 func TestManifestRejectsBundleFields(t *testing.T) {
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(minimalManifest()), &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(minimalManifest()), &doc))
 	for _, field := range []string{"prev_bundle_hash", "bundle_content_id", "entries"} {
 		clone := map[string]any{}
 		for k, v := range doc {
@@ -245,8 +201,6 @@ func TestManifestRejectsBundleFields(t *testing.T) {
 		}
 		clone[field] = "x"
 		b, _ := json.Marshal(clone)
-		if err := formats.Validate(formats.Manifest, decode(t, string(b))); err == nil {
-			t.Errorf("manifest must reject %q: one file, one object", field)
-		}
+		assert.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 	}
 }

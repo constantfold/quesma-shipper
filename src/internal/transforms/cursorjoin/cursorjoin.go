@@ -1,8 +1,5 @@
-// Package cursorjoin is the cursor-transcript-join enricher: Cursor's transcript JSONL records
-// intent with no outcomes, the global state.vscdb holds exactly those missing fields, and no
-// store rows ship, so this derived object is their only carrier. Every failure path degrades to
-// raw JSONL plus a loud alarm, never to a partial object, which would look complete downstream.
-// The alignment rules are undocumented vendor behaviour and drift, hence the mismatch alarm.
+// Package cursorjoin joins transcript intent with outcomes from Cursor’s SQLite store.
+// Unexplained alignment failures ship raw JSONL with an alarm, never a misleading partial join.
 package cursorjoin
 
 import (

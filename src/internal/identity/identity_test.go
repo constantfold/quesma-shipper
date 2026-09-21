@@ -2,11 +2,15 @@ package identity_test
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
@@ -15,23 +19,13 @@ func TestMintThenLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
 	minted, err := identity.Mint(dir)
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
+	require.NoErrorf(t, err, "mint: %v", err)
 	loaded, err := identity.Load(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	require.NoErrorf(t, err, "load: %v", err)
 
-	if loaded.InstallID != minted.InstallID {
-		t.Errorf("install_id: got %s want %s", loaded.InstallID, minted.InstallID)
-	}
-	if loaded.Identity.String() != minted.Identity.String() {
-		t.Error("age identity did not survive the round trip")
-	}
-	if string(loaded.NameKey) != string(minted.NameKey) {
-		t.Error("name_key did not survive the round trip")
-	}
+	assert.Truef(t, loaded.InstallID == minted.InstallID, "install_id: got %s want %s", loaded.InstallID, minted.InstallID)
+	assert.Equal(t, minted.Identity.String(), loaded.Identity.String(), "age identity did not survive the round trip")
+	assert.Equal(t, string(minted.NameKey), string(loaded.NameKey), "name_key did not survive the round trip")
 	if !loaded.CreatedAt.Equal(minted.CreatedAt) {
 		t.Errorf("created_at: got %s want %s", loaded.CreatedAt, minted.CreatedAt)
 	}
@@ -45,9 +39,7 @@ func TestUnitIsOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(entries) != 1 || entries[0].Name() != identity.FileName {
 		var names []string
 		for _, e := range entries {
@@ -66,12 +58,8 @@ func TestMintIsSecretByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(dir, identity.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("unit file mode is %#o, want 0600", perm)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
 }
 
 // Minting over an existing unit would orphan every object the previous one named and every
@@ -96,16 +84,10 @@ func TestLoadRefusesLooseMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, identity.FileName)
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Chmod(path, 0o644))
 	_, err := identity.Load(dir)
-	if err == nil {
-		t.Fatal("a group/world-readable unit must be refused")
-	}
-	if !strings.Contains(err.Error(), "world-accessible") {
-		t.Errorf("error should name the permission problem, got: %v", err)
-	}
+	require.Error(t, err, "a group/world-readable unit must be refused")
+	assert.Containsf(t, err.Error(), "world-accessible", "error should name the permission problem, got: %v", err)
 }
 
 func TestLoadRejectsForeignSchema(t *testing.T) {
@@ -115,16 +97,10 @@ func TestLoadRejectsForeignSchema(t *testing.T) {
 	}
 	path := filepath.Join(dir, identity.FileName)
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	bumped := strings.Replace(string(raw), `"identity_schema": 1`, `"identity_schema": 2`, 1)
-	if bumped == string(raw) {
-		t.Fatal("test could not bump identity_schema; file shape changed")
-	}
-	if err := os.WriteFile(path, []byte(bumped), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NotEqual(t, string(raw), bumped, "test could not bump identity_schema; file shape changed")
+	require.NoError(t, os.WriteFile(path, []byte(bumped), 0o600))
 	if _, err := identity.Load(dir); err == nil {
 		t.Fatal("an unknown identity_schema must be rejected, never guessed at")
 	}
@@ -139,27 +115,17 @@ func TestLoadRejectsMismatchedRecipient(t *testing.T) {
 	}
 	other := t.TempDir()
 	stranger, err := identity.Mint(other)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	path := filepath.Join(dir, identity.FileName)
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	mine, err := identity.Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	swapped := strings.Replace(string(raw),
 		mine.Recipient().String(), stranger.Recipient().String(), 1)
-	if swapped == string(raw) {
-		t.Fatal("test could not swap the recipient; file shape changed")
-	}
-	if err := os.WriteFile(path, []byte(swapped), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NotEqual(t, string(raw), swapped, "test could not swap the recipient; file shape changed")
+	require.NoError(t, os.WriteFile(path, []byte(swapped), 0o600))
 	if _, err := identity.Load(dir); err == nil {
 		t.Fatal("a recipient that disagrees with the identity must be rejected")
 	}
@@ -170,9 +136,7 @@ func TestLoadRejectsMismatchedRecipient(t *testing.T) {
 func TestUnitRedactsWhenFormatted(t *testing.T) {
 	dir := t.TempDir()
 	u, err := identity.Mint(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	secret := u.Identity.String()
 	for _, rendered := range []string{
@@ -182,15 +146,9 @@ func TestUnitRedactsWhenFormatted(t *testing.T) {
 		fmt.Sprintf("%#v", *u),
 		(*u).String(),
 	} {
-		if strings.Contains(rendered, secret) {
-			t.Errorf("formatted unit leaked the private age identity: %s", rendered)
-		}
-		if strings.Contains(rendered, hexOf(u.NameKey)) {
-			t.Errorf("formatted unit leaked the name_key: %s", rendered)
-		}
-		if !strings.Contains(rendered, "REDACTED") {
-			t.Errorf("formatted unit should say REDACTED, got: %s", rendered)
-		}
+		assert.NotContainsf(t, rendered, secret, "formatted unit leaked the private age identity: %s", rendered)
+		assert.NotContainsf(t, rendered, hexOf(u.NameKey), "formatted unit leaked the name_key: %s", rendered)
+		assert.Containsf(t, rendered, "REDACTED", "formatted unit should say REDACTED, got: %s", rendered)
 	}
 }
 
@@ -206,20 +164,10 @@ func hexOf(b []byte) string {
 // Two installs must not collide on either the naming secret or the identity.
 func TestMintIsUniquePerInstall(t *testing.T) {
 	a, err := identity.Mint(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	b, err := identity.Mint(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.InstallID == b.InstallID {
-		t.Error("two installs share an install_id")
-	}
-	if string(a.NameKey) == string(b.NameKey) {
-		t.Error("two installs share a name_key")
-	}
-	if a.Identity.String() == b.Identity.String() {
-		t.Error("two installs share an age identity")
-	}
+	require.NoError(t, err)
+	assert.True(t, a.InstallID != b.InstallID, "two installs share an install_id")
+	assert.NotEqual(t, string(b.NameKey), string(a.NameKey), "two installs share a name_key")
+	assert.NotEqual(t, b.Identity.String(), a.Identity.String(), "two installs share an age identity")
 }

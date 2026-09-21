@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -21,32 +24,20 @@ func TestJudgeTick(t *testing.T) {
 
 	r.JudgeTick(errors.New("flush failed"), formats.Report{}, false, platform.Delta{})
 	rec := readFailureRecord(r.eff.StateDir)
-	if rec.ConsecutiveFailures != 1 || rec.Latest() == nil {
-		t.Fatalf("first failure not recorded: %+v", rec)
-	}
-	if rec.Latest().Kind != formats.FailureTick {
-		t.Errorf("a plain error was recorded as %q", rec.Latest().Kind)
-	}
-	if rec.Latest().At == "" {
-		t.Error("the failure carries no timestamp")
-	}
+	require.Truef(t, rec.ConsecutiveFailures == 1 && rec.Latest() != nil, "first failure not recorded: %+v", rec)
+	assert.Equalf(t, formats.FailureTick, rec.Latest().Kind, "a plain error was recorded as %q", rec.Latest().Kind)
+	assert.NotEqual(t, "", rec.Latest().At, "the failure carries no timestamp")
 
 	r.JudgeTick(errors.New("still failing"), formats.Report{}, true, platform.Delta{})
 	rec = readFailureRecord(r.eff.StateDir)
-	if rec.ConsecutiveFailures != 2 || rec.Latest().Message != "still failing" || rec.Latest().Kind != formats.FailurePanic {
-		t.Fatalf("second failure did not update the record: %+v", rec)
-	}
+	require.Truef(t, rec.ConsecutiveFailures == 2 && rec.Latest().Message == "still failing" && rec.Latest().Kind == formats.FailurePanic, "second failure did not update the record: %+v", rec)
 
 	// Recovery resets the count and keeps the failure: "when did this install last fail" outlives
 	// the fix.
 	r.JudgeTick(nil, formats.Report{}, false, platform.Delta{})
 	rec = readFailureRecord(r.eff.StateDir)
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("success left consecutive_failures at %d", rec.ConsecutiveFailures)
-	}
-	if rec.Latest() == nil || rec.Latest().Message != "still failing" {
-		t.Errorf("recovery erased the last failure: %+v", rec)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "success left consecutive_failures at %d", rec.ConsecutiveFailures)
+	assert.Truef(t, rec.Latest() != nil && rec.Latest().Message == "still failing", "recovery erased the last failure: %+v", rec)
 }
 
 // The two classification corrections: lock contention is neither a success nor a failure, and a nil
@@ -54,10 +45,8 @@ func TestJudgeTick(t *testing.T) {
 func TestJudgeTickClassifies(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
-	if tickErr := r.JudgeTick(
-		fmt.Errorf("open store: %w", engine.ErrLocked), formats.Report{}, false, platform.Delta{}); tickErr != nil {
-		t.Errorf("lock contention was judged a failure: %v", tickErr)
-	}
+	assert.NoError(t, r.JudgeTick(
+		fmt.Errorf("open store: %w", engine.ErrLocked), formats.Report{}, false, platform.Delta{}))
 	if rec := readFailureRecord(r.eff.StateDir); rec.ConsecutiveFailures != 0 || rec.Latest() != nil {
 		t.Errorf("lock contention wrote a record: %+v", rec)
 	}
@@ -68,14 +57,10 @@ func TestJudgeTickClassifies(t *testing.T) {
 			{Decision: formats.DecisionFailed, Reason: "the control plane authorized nothing"},
 		}}},
 	}, false, platform.Delta{})
-	if tickErr == nil {
-		t.Fatal("an all-uploads-failed run did not classify as a failure")
-	}
+	require.Error(t, tickErr, "an all-uploads-failed run did not classify as a failure")
 	// The count alone cannot tell a refused PUT from an unreachable control plane, so the reason
 	// has to travel: without it every such event reads identically and the log is unactionable.
-	if !strings.Contains(tickErr.Error(), "authorized nothing") {
-		t.Errorf("the verdict does not say why nothing shipped: %v", tickErr)
-	}
+	assert.Containsf(t, tickErr.Error(), "authorized nothing", "the verdict does not say why nothing shipped: %v", tickErr)
 	if rec := readFailureRecord(r.eff.StateDir); rec.ConsecutiveFailures != 1 || rec.Latest() == nil {
 		t.Errorf("an all-uploads-failed run did not record: %+v", rec)
 	}
@@ -85,9 +70,7 @@ func TestJudgeTickClassifies(t *testing.T) {
 func TestJudgeTickAcceptsAPartialRun(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
-	if tickErr := r.JudgeTick(nil, formats.Report{Shipped: 1, Failed: 3}, false, platform.Delta{}); tickErr != nil {
-		t.Errorf("a run that shipped one file was called a failure: %v", tickErr)
-	}
+	assert.NoError(t, r.JudgeTick(nil, formats.Report{Shipped: 1, Failed: 3}, false, platform.Delta{}))
 }
 
 func TestJudgeTickPlaceholdersTheUsername(t *testing.T) {
@@ -99,12 +82,8 @@ func TestJudgeTickPlaceholdersTheUsername(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: dir}}
 	r.JudgeTick(fmt.Errorf("open /Users/%s/transcript.jsonl: permission denied", name), formats.Report{}, false, platform.Delta{})
 	rec := readFailureRecord(r.eff.StateDir)
-	if rec.Latest() == nil {
-		t.Fatal("no failure recorded")
-	}
-	if strings.Contains(rec.Latest().Message, "/"+name+"/") {
-		t.Errorf("the persisted message still carries the username: %q", rec.Latest().Message)
-	}
+	require.True(t, rec.Latest() != nil, "no failure recorded")
+	assert.NotContainsf(t, rec.Latest().Message, "/"+name+"/", "the persisted message still carries the username: %q", rec.Latest().Message)
 }
 
 // The bound is the whole design: this rides a document that already ships every run, so it must
@@ -118,20 +97,12 @@ func TestTheFailureLogIsBoundedAndKeepsTheNewest(t *testing.T) {
 	}
 
 	rec := readFailureRecord(r.eff.StateDir)
-	if len(rec.Recent) != formats.MaxRecentFailures {
-		t.Fatalf("the log holds %d events, want the cap of %d", len(rec.Recent), formats.MaxRecentFailures)
-	}
+	require.Lenf(t, rec.Recent, formats.MaxRecentFailures, "the log holds %d events, want the cap of %d", len(rec.Recent), formats.MaxRecentFailures)
 	// Oldest first, so the last element is the newest failure.
-	if got := rec.Latest().Message; got != fmt.Sprintf("failure number %d", formats.MaxRecentFailures+14) {
-		t.Errorf("the newest event is %q", got)
-	}
-	if got := rec.Recent[0].Message; got != fmt.Sprintf("failure number %d", 15) {
-		t.Errorf("the oldest kept event is %q; the log should have dropped the first 15", got)
-	}
+	assert.Equal(t, rec.Latest().Message, fmt.Sprintf("failure number %d", formats.MaxRecentFailures+14))
+	assert.Equal(t, rec.Recent[0].Message, fmt.Sprintf("failure number %d", 15))
 	// The count is not the log's length: it counts runs since the last success, unbounded.
-	if rec.ConsecutiveFailures != formats.MaxRecentFailures+15 {
-		t.Errorf("consecutive_failures = %d, want every failed run counted", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, formats.MaxRecentFailures+15, rec.ConsecutiveFailures, "consecutive_failures = %d, want every failed run counted", rec.ConsecutiveFailures)
 }
 
 // Recovery clears the count but keeps the log: what happened is still worth reading after the fix.
@@ -141,12 +112,8 @@ func TestRecoveryKeepsTheLog(t *testing.T) {
 	r.JudgeTick(nil, formats.Report{Shipped: 1}, false, platform.Delta{})
 
 	rec := readFailureRecord(r.eff.StateDir)
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("consecutive_failures = %d after a success", rec.ConsecutiveFailures)
-	}
-	if len(rec.Recent) != 1 || rec.Latest().Message != "the sink refused" {
-		t.Errorf("recovery erased the log: %+v", rec.Recent)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "consecutive_failures = %d after a success", rec.ConsecutiveFailures)
+	assert.Truef(t, len(rec.Recent) == 1 && rec.Latest().Message == "the sink refused", "recovery erased the log: %+v", rec.Recent)
 }
 
 // A panic in any verb has to outlive the terminal it printed to. The state dir is resolved without
@@ -162,23 +129,13 @@ func TestRecordPanicPersistsWithoutAResolvedConfig(t *testing.T) {
 	RecordPanic("enroll", "runtime error: index out of range [3] with length 0")
 
 	rec := readFailureRecord(stateDir)
-	if rec.Latest() == nil {
-		t.Fatalf("the panic was not persisted under %s", stateDir)
-	}
-	if rec.Latest().Kind != formats.FailurePanic {
-		t.Errorf("a panic was recorded as %q", rec.Latest().Kind)
-	}
-	if !strings.Contains(rec.Latest().Message, "enroll") {
-		t.Errorf("the record does not name the verb that crashed: %q", rec.Latest().Message)
-	}
-	if !strings.Contains(rec.Latest().Message, "index out of range") {
-		t.Errorf("the record does not say what happened: %q", rec.Latest().Message)
-	}
+	require.Truef(t, rec.Latest() != nil, "the panic was not persisted under %s", stateDir)
+	assert.Equalf(t, formats.FailurePanic, rec.Latest().Kind, "a panic was recorded as %q", rec.Latest().Kind)
+	assert.Containsf(t, rec.Latest().Message, "enroll", "the record does not name the verb that crashed: %q", rec.Latest().Message)
+	assert.Containsf(t, rec.Latest().Message, "index out of range", "the record does not say what happened: %q", rec.Latest().Message)
 	// The count answers "how many COLLECTION runs failed in a row". A one-shot verb crashing is
 	// not one of those, and moving the count would report a broken daemon on a healthy install.
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("a verb panic moved the collection failure count to %d", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a verb panic moved the collection failure count to %d", rec.ConsecutiveFailures)
 }
 
 // The heartbeat's failure half is read off disk, not built from the run assembling it: a run that
@@ -190,12 +147,8 @@ func TestFailureRecordSurvivesIntoTheHeartbeat(t *testing.T) {
 
 	r2 := &Runtime{eff: &config.Effective{StateDir: dir}}
 	rec := r2.failureRecord()
-	if rec.Latest() == nil || rec.Latest().Message != "the sink refused every object" {
-		t.Fatalf("a later run did not pick up the persisted failure: %+v", rec)
-	}
-	if rec.ConsecutiveFailures != 1 {
-		t.Errorf("consecutive_failures = %d, want 1", rec.ConsecutiveFailures)
-	}
+	require.Truef(t, rec.Latest() != nil && rec.Latest().Message == "the sink refused every object", "a later run did not pick up the persisted failure: %+v", rec)
+	assert.Equalf(t, 1, rec.ConsecutiveFailures, "consecutive_failures = %d, want 1", rec.ConsecutiveFailures)
 }
 
 // Store corruption is the one condition that can lose a file permanently, and it does not fail the
@@ -203,16 +156,12 @@ func TestFailureRecordSurvivesIntoTheHeartbeat(t *testing.T) {
 func TestStoreCorruptionIsRecordedButNotCounted(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
-	if tickErr := r.JudgeTick(nil, formats.Report{StoreCorrupt: true, Shipped: 3}, false, platform.Delta{}); tickErr != nil {
-		t.Fatalf("a corrupt store must not fail the run: %v", tickErr)
-	}
+	require.NoError(t, r.JudgeTick(nil, formats.Report{StoreCorrupt: true, Shipped: 3}, false, platform.Delta{}))
 	rec := readFailureRecord(r.eff.StateDir)
 	if rec.Latest() == nil || rec.Latest().Kind != formats.FailureStoreCorrupt {
 		t.Fatalf("the discard was not recorded: %+v", rec.Recent)
 	}
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("a discarded store moved the failed-run count to %d", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a discarded store moved the failed-run count to %d", rec.ConsecutiveFailures)
 }
 
 // The re-enrollment case end to end: the discard that recovers the install must clear the streak
@@ -223,19 +172,13 @@ func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 		r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "aaaaaaaaaaaaaaaa"}
 		r.JudgeTick(errors.New("state: document belongs to another install"), formats.Report{}, false, platform.Delta{})
 	}
-	if rec := readFailureRecord(dir); rec.ConsecutiveFailures != 3 {
-		t.Fatalf("the refusals did not build a streak: %d", rec.ConsecutiveFailures)
-	}
+	require.Equal(t, 3, readFailureRecord(dir).ConsecutiveFailures)
 
 	r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "bbbbbbbbbbbbbbbb"}
-	if err := r.JudgeTick(nil, formats.Report{StoreCorrupt: true, Shipped: 7}, false, platform.Delta{}); err != nil {
-		t.Fatalf("the recovering run failed: %v", err)
-	}
+	require.NoError(t, r.JudgeTick(nil, formats.Report{StoreCorrupt: true, Shipped: 7}, false, platform.Delta{}))
 
 	rec := readFailureRecord(dir)
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("the recovery left %d failures on the streak", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "the recovery left %d failures on the streak", rec.ConsecutiveFailures)
 	if rec.Latest() == nil || rec.Latest().Kind != formats.FailureStoreCorrupt {
 		t.Fatalf("the discard was not recorded: %+v", rec.Recent)
 	}
@@ -261,9 +204,7 @@ func TestEventsAreAttributedToTheRunThatRecordedThem(t *testing.T) {
 		got = append(got, e.Kind+"/"+e.RunID)
 	}
 	want := []string{"tick_failed/aaaaaaaaaaaaaaaa", "tick_failed/bbbbbbbbbbbbbbbb"}
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("tick events not attributed:\n got %v\nwant %v", got, want)
-	}
+	assert.Truef(t, len(got) == 2 && got[0] == want[0] && got[1] == want[1], "tick events not attributed:\n got %v\nwant %v", got, want)
 }
 
 // The startup path has no Runtime to carry the id -- that is the failure it reports -- so the
@@ -279,12 +220,8 @@ func TestAStartupFailureIsAttributedToItsRun(t *testing.T) {
 
 	rec := readFailureRecord(stateDir)
 	latest := rec.Latest()
-	if latest == nil {
-		t.Fatalf("the startup failure was not persisted under %s", stateDir)
-	}
-	if latest.RunID != "cccccccccccccccc" {
-		t.Errorf("startup failure carries run id %q, want the one the caller passed", latest.RunID)
-	}
+	require.Truef(t, latest != nil, "the startup failure was not persisted under %s", stateDir)
+	assert.Equalf(t, "cccccccccccccccc", latest.RunID, "startup failure carries run id %q, want the one the caller passed", latest.RunID)
 }
 
 // Self-update is the remediation channel: an install that cannot replace itself cannot be fixed
@@ -301,18 +238,10 @@ func TestAnUpdateFailureIsRecordedButNotCounted(t *testing.T) {
 
 	rec := readFailureRecord(stateDir)
 	latest := rec.Latest()
-	if latest == nil {
-		t.Fatalf("the update failure was not persisted under %s", stateDir)
-	}
-	if latest.Kind != formats.FailureUpdate {
-		t.Errorf("recorded as %q, want %q", latest.Kind, formats.FailureUpdate)
-	}
-	if !strings.Contains(latest.Message, "tuf: no such target") {
-		t.Errorf("the record does not say why the update failed: %q", latest.Message)
-	}
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("a failed self-update moved the collection failure count to %d", rec.ConsecutiveFailures)
-	}
+	require.Truef(t, latest != nil, "the update failure was not persisted under %s", stateDir)
+	assert.Equalf(t, formats.FailureUpdate, latest.Kind, "recorded as %q, want %q", latest.Kind, formats.FailureUpdate)
+	assert.Containsf(t, latest.Message, "tuf: no such target", "the record does not say why the update failed: %q", latest.Message)
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a failed self-update moved the collection failure count to %d", rec.ConsecutiveFailures)
 }
 
 // The crash used to reach only the heartbeat; the persisted event is what survives the process.
@@ -327,26 +256,16 @@ func TestACrashIsPersistedLocally(t *testing.T) {
 
 	rec := readFailureRecord(stateDir)
 	latest := rec.Latest()
-	if latest == nil || latest.Kind != formats.FailureCrash {
-		t.Fatalf("the crash was not persisted: %+v", rec)
-	}
-	if latest.RunID != "dddddddddddddddd" || !strings.Contains(latest.Message, `"tick 3"`) {
-		t.Errorf("the event does not attribute the dead run: %+v", latest)
-	}
+	require.Truef(t, latest != nil && latest.Kind == formats.FailureCrash, "the crash was not persisted: %+v", rec)
+	assert.Truef(t, latest.RunID == "dddddddddddddddd" && strings.Contains(latest.Message, `"tick 3"`), "the event does not attribute the dead run: %+v", latest)
 	// Crashes keep their own counter; the collection count must not move.
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("a crash moved consecutive_failures to %d", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a crash moved consecutive_failures to %d", rec.ConsecutiveFailures)
 
 	// An undelivered crash is re-detected on every restart; only a NEW dead run may append.
 	RecordCrash(&formats.LastCrash{RunID: "dddddddddddddddd", Phase: "tick 3", Consecutive: 3})
-	if rec := readFailureRecord(stateDir); len(rec.Recent) != 1 {
-		t.Fatalf("a restart duplicated the crash event: %+v", rec.Recent)
-	}
+	require.Len(t, readFailureRecord(stateDir).Recent, 1)
 	RecordCrash(&formats.LastCrash{RunID: "ffffffffffffffff", Phase: "init", Consecutive: 2})
-	if rec := readFailureRecord(stateDir); len(rec.Recent) != 2 {
-		t.Fatalf("a different dead run was not recorded: %+v", rec.Recent)
-	}
+	require.Len(t, readFailureRecord(stateDir).Recent, 2)
 }
 
 // One standing event however long the stall lasts: a stuck tick re-reported twenty times would
@@ -357,15 +276,11 @@ func TestAStalledTickIsRecordedOnce(t *testing.T) {
 	watchFires(r, 7, 2)
 
 	rec := readFailureRecord(dir)
-	if len(rec.Recent) != 1 || rec.Latest().Kind != formats.FailureStalled {
-		t.Fatalf("want exactly one stalled event, got %+v", rec.Recent)
-	}
+	require.Truef(t, len(rec.Recent) == 1 && rec.Latest().Kind == formats.FailureStalled, "want exactly one stalled event, got %+v", rec.Recent)
 	if !strings.Contains(rec.Latest().Message, "tick 7") || rec.Latest().RunID != "eeeeeeeeeeeeeeee" {
 		t.Errorf("the event does not name the tick or its run: %+v", rec.Latest())
 	}
-	if rec.ConsecutiveFailures != 0 {
-		t.Errorf("a stall moved consecutive_failures to %d; the tick may yet complete", rec.ConsecutiveFailures)
-	}
+	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a stall moved consecutive_failures to %d; the tick may yet complete", rec.ConsecutiveFailures)
 }
 
 // A stall that recovered leaves its event as the newest one through every clean tick after it; a
@@ -381,9 +296,7 @@ func TestALaterStallReplacesTheStandingEvent(t *testing.T) {
 	watchFires(r, 900, 1)
 
 	rec := readFailureRecord(dir)
-	if len(rec.Recent) != 1 || !strings.Contains(rec.Latest().Message, "tick 900") {
-		t.Fatalf("want one stalled event naming tick 900, got %+v", rec.Recent)
-	}
+	require.Truef(t, len(rec.Recent) == 1 && strings.Contains(rec.Latest().Message, "tick 900"), "want one stalled event naming tick 900, got %+v", rec.Recent)
 }
 
 // fires counts watchdog fires: without an upload port the warning line is the only thing a fire
@@ -416,15 +329,11 @@ func TestJudgeMergesEventsFromOtherWriters(t *testing.T) {
 
 	other := readFailureRecord(dir)
 	other.Append(formats.FailureEvent{At: "2026-01-01T00:00:00Z", Kind: formats.FailureUpdate, Message: "tuf: no such target"})
-	if err := writeFailureRecord(dir, other); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, writeFailureRecord(dir, other))
 
 	r.JudgeTick(nil, formats.Report{Shipped: 1}, false, platform.Delta{})
 	rec := readFailureRecord(dir)
-	if len(rec.Recent) != 2 {
-		t.Fatalf("the other writer's event was clobbered: %+v", rec.Recent)
-	}
+	require.Lenf(t, rec.Recent, 2, "the other writer's event was clobbered: %+v", rec.Recent)
 }
 
 // The facts ride every outcome, a clean one included: memory pressure and a pathological redaction
@@ -442,21 +351,10 @@ func TestTheFactsRideACleanRunToo(t *testing.T) {
 	r.JudgeTick(nil, formats.Report{SlowestScrubNanos: 2_500_000, SlowestScrubBytes: 4096}, false, mem)
 
 	f := readFailureRecord(dir).Facts
-	if f == nil {
-		t.Fatal("a clean run recorded no facts, so there is no baseline to compare against")
-	}
-	if f.HeapInuseBytes != 9<<20 || f.SysBytes != 40<<20 {
-		t.Errorf("memory not carried: heap %d sys %d", f.HeapInuseBytes, f.SysBytes)
-	}
+	require.True(t, f != nil, "a clean run recorded no facts, so there is no baseline to compare against")
+	assert.Truef(t, f.HeapInuseBytes == 9<<20 && f.SysBytes == 40<<20, "memory not carried: heap %d sys %d", f.HeapInuseBytes, f.SysBytes)
 	// The delta, not the absolute: GC cycles rise sharply as the heap nears the limit.
-	if f.GCCycles != 7 {
-		t.Errorf("gc cycles = %d, want the delta 7", f.GCCycles)
-	}
-	if f.SlowestScrubNanos != 2_500_000 || f.SlowestScrubBytes != 4096 {
-		t.Errorf("the slowest redaction did not travel: %d ns over %d bytes",
-			f.SlowestScrubNanos, f.SlowestScrubBytes)
-	}
-	if f.MaxFilesPerRun != 512 || f.GOMAXPROCS == 0 || f.MaxInFlightBytes == 0 {
-		t.Errorf("the concurrency configuration is incomplete: %+v", f)
-	}
+	assert.Equalf(t, uint32(7), f.GCCycles, "gc cycles = %d, want the delta 7", f.GCCycles)
+	assert.Truef(t, f.SlowestScrubNanos == 2_500_000 && f.SlowestScrubBytes == 4096, "the slowest redaction did not travel: %d ns over %d bytes", f.SlowestScrubNanos, f.SlowestScrubBytes)
+	assert.Truef(t, f.MaxFilesPerRun == 512 && f.GOMAXPROCS != 0 && f.MaxInFlightBytes != 0, "the concurrency configuration is incomplete: %+v", f)
 }

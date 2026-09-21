@@ -6,6 +6,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The scanners claim to return exactly what their regex returned, so both paths are replayed
@@ -16,9 +19,7 @@ import (
 func piiScannerRules(t *testing.T) []*Rule {
 	t.Helper()
 	rules, err := Load(PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var out []*Rule
 	for _, r := range rules {
 		if r.hand != nil || r.fused != fusedNone {
@@ -26,9 +27,7 @@ func piiScannerRules(t *testing.T) []*Rule {
 		}
 	}
 	// The three keywordless shapes plus email, whose gate fires on nearly every value.
-	if len(out) != 4 {
-		t.Fatalf("expected four pii-core rules to carry scanners, got %d", len(out))
-	}
+	require.Lenf(t, out, 4, "expected four pii-core rules to carry scanners, got %d", len(out))
 	return out
 }
 
@@ -196,21 +195,15 @@ func TestPIIScannersFindTheCanonicalIdentifiers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		spans := rules[tc.rule].MatchScanned(tc.value)
-		if len(spans) != 1 {
-			t.Fatalf("%s on %q: got %d spans", tc.rule, tc.value, len(spans))
-		}
-		if got := tc.value[spans[0].Start:spans[0].End]; got != tc.want {
-			t.Errorf("%s on %q: span %q, want %q", tc.rule, tc.value, got, tc.want)
-		}
+		require.Len(t, spans, 1)
+		assert.Equal(t, tc.value[spans[0].Start:spans[0].End], tc.want)
 	}
 }
 
 // The per-rule cost on prose with no candidate in it, which is what a transcript mostly is.
 func BenchmarkPIIRules(b *testing.B) {
 	rules, err := Load(PIICore)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	var sb strings.Builder
 	for sb.Len() < 1<<20 {
 		fmt.Fprintf(&sb, "internal/scrub/packs/pii.go:%d: the scanner walks the value once\n", sb.Len())
@@ -220,9 +213,7 @@ func BenchmarkPIIRules(b *testing.B) {
 		b.Run(r.id, func(b *testing.B) {
 			b.SetBytes(int64(len(value)))
 			for i := 0; i < b.N; i++ {
-				if got := r.MatchScanned(value); len(got) != 0 {
-					b.Fatalf("expected no match, got %d", len(got))
-				}
+				require.Len(b, r.MatchScanned(value), 0)
 			}
 		})
 	}

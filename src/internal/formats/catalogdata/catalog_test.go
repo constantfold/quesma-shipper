@@ -1,9 +1,10 @@
 package catalogdata_test
 
 import (
-	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -14,30 +15,20 @@ import (
 func decodeYAML(t *testing.T, name string) any {
 	t.Helper()
 	raw, err := catalogdata.Read(name)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var doc any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("%s: not valid YAML: %v", name, err)
-	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
 	return doc
 }
 
 // Every bundled catalog file must validate: the catalog is edited by people who do not read Go.
 func TestBundledCatalogValidates(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no catalog files embedded")
-	}
+	require.NoError(t, err)
+	require.NotEqual(t, 0, len(files), "no catalog files embedded")
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
-			if err := formats.Validate(formats.SourceSpec, decodeYAML(t, name)); err != nil {
-				t.Errorf("%v", err)
-			}
+			assert.NoError(t, formats.Validate(formats.SourceSpec, decodeYAML(t, name)))
 		})
 	}
 }
@@ -129,12 +120,8 @@ sources:
 	for name, src := range cases {
 		t.Run(name, func(t *testing.T) {
 			var doc any
-			if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
-				t.Fatalf("fixture is not valid YAML: %v", err)
-			}
-			if err := formats.Validate(formats.SourceSpec, doc); err == nil {
-				t.Error("must be rejected by the source-spec schema")
-			}
+			require.NoError(t, yaml.Unmarshal([]byte(src), &doc))
+			assert.Error(t, formats.Validate(formats.SourceSpec, doc), "must be rejected by the source-spec schema")
 		})
 	}
 }
@@ -142,9 +129,7 @@ sources:
 // Group 1 is the v1 scope ceiling: Claude Code, Codex, Cursor. This list is the ceiling itself.
 func TestGroupOneCoverage(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want := map[string]bool{
 		"claude-code.yaml": false,
 		"codex.yaml":       false,
@@ -156,24 +141,18 @@ func TestGroupOneCoverage(t *testing.T) {
 		}
 	}
 	for f, found := range want {
-		if !found {
-			t.Errorf("Group 1 catalog file missing: %s", f)
-		}
+		assert.Truef(t, found, "Group 1 catalog file missing: %s", f)
 	}
 }
 
 // Source ids key both object keys and fingerprint state, so a collision merges two sources.
 func TestSourceIDsAreUniqueAcrossFiles(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	seen := map[string]string{}
 	for _, name := range files {
 		raw, err := catalogdata.Read(name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var doc struct {
 			Family  string `yaml:"family"`
 			Sources []struct {
@@ -186,9 +165,7 @@ func TestSourceIDsAreUniqueAcrossFiles(t *testing.T) {
 				Enrichers  map[string]bool `yaml:"enrichers"`
 			} `yaml:"sources"`
 		}
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		for _, s := range doc.Sources {
 			if prev, dup := seen[s.ID]; dup {
 				t.Errorf("source id %q appears in both %s and %s", s.ID, prev, name)
@@ -201,17 +178,13 @@ func TestSourceIDsAreUniqueAcrossFiles(t *testing.T) {
 // SQLite is enricher input only: no catalog entry may name a database as a shipping source.
 func TestNoDatabaseShippingSources(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	banned := []string{"sqlite_rows", "sqlite_query", "sqlite_kv", "sqlite_snapshot"}
 	dbGlobs := []string{".vscdb", ".sqlite", ".db"}
 
 	for _, name := range files {
 		raw, err := catalogdata.Read(name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var doc struct {
 			Sources []struct {
 				ID      string   `yaml:"id"`
@@ -219,20 +192,14 @@ func TestNoDatabaseShippingSources(t *testing.T) {
 				Include []string `yaml:"include"`
 			} `yaml:"sources"`
 		}
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		for _, s := range doc.Sources {
 			for _, b := range banned {
-				if s.Gather == b {
-					t.Errorf("%s/%s: gather %q is not a primitive — SQLite is enricher input only", name, s.ID, b)
-				}
+				assert.NotEqualf(t, b, s.Gather, "%s/%s: gather %q is not a primitive — SQLite is enricher input only", name, s.ID, b)
 			}
 			for _, g := range s.Include {
 				for _, ext := range dbGlobs {
-					if strings.Contains(g, ext) {
-						t.Errorf("%s/%s: include %q would ship database bytes; no rows ship", name, s.ID, g)
-					}
+					assert.NotContains(t, g, ext)
 				}
 			}
 		}
@@ -242,23 +209,17 @@ func TestNoDatabaseShippingSources(t *testing.T) {
 // Cursor's DB-side fidelity reaches the sink only through the enricher, so it must stay enabled.
 func TestCursorTranscriptsDeclareTheEnricher(t *testing.T) {
 	raw, err := catalogdata.Read("cursor.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var doc struct {
 		Sources []struct {
 			ID        string          `yaml:"id"`
 			Enrichers map[string]bool `yaml:"enrichers"`
 		} `yaml:"sources"`
 	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
 	for _, s := range doc.Sources {
 		if s.ID == "cursor-transcripts" {
-			if !s.Enrichers["cursor-transcript-join"] {
-				t.Error("cursor-transcripts must enable cursor-transcript-join")
-			}
+			assert.True(t, s.Enrichers["cursor-transcript-join"], "cursor-transcripts must enable cursor-transcript-join")
 			return
 		}
 	}
@@ -268,27 +229,19 @@ func TestCursorTranscriptsDeclareTheEnricher(t *testing.T) {
 // Every source declares its artifact class; an undeclared one would default to the wrong class.
 func TestEverySourceDeclaresAClass(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, name := range files {
 		raw, err := catalogdata.Read(name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var doc struct {
 			Sources []struct {
 				ID    string `yaml:"id"`
 				Class string `yaml:"artifact_class"`
 			} `yaml:"sources"`
 		}
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		for _, s := range doc.Sources {
-			if s.Class != "trajectory" && s.Class != "context" {
-				t.Errorf("%s/%s: artifact_class must be trajectory or context, got %q", name, s.ID, s.Class)
-			}
+			assert.Truef(t, s.Class == "trajectory" || s.Class == "context", "%s/%s: artifact_class must be trajectory or context, got %q", name, s.ID, s.Class)
 		}
 	}
 }
@@ -297,14 +250,10 @@ func TestEverySourceDeclaresAClass(t *testing.T) {
 // payload several times over, so one runaway file is an OOM. Metadata-only sources are exempt.
 func TestEveryFileReadingSourceDeclaresASizeCap(t *testing.T) {
 	files, err := catalogdata.Files()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, name := range files {
 		raw, err := catalogdata.Read(name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var doc struct {
 			Sources []struct {
 				ID           string `yaml:"id"`
@@ -312,16 +261,12 @@ func TestEveryFileReadingSourceDeclaresASizeCap(t *testing.T) {
 				MaxFileBytes int64  `yaml:"max_file_bytes"`
 			} `yaml:"sources"`
 		}
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		for _, s := range doc.Sources {
 			if s.Gather != "file_glob" {
 				continue
 			}
-			if s.MaxFileBytes <= 0 {
-				t.Errorf("%s/%s reads whole files and declares no max_file_bytes", name, s.ID)
-			}
+			assert.Truef(t, s.MaxFileBytes > 0, "%s/%s reads whole files and declares no max_file_bytes", name, s.ID)
 		}
 	}
 }

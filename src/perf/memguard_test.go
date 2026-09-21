@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Spelled out rather than imported, because this module consumes the shipper as a binary;
@@ -284,9 +286,7 @@ func raiseMaxFileBytes(t *testing.T, w *world, limit int64) {
 	t.Helper()
 	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
 	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read the world's config: %v", err)
-	}
+	require.Falsef(t, err != nil, "read the world's config: %v", err)
 	body = append(body, fmt.Sprintf(
 		"sources:\n  - id: claude-code-transcripts\n    max_file_bytes: %d\n", limit)...)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
@@ -508,20 +508,14 @@ func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, s
 	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
 	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	bw := bufio.NewWriterSize(f, 1<<20)
 
 	written := 0
 	n, err := fmt.Fprintf(bw, corpusFirstLine, session, cwd)
-	if err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	require.Falsef(t, err != nil, "write %s: %v", path, err)
 	written += n
 
 	src := rand.NewChaCha8(memguardStreamSeed(index))
@@ -541,9 +535,7 @@ func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, s
 		}
 		n, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a%d","sessionId":%q,"cwd":%q,"message":{"id":"m%d","model":"claude-opus-5","content":[{"type":"text","text":%q}],"usage":{"input_tokens":120,"output_tokens":340}}}`+"\n",
 			line, session, cwd, line, text)
-		if err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
+		require.Falsef(t, err != nil, "write %s: %v", path, err)
 		written += n
 	}
 	if err := bw.Flush(); err != nil {
@@ -553,9 +545,7 @@ func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, s
 		t.Fatalf("close %s: %v", path, err)
 	}
 	// The pre-filter compares size and mtime, so the stamp cannot be the wall clock.
-	if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
 	return written, secretLines
 }
 
@@ -577,53 +567,35 @@ func stageSingleLineValue(t *testing.T, w *world, slug string, target int64, sec
 	session := corpusSessionID(0)
 	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
 	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	bw := bufio.NewWriterSize(f, 1<<20)
 
 	tail := `"}],"usage":{"input_tokens":120,"output_tokens":340}}}` + "\n"
 	written, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a1","sessionId":%q,"cwd":%q,"message":{"id":"m1","model":"claude-opus-5","content":[{"type":"text","text":"`, session, cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	src := rand.NewChaCha8(memguardStreamSeed(0))
 	fill := make([]byte, singleLineChunk)
 	secrets := 0
 	for int64(written+len(tail)) < target {
 		if secret != "" {
 			n, err := bw.WriteString(secret + " ")
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			written += n
 			secrets++
 		}
 		memguardFill(t, src, fill)
 		n, err := bw.Write(fill)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		written += n
 	}
 	n, err := bw.WriteString(tail)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	written += n
-	if err := bw.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bw.Flush())
+	require.NoError(t, f.Close())
+	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
 	return written, secrets
 }
 

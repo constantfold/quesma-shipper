@@ -43,13 +43,11 @@ func recoverFlush(errOut io.Writer, log *auditlog.Log, flush func() (formats.Rep
 		fmt.Fprintf(errOut, "PANIC in flush: %v\n%s\n", r, stack)
 		fmt.Fprintf(errOut, "the tick was abandoned; the next one starts clean. "+
 			"whatever caused this is still on disk and will be met again.\n")
-		if log != nil {
-			_ = log.Append(auditlog.Entry{
-				Decision: auditlog.DecisionFailed,
-				Reason:   fmt.Sprintf("panic in flush: %v", r),
-				File:     firstStackFrame(stack),
-			})
-		}
+		_ = log.Append(auditlog.Entry{
+			Decision: auditlog.DecisionFailed,
+			Reason:   fmt.Sprintf("panic in flush: %v", r),
+			File:     firstStackFrame(stack),
+		})
 		err = fmt.Errorf("panic in flush: %v", r)
 	}()
 	rep, err = flush()

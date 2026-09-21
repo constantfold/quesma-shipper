@@ -1,10 +1,5 @@
-// Submitting operational telemetry to the control plane.
-//
-// The control plane authenticates the install, checks whether its organization has a collector, and
-// forwards the body under its own signature without reading it.
-//
-// Because the body is forwarded VERBATIM, anything the far end needs -- the machine's name, most of
-// all -- has to be in here: nothing downstream can add to it.
+// Operational telemetry is forwarded verbatim by the authenticated control plane.
+// Include every field the collector needs; downstream cannot add machine identity.
 package controlplane
 
 import (
@@ -16,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // TelemetryPreamble domain-separates this signature the way the v2 upload one is separated: the
@@ -47,7 +42,7 @@ type TelemetryRequest struct {
 
 // NewBatchID mints the identifier for one event, not for the request carrying it: the far end
 // deduplicates on it, so a resend of the same event has to present the same id.
-func NewBatchID() string { return uuid.NewString() }
+func NewBatchID() string { return uuid.New().String() }
 
 // ErrTelemetryDisabled says this install's organization has no collector. Not a failure: the caller
 // stops submitting until its next configuration load, because the answer cannot change before then.
@@ -57,11 +52,7 @@ var ErrTelemetryDisabled = errors.New("controlplane: telemetry is disabled for t
 // envelope, a stale timestamp, an oversized body, or a collector refusing the payload.
 var ErrTelemetryRejected = errors.New("controlplane: telemetry submission was rejected")
 
-// ErrTelemetryUnavailable is a failure that may not recur: a rate limit, an unreachable collector,
-// an unprovisioned deployment. Nothing here retries -- the next tick's submission is the retry.
-//
-// When bounded retry is added, this is where the server's Retry-After header has to arrive, and
-// exchange will have to surface response headers to carry it.
+// ErrTelemetryUnavailable marks a transient submission failure; the next tick retries.
 var ErrTelemetryUnavailable = errors.New("controlplane: telemetry could not be delivered")
 
 // SubmitTelemetry posts one event to path, taken from served configuration. A path rather than a

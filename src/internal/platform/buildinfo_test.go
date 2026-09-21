@@ -1,8 +1,10 @@
 package platform
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // One spelling everywhere: a version written one way in an object and another in a trace cannot be joined.
@@ -18,9 +20,7 @@ func TestTheVersionStringIsOneSpelling(t *testing.T) {
 		{"an untagged build", Info{Version: "0.0.0-031a7faa8c16"}, "0.0.0-031a7faa8c16"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.in.String(); got != tc.want {
-				t.Errorf("String() = %q, want %q", got, tc.want)
-			}
+			assert.Equal(t, tc.in.String(), tc.want)
 		})
 	}
 }
@@ -29,12 +29,8 @@ func TestTheVersionStringIsOneSpelling(t *testing.T) {
 func TestAModifiedTreeIsVisibleInTheVersion(t *testing.T) {
 	clean := Info{Version: "v1.0.0", Revision: "abc123"}.String()
 	dirty := Info{Version: "v1.0.0", Revision: "abc123", Modified: true}.String()
-	if clean == dirty {
-		t.Fatalf("a modified build is indistinguishable from a clean one: both %q", clean)
-	}
-	if !strings.Contains(dirty, "dirty") {
-		t.Errorf("the modified build reads %q, which does not say so", dirty)
-	}
+	require.NotEqualf(t, dirty, clean, "a modified build is indistinguishable from a clean one: both %q", clean)
+	assert.Containsf(t, dirty, "dirty", "the modified build reads %q, which does not say so", dirty)
 }
 
 // A release stamp is believed only when the toolchain corroborates it; a stamp that could lie would ship wrong provenance.
@@ -61,12 +57,8 @@ func TestAReleaseStampMustBeCorroborated(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := applyStamp(tc.in, tc.stamp)
-			if got.String() != tc.wantVersion {
-				t.Errorf("String() = %q, want %q", got.String(), tc.wantVersion)
-			}
-			if got.Release != tc.wantRelease {
-				t.Errorf("Release = %v, want %v", got.Release, tc.wantRelease)
-			}
+			assert.Equalf(t, tc.wantVersion, got.String(), "String() = %q, want %q", got.String(), tc.wantVersion)
+			assert.Equalf(t, tc.wantRelease, got.Release, "Release = %v, want %v", got.Release, tc.wantRelease)
 		})
 	}
 }
@@ -76,21 +68,13 @@ func TestAnHonoredStampKeepsTheToolchainRecord(t *testing.T) {
 	in := Info{Version: "0.0.0-031a7faa8c16", Revision: "031a7faa8c1652f68ec214225df6657989113a1a",
 		Time: "2026-08-06T08:31:31Z", GoVersion: "go1.25.0", OS: "linux", Arch: "amd64"}
 	got := applyStamp(in, "0.0.1-123.031a7faa8c16")
-	if got.Revision != in.Revision || got.Time != in.Time || got.OS != in.OS || got.Arch != in.Arch {
-		t.Errorf("stamp rewrote the toolchain record: %+v", got)
-	}
+	assert.Truef(t, got.Revision == in.Revision && got.Time == in.Time && got.OS == in.OS && got.Arch == in.Arch, "stamp rewrote the toolchain record: %+v", got)
 }
 
 // "unknown" is an acceptable answer; an empty string would reach a manifest as an absent client version.
 func TestCurrentAlwaysAnswers(t *testing.T) {
 	got := Current()
-	if got.String() == "" {
-		t.Error("empty version string")
-	}
-	if got.GoVersion == "" || got.OS == "" || got.Arch == "" {
-		t.Errorf("incomplete: %+v", got)
-	}
-	if Current().String() != got.String() {
-		t.Error("two calls disagreed")
-	}
+	assert.NotEqual(t, "", got.String(), "empty version string")
+	assert.Truef(t, got.GoVersion != "" && got.OS != "" && got.Arch != "", "incomplete: %+v", got)
+	assert.Equal(t, got.String(), Current().String(), "two calls disagreed")
 }

@@ -18,12 +18,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/testcontainers/testcontainers-go"
+
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -296,9 +300,7 @@ func withLatency(t *testing.T, rtt, jitter time.Duration) {
 				"latency": half.Milliseconds(),
 				"jitter":  (jitter / 2).Milliseconds(),
 			})
-		if err != nil {
-			t.Fatalf("add %s latency toxic: %v", stream, err)
-		}
+		require.Falsef(t, err != nil, "add %s latency toxic: %v", stream, err)
 	}
 	// /reset removes every toxic and re-enables every proxy, however the test exits.
 	t.Cleanup(func() {
@@ -319,9 +321,7 @@ func assertShapingIsLive(t *testing.T, rtt time.Duration) {
 	}
 	start := time.Now()
 	resp, err := client.Get(storeEndpoint + "/minio/health/live")
-	if err != nil {
-		t.Fatalf("probe the shaped link: %v", err)
-	}
+	require.Falsef(t, err != nil, "probe the shaped link: %v", err)
 	resp.Body.Close()
 	elapsed := time.Since(start)
 
@@ -403,9 +403,7 @@ func settledStoreBytes(t *testing.T) storeBytes {
 		} else {
 			last, same = v, 0
 		}
-		if time.Now().After(give) {
-			t.Fatalf("toxiproxy's byte counters never settled: last read %d bytes", v)
-		}
+		require.Falsef(t, time.Now().After(give), "toxiproxy's byte counters never settled: last read %d bytes", v)
 		time.Sleep(interval)
 	}
 }
@@ -463,17 +461,11 @@ func s3RequestCount(t *testing.T) int64 {
 func scrapePage(t *testing.T, url string) string {
 	t.Helper()
 	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatalf("scrape %s: %v", url, err)
-	}
+	require.Falsef(t, err != nil, "scrape %s: %v", url, err)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("scrape %s: HTTP %d", url, resp.StatusCode)
-	}
+	require.Falsef(t, resp.StatusCode != http.StatusOK, "scrape %s: HTTP %d", url, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read %s: %v", url, err)
-	}
+	require.Falsef(t, err != nil, "read %s: %v", url, err)
 	return string(body)
 }
 
@@ -486,13 +478,9 @@ func eachSample(t *testing.T, url, page string, fn func(name, labels string, val
 			continue
 		}
 		labels, value, ok := strings.Cut(labelled, "} ")
-		if !ok {
-			t.Fatalf("unparseable sample line from %s: %q", url, line)
-		}
+		require.Falsef(t, !ok, "unparseable sample line from %s: %q", url, line)
 		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if err != nil {
-			t.Fatalf("unparseable sample value in %q: %v", line, err)
-		}
+		require.Falsef(t, err != nil, "unparseable sample value in %q: %v", line, err)
 		fn(name, labels, f)
 	}
 }

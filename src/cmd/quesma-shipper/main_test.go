@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/app"
 )
 
@@ -22,9 +25,7 @@ func TestVerbOfNamesTheFirstNonFlagArgument(t *testing.T) {
 		{[]string{"quesma-shipper", "--version"}, "quesma-shipper"},
 		{[]string{"quesma-shipper"}, "quesma-shipper"},
 	} {
-		if got := verbOf(tc.args); got != tc.want {
-			t.Errorf("verbOf(%q) = %q, want %q", tc.args, got, tc.want)
-		}
+		assert.Equal(t, verbOf(tc.args), tc.want)
 	}
 }
 
@@ -36,28 +37,17 @@ func TestReportPanicPrintsTheStackAndPersistsTheFact(t *testing.T) {
 	var errOut bytes.Buffer
 	reportPanic(&errOut, []string{"quesma-shipper", "enroll", "--invite", "x"}, "boom")
 
-	if !strings.Contains(errOut.String(), "panic: boom") {
-		t.Errorf("the panic did not reach stderr:\n%s", errOut.String())
-	}
-	if !strings.Contains(errOut.String(), "runtime/debug.Stack") &&
-		!strings.Contains(errOut.String(), "goroutine") {
-		t.Errorf("the stack did not reach stderr:\n%s", errOut.String())
-	}
+	assert.Containsf(t, errOut.String(), "panic: boom", "the panic did not reach stderr:\n%s", errOut.String())
+	assert.Truef(t, strings.Contains(errOut.String(), "runtime/debug.Stack") || strings.Contains(errOut.String(), "goroutine"), "the stack did not reach stderr:\n%s", errOut.String())
 
 	dir, err := app.StateDirWithoutConfig()
 	if err != nil {
 		t.Skipf("no resolvable state directory here: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "last-failure.json"))
-	if err != nil {
-		t.Fatalf("the crash was not persisted under %s: %v", dir, err)
-	}
+	require.NoErrorf(t, err, "the crash was not persisted under %s: %v", dir, err)
 	// The verb, so a crash in enroll is distinguishable from one in the daemon.
-	if !strings.Contains(string(raw), "enroll") || !strings.Contains(string(raw), "boom") {
-		t.Errorf("the record does not say what crashed:\n%s", raw)
-	}
+	assert.Truef(t, strings.Contains(string(raw), "enroll") && strings.Contains(string(raw), "boom"), "the record does not say what crashed:\n%s", raw)
 	// The stack must NOT be there: it is the one diagnostic that can carry payload text.
-	if strings.Contains(string(raw), "goroutine") {
-		t.Errorf("a stack reached the persisted record:\n%s", raw)
-	}
+	assert.NotContainsf(t, string(raw), "goroutine", "a stack reached the persisted record:\n%s", raw)
 }

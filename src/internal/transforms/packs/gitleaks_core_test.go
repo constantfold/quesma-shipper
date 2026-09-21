@@ -3,6 +3,9 @@ package packs
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // github-pat is written from GitHub's published token format: a documented prefix, then at least
@@ -26,24 +29,18 @@ func TestGitHubPATFollowsDocumentedFormat(t *testing.T) {
 		not("github_pat_" + alnum(82)),           // the fine-grained rule owns this prefix
 	}
 	rules, err := Load(GitleaksCore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var r *Rule
 	for _, x := range rules {
 		if x.id == "github-pat" {
 			r = x
 		}
 	}
-	if r == nil {
-		t.Fatal("github-pat missing from the pack")
-	}
+	require.True(t, r != nil, "github-pat missing from the pack")
 	for _, p := range probes {
 		spans := r.MatchScanned(p.in)
 		if p.want == "" {
-			if len(spans) != 0 {
-				t.Errorf("near-miss %q matched: %v", p.in, spans)
-			}
+			assert.Len(t, spans, 0)
 			continue
 		}
 		found := false

@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
@@ -53,27 +54,21 @@ func controlPlane(t *testing.T, status int, answer string) (*httptest.Server, *s
 func client(t *testing.T, endpoint string) (*controlplane.Client, ed25519.PublicKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	c, err := controlplane.New(controlplane.Options{
 		Endpoint:     endpoint,
 		InstallID:    fixtureInstallID,
 		Organization: "acme",
 		DeviceKey:    priv,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return c, pub
 }
 
 func payload(t *testing.T) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{"event": "install_health", "hostname": "ci-runner-3"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return raw
 }
 
@@ -83,30 +78,18 @@ func TestTelemetrySignatureCoversThePrefixAndTheExactBody(t *testing.T) {
 	server, got := controlPlane(t, http.StatusNoContent, "")
 	c, pub := client(t, server.URL)
 
-	if err := c.SubmitTelemetry(context.Background(), "/v1/telemetry",
-		batchID, time.Now().UTC(), payload(t)); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
+	require.NoError(t, c.SubmitTelemetry(context.Background(), "/v1/telemetry",
+		batchID, time.Now().UTC(), payload(t)))
 
 	want := "Shipper-Device org=acme, install=" + fixtureInstallID + ", sig="
-	if !strings.HasPrefix(got.authorization, want) {
-		t.Fatalf("authorization %q does not open with %q", got.authorization, want)
-	}
+	require.Truef(t, strings.HasPrefix(got.authorization, want), "authorization %q does not open with %q", got.authorization, want)
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got.authorization, want))
-	if err != nil {
-		t.Fatalf("sig is not base64: %v", err)
-	}
-	if !ed25519.Verify(pub, append([]byte(telemetrySigningPrefix), got.body...), sig) {
-		t.Fatal("the signature does not verify over the prefix and the body that was sent")
-	}
+	require.NoErrorf(t, err, "sig is not base64: %v", err)
+	require.True(t, ed25519.Verify(pub, append([]byte(telemetrySigningPrefix), got.body...), sig), "the signature does not verify over the prefix and the body that was sent")
 	// A body-only signature is what the v1 routes use; accepting it here would mean the prefix is
 	// not actually in the signed bytes.
-	if ed25519.Verify(pub, got.body, sig) {
-		t.Fatal("the signature verifies without the prefix, so the domain separation is absent")
-	}
-	if got.contentType != "application/json" {
-		t.Errorf("content type %q", got.contentType)
-	}
+	require.True(t, !ed25519.Verify(pub, got.body, sig), "the signature verifies without the prefix, so the domain separation is absent")
+	assert.Equalf(t, "application/json", got.contentType, "content type %q", got.contentType)
 }
 
 // The envelope is exactly four fields. The control plane strict-decodes it, so a fifth would be
@@ -116,26 +99,18 @@ func TestTelemetryEnvelopeIsExactlyTheContract(t *testing.T) {
 	c, _ := client(t, server.URL)
 
 	issued := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	if err := c.SubmitTelemetry(context.Background(), "/v1/telemetry",
-		batchID, issued, payload(t)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.SubmitTelemetry(context.Background(), "/v1/telemetry",
+		batchID, issued, payload(t)))
 
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(got.body, &fields); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(got.body, &fields))
 	for _, name := range []string{"schema", "batch_id", "issued_at", "payload"} {
 		if _, ok := fields[name]; !ok {
 			t.Errorf("the envelope has no %s", name)
 		}
 	}
-	if len(fields) != 4 {
-		t.Errorf("the envelope carries %d fields, the contract allows 4: %v", len(fields), slices.Sorted(maps.Keys(fields)))
-	}
-	if string(fields["issued_at"]) != `"2026-09-18T12:00:00Z"` {
-		t.Errorf("issued_at = %s, want the caller's stamp in RFC3339", fields["issued_at"])
-	}
+	assert.Len(t, fields, 4)
+	assert.Equalf(t, `"2026-09-18T12:00:00Z"`, string(fields["issued_at"]), "issued_at = %s, want the caller's stamp in RFC3339", fields["issued_at"])
 }
 
 // The path is where a submission goes and what the signature covers, and it comes from served
@@ -144,13 +119,9 @@ func TestTelemetryUsesTheServedPath(t *testing.T) {
 	server, got := controlPlane(t, http.StatusNoContent, "")
 	c, _ := client(t, server.URL)
 
-	if err := c.SubmitTelemetry(context.Background(), "/v1/telemetry",
-		batchID, time.Now().UTC(), payload(t)); err != nil {
-		t.Fatal(err)
-	}
-	if got.path != "/v1/telemetry" {
-		t.Errorf("posted to %q", got.path)
-	}
+	require.NoError(t, c.SubmitTelemetry(context.Background(), "/v1/telemetry",
+		batchID, time.Now().UTC(), payload(t)))
+	assert.Equalf(t, "/v1/telemetry", got.path, "posted to %q", got.path)
 }
 
 // Each status has one meaning, and the caller acts on which error came back rather than on a code.
@@ -192,12 +163,8 @@ func TestTelemetryWithNoPathIsDisabledWithoutARequest(t *testing.T) {
 
 	err := c.SubmitTelemetry(context.Background(), "", batchID,
 		time.Now().UTC(), payload(t))
-	if !errors.Is(err, controlplane.ErrTelemetryDisabled) {
-		t.Fatalf("got %v, want controlplane.ErrTelemetryDisabled", err)
-	}
-	if got.path != "" {
-		t.Error("a request was sent for a disabled organization")
-	}
+	require.ErrorIsf(t, err, controlplane.ErrTelemetryDisabled, "got %v, want controlplane.ErrTelemetryDisabled", err)
+	assert.Equal(t, "", got.path, "a request was sent for a disabled organization")
 }
 
 // Refused here rather than spending a request to be refused there.
@@ -206,17 +173,11 @@ func TestAnOversizedSubmissionIsRefusedLocally(t *testing.T) {
 	c, _ := client(t, server.URL)
 
 	big, err := json.Marshal(map[string]string{"event": strings.Repeat("x", controlplane.MaxTelemetryBody)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	err = c.SubmitTelemetry(context.Background(), "/v1/telemetry",
 		batchID, time.Now().UTC(), big)
-	if !errors.Is(err, controlplane.ErrTelemetryRejected) {
-		t.Fatalf("got %v, want controlplane.ErrTelemetryRejected", err)
-	}
-	if got.path != "" {
-		t.Error("an oversized submission was sent anyway")
-	}
+	require.ErrorIsf(t, err, controlplane.ErrTelemetryRejected, "got %v, want controlplane.ErrTelemetryRejected", err)
+	assert.Equal(t, "", got.path, "an oversized submission was sent anyway")
 }
 
 // The route is fixed by the protocol: the control plane builds the same preamble from the same
@@ -227,10 +188,6 @@ func TestAServedPathThatIsNotTheProtocolsIsRefused(t *testing.T) {
 	c, _ := client(t, server.URL)
 
 	err := c.SubmitTelemetry(context.Background(), "/v1/elsewhere", batchID, time.Now().UTC(), payload(t))
-	if !errors.Is(err, controlplane.ErrTelemetryRejected) {
-		t.Fatalf("got %v, want controlplane.ErrTelemetryRejected", err)
-	}
-	if got.path != "" {
-		t.Error("a submission was signed for one path and sent to another")
-	}
+	require.ErrorIsf(t, err, controlplane.ErrTelemetryRejected, "got %v, want controlplane.ErrTelemetryRejected", err)
+	assert.Equal(t, "", got.path, "a submission was signed for one path and sent to another")
 }

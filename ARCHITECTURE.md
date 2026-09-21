@@ -48,6 +48,37 @@ quesma-shipper/
 Paths in this document are relative to the repository root. The Go module begins at `src/`,
 so Go import paths omit that filesystem prefix.
 
+## Reading a collection run
+
+Start at `app/flush.go`, which turns resolved policy into `engine.Options`. The engine
+then owns this sequence:
+
+```
+config.Resolve → app.Runtime.Flush → engine.Run
+  sources.Discover → sourcePass.run → prepareFile → authorizeAndUpload → commit
+                                      scrub → seal
+  staged raw units → enrichSource → scrub → seal → upload → commit
+  report → heartbeat
+```
+
+The main files name the decisions they own:
+
+| Concern | Files under `src/` |
+| --- | --- |
+| Configuration order, merge, validation, roots | `internal/config/{resolve,merge,validate,roots}.go` |
+| Discovery, traversal, lazy reads, format probes | `internal/sources/{gather,walk,candidate,sniff_file}.go` |
+| Admission and concurrency | `internal/engine/pool.go` |
+| Ordered outcomes and durable write intents | `internal/engine/outcome.go` |
+| State ownership and disk representation | `internal/engine/{state,state_wire}.go` |
+| Scrub orchestration and replacement plans | `internal/transforms/{scrub,redaction}.go` |
+| Cursor alignment, evidence ranking, argument comparison | `internal/transforms/cursorjoin/{align,match,args}.go` |
+| Diagnostic agent summaries, source details, history | `app/diagnose_{agents,sources,history}.go` |
+
+`sources.Discover` dispatches to the compiled collectors. Enrichers retain their
+registry because the app supplies their implementations. Workers return write intents;
+only the source coordinator commits them, after the destination confirms the write.
+The audit logger accepts nil as disabled, allowing preview to use the same pipeline.
+
 Import direction follows the table below: **every internal edge is declared, package by
 package.** Go's compiler bans cycles, not wrong-direction edges: `transforms → engine`
 would compile, so the table is the reference for what direction is intended.

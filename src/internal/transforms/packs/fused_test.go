@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Two claims the per-rule tests do not make: a rule collecting its slot out of a shared scan
@@ -14,18 +16,14 @@ import (
 func fusedRules(t *testing.T) []*Rule {
 	t.Helper()
 	rules, err := Load(PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var out []*Rule
 	for _, r := range rules {
 		if r.fused != fusedNone {
 			out = append(out, r)
 		}
 	}
-	if len(out) != 3 {
-		t.Fatalf("expected three fused pii-core rules, got %d", len(out))
-	}
+	require.Lenf(t, out, 3, "expected three fused pii-core rules, got %d", len(out))
 	return out
 }
 
@@ -98,9 +96,7 @@ func TestFusedScanIsIndependentOfRuleOrder(t *testing.T) {
 // A rule with no slot must answer the same whatever the scan holds.
 func TestNonFusedRuleIgnoresTheScan(t *testing.T) {
 	rules, err := Load(PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var scan ValueScan
 	scan.Reset("4111111111111111 44051401359 DE89370400440532013000")
 	scan.candidates(fusedPESEL) // force the walk, so the slots are non-empty

@@ -1,6 +1,3 @@
-// Package app is the composition root: the only layer allowed to know which adapter is which
-// (presigned PUT uploads, the Cursor join, launchd supervision). Assembly lives here, printing
-// lives in cli: a function here returns a value or an error, never a rendered line.
 package app
 
 import (
@@ -9,10 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"filippo.io/age"
 
@@ -21,12 +16,8 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
-	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
-	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
 // Runtime is everything a flush needs, assembled once.
@@ -182,191 +173,6 @@ func recipientsFor(eff *config.Effective, unit *identity.Unit) ([]age.Recipient,
 	return out, nil
 }
 
-func (r *Runtime) options(dryRun bool) engine.Options {
-	return engine.Options{
-		Plan:       planFor(r.eff),
-		Identity:   r.unit,
-		Upload:     r.upload,
-		Log:        r.log,
-		Registry:   sources.NewRegistry(),
-		Enrichers:  Enrichers(),
-		Env:        r.env,
-		Recipients: r.recipients,
-		DryRun:     dryRun,
-		Client:     clientBlock(),
-		Progress:   r.OnProgress,
-		RunID:      r.runID,
-	}
-}
-
-// Enrichers is the compiled enricher registry, shared with doctor so "in this build" cannot
-// drift from what the engine runs. Config can disable an entry; no layer can add one.
-func Enrichers() *transforms.Registry {
-	return transforms.NewRegistry(cursorjoin.New())
-}
-
-// Flush opens the store, runs once, and closes. Every path goes through here, so all of them
-// share one flock and cannot interleave.
-func (r *Runtime) Flush(ctx context.Context, dryRun bool) (formats.Report, error) {
-	return r.flushWith(ctx, dryRun, false)
-}
-
-// Drain flushes everything pending on an ephemeral host, bounded by the deadline rather than by
-// max_files_per_run: the per-run bound is the wrong limit, and the deadline bounds a stuck hook.
-func (r *Runtime) Drain(ctx context.Context) (formats.Report, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.eff.DrainDeadline)
-	defer cancel()
-
-	rep, err := r.flushWith(ctx, false, true)
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		// Partial, not failed: files commit one at a time, so whatever got through is shipped.
-		return rep, false, nil
-	}
-	if err != nil {
-		return rep, false, err
-	}
-	return rep, !rep.Truncated, nil
-}
-
-func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (formats.Report, error) {
-	store, err := engine.Open(r.eff.StateDir, r.unit.InstallID.String())
-	if err != nil {
-		return formats.Report{}, err
-	}
-	defer store.Close()
-	if r.OnLocked != nil {
-		r.OnLocked()
-	}
-
-	// Raised at the one moment it matters; a preview never reaches here with it set.
-	if !dryRun && r.uploadErr != nil {
-		return formats.Report{}, r.uploadErr
-	}
-
-	o := r.options(dryRun)
-	o.Unbounded = unbounded
-	o.Heartbeat = r.WriteHeartbeat
-	rep, err := engine.Run(ctx, store, o)
-
-	// Stamped even when the run shipped nothing: the marker answers "is the agent running at all",
-	// which the fingerprint document cannot.
-	if !dryRun {
-		if markErr := packaging.RecordRun(r.eff.StateDir, time.Now()); markErr != nil && err == nil {
-			// A missing marker makes `status` report NEVER on a healthy install.
-			fmt.Fprintf(os.Stderr, "warning: could not stamp the last-run marker: %v\n", markErr)
-		}
-	}
-	return rep, err
-}
-
-// WriteHeartbeat publishes discovery health as an install-owned state object: under state/ but
-// inside the install prefix, so one erasure sweep takes it too, and carrying no transcript bytes.
-// `doctor` probes the write path with it, as it is the only state object the protocol authorizes.
-func (r *Runtime) WriteHeartbeat(ctx context.Context, rep formats.Report) error {
-	return r.writeHeartbeat(ctx, rep, true)
-}
-
-func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror bool) error {
-	r.hbMu.Lock()
-	defer r.hbMu.Unlock()
-	hb := engine.Build(engine.Input{
-		OrganizationID: r.eff.OrganizationID,
-		InstallID:      r.unit.InstallID.String(),
-		ClientVersion:  r.build.Version,
-		ConfigVersion:  r.eff.ConfigVersion,
-		ConfigExpired:  r.eff.ConfigExpired,
-		RunID:          r.runID,
-		Report:         rep,
-		Now:            time.Now().UTC(),
-		// The crash comes from this process reading the journal; the failures come from the
-		// record, which may include this very run's judgement.
-		FailureRecord: r.failureRecord(),
-	})
-	body, err := hb.Encode()
-	if err != nil {
-		return err
-	}
-	hash := transforms.Hash(body)
-
-	// Mirrored in the clear (counts and versions, never payload bytes) so `quesma-shipper doctor` needs
-	// no network call. Best-effort: a reporting nicety must never fail a flush.
-	if mirror {
-		_ = platform.WriteAtomic(filepath.Join(r.eff.StateDir, engine.Name), body, 0o600)
-	}
-
-	// The resolved organization, not a literal: the heartbeat has to land in the same subtree as
-	// its mirror objects, or one erasure sweep would miss it.
-	key, err := formats.StateKey(r.eff.OrganizationID, r.unit.InstallID.String(), engine.Name+".age")
-	if err != nil {
-		return err
-	}
-	sealed, _, err := transforms.Seal(transforms.Manifest{
-		ManifestVersion: transforms.ManifestVersion,
-		OrganizationID:  r.eff.OrganizationID,
-		InstallID:       r.unit.InstallID.String(),
-		SourceID:        "heartbeat",
-		NativePath:      engine.Name,
-		Gather:          "metadata_only",
-		ArtifactClass:   "context",
-		SourceHash:      hash,
-		SealedAt:        time.Now().UTC().Format(time.RFC3339),
-		ShapeSniff:      string(formats.SniffOK),
-		// The same config fields every mirror manifest carries, so no reader special-cases this one.
-		ConfigVersion: r.eff.ConfigVersion,
-		ConfigExpired: r.eff.ConfigExpired,
-		Client:        clientBlock(),
-		RunID:         r.runID,
-	}, body, r.recipients)
-	if err != nil {
-		return err
-	}
-
-	// The assembly failure first: a nil port and a recorded uploadErr are the same condition.
-	if r.uploadErr != nil {
-		return r.uploadErr
-	}
-	// The heartbeat goes down the trajectory path exactly: one authorization, the same validation,
-	// the same PUT. No second way to reach the store, which a revocation would have to learn about.
-	outcomes := r.upload.AuthorizeAndUpload(ctx, []engine.PreparedObject{{
-		ObjectID:   "heartbeat",
-		Key:        key,
-		Body:       sealed,
-		SourceHash: hash,
-		Metadata:   map[string]string{"kind": "heartbeat"},
-	}})
-	if len(outcomes) != 1 {
-		return fmt.Errorf("the upload port answered %d outcomes for one heartbeat", len(outcomes))
-	}
-	// Once: the stall watchdog's heartbeat can carry the crash before the engine's own does.
-	if outcomes[0] == nil && r.lastCrash != nil && r.OnCrashShipped != nil {
-		r.crashOnce.Do(r.OnCrashShipped)
-	}
-	return outcomes[0]
-}
-
-// planFor is the one place configuration becomes something the loop can read: the core gets
-// values, never the resolver, so adding a config key does not touch the engine. The repo
-// attributor comes from the catalog alone: tracking is answered by marker files, not config.
-func planFor(eff *config.Effective) engine.Plan {
-	interval, _ := config.TickInterval(eff.Schedule)
-	return engine.Plan{
-		Interval:       interval,
-		OrganizationID: eff.OrganizationID,
-		StateDir:       eff.StateDir,
-		MaxFilesPerRun: eff.MaxFilesPerRun,
-		Sources:        eff.Sources,
-		RulePacks:      eff.RulePacks,
-		SecretKeyNames: eff.SecretKeyNames,
-		StructuralEx:   eff.StructuralEx,
-		Deny:           eff.Deny,
-		Ignore:         eff.Catalog.RepoFilter(),
-		ConfigVersion:  eff.ConfigVersion,
-		ConfigExpired:  eff.ConfigExpired,
-	}
-}
-
-// Accessors rather than exported fields: a verb reads the runtime, it never swaps a part of it out.
-
 // Effective is the configuration in force.
 func (r *Runtime) Effective() *config.Effective { return r.eff }
 
@@ -409,18 +215,4 @@ func (r *Runtime) FilterSources(id string) {
 		}
 	}
 	r.eff = &clone
-}
-
-// clientBlock is the build identity stamped into every object. One place, because it is a wire
-// contract the ETL groups on: a second construction site is how two objects disagree.
-func clientBlock() transforms.Client {
-	b := platform.Current()
-	return transforms.Client{
-		Version:   b.String(),
-		Commit:    b.Revision,
-		Modified:  b.Modified,
-		GoVersion: b.GoVersion,
-		OS:        b.OS,
-		Arch:      b.Arch,
-	}
 }

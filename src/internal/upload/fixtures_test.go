@@ -1,14 +1,16 @@
 package upload
 
-// The golden authorization pair from the shipper-protocol v2 fixtures anchors every validation test: key
-// grammar, escaped path and header set come from what the control plane is tested against.
-
 import (
 	"encoding/json"
 	"io/fs"
 	"path"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	// The golden authorization pair from the shipper-protocol v2 fixtures anchors every validation test: key
+	// grammar, escaped path and header set come from what the control plane is tested against.
 
 	protocol "github.com/QuesmaOrg/shipper-protocol"
 )
@@ -72,12 +74,8 @@ func goldenPair(t *testing.T, requestFixture, responseFixture string) (PreparedU
 func readFixture(t *testing.T, name string, into any) {
 	t.Helper()
 	raw, err := fs.ReadFile(protocol.FS, path.Join("fixtures", "v2", "uploads-authorize", name))
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
-	}
-	if err := json.Unmarshal(raw, into); err != nil {
-		t.Fatalf("decode fixture %s: %v", name, err)
-	}
+	require.NoErrorf(t, err, "read fixture %s: %v", name, err)
+	require.NoError(t, json.Unmarshal(raw, into))
 }
 
 // goldenTarget is the machine-owner allowlist entry the fixture URLs belong to.
@@ -87,8 +85,6 @@ func goldenTarget(t *testing.T) UploadTarget {
 		Origin:     "https://archive.example.invalid",
 		Addressing: VirtualHosted,
 	})
-	if err != nil {
-		t.Fatalf("build golden target: %v", err)
-	}
+	require.NoErrorf(t, err, "build golden target: %v", err)
 	return target
 }

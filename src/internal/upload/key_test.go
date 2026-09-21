@@ -4,6 +4,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The exact-key check is a byte comparison, so the encoder must produce the fixture's spelling.
@@ -11,18 +14,12 @@ func TestCanonicalPathReproducesGoldenTicketPath(t *testing.T) {
 	prepared, ticket := goldenPair(t, "request.json", "response.json")
 
 	parsed, err := url.Parse(ticket.URL)
-	if err != nil {
-		t.Fatalf("parse golden ticket url: %v", err)
-	}
+	require.NoErrorf(t, err, "parse golden ticket url: %v", err)
 	want := parsed.EscapedPath()
-	if got := "/" + canonicalPath(prepared.Key); got != want {
-		t.Fatalf("canonicalPath produced %q, golden ticket path is %q", got, want)
-	}
+	require.Equal(t, "/"+canonicalPath(prepared.Key), want)
 
 	// Why hand-rolled: net/url leaves "=" unescaped and every mirror key carries organization=.
-	if stdlib := (&url.URL{Path: "/" + prepared.Key}).EscapedPath(); stdlib == want {
-		t.Fatalf("net/url now escapes this key grammar (%q): the hand-rolled encoder can go", stdlib)
-	}
+	require.NotEqual(t, (&url.URL{Path: "/" + prepared.Key}).EscapedPath(), want)
 }
 
 func TestCanonicalPathEscaping(t *testing.T) {
@@ -40,20 +37,14 @@ func TestCanonicalPathEscaping(t *testing.T) {
 		{"café", "caf%C3%A9"},
 	}
 	for _, c := range cases {
-		if got := canonicalPath(c.key); got != c.want {
-			t.Errorf("canonicalPath(%q) = %q, want %q", c.key, got, c.want)
-		}
+		assert.Equal(t, canonicalPath(c.key), c.want)
 	}
 }
 
 func TestCanonicalPathUsesUppercaseHex(t *testing.T) {
 	got := canonicalPath("=")
-	if got != "%3D" {
-		t.Fatalf("canonicalPath(\"=\") = %q, want %%3D", got)
-	}
-	if strings.ContainsAny(got, "abcdef") {
-		t.Fatalf("canonicalPath produced lowercase hex: %q", got)
-	}
+	require.Equalf(t, "%3D", got, "canonicalPath(\"=\") = %q, want %%3D", got)
+	require.Truef(t, !strings.ContainsAny(got, "abcdef"), "canonicalPath produced lowercase hex: %q", got)
 }
 
 func TestValidateKeyRejects(t *testing.T) {
@@ -69,11 +60,7 @@ func TestValidateKeyRejects(t *testing.T) {
 		"too long":       strings.Repeat("a", maxKeyLength+1),
 	}
 	for name, key := range cases {
-		if err := validateKey(key); err == nil {
-			t.Errorf("%s: validateKey accepted %q", name, key)
-		}
+		assert.Error(t, validateKey(key), name)
 	}
-	if err := validateKey("v1/organization=acme/mirror/object.age"); err != nil {
-		t.Fatalf("validateKey refused a canonical key: %v", err)
-	}
+	require.NoError(t, validateKey("v1/organization=acme/mirror/object.age"))
 }

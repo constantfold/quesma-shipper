@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestAppForExecutableValidatesIdentity(t *testing.T) {
@@ -33,17 +35,11 @@ func TestAppForExecutableValidatesIdentity(t *testing.T) {
 func TestApplyAppPackageReplacesTheWholeBundle(t *testing.T) {
 	parent := t.TempDir()
 	app := filepath.Join(parent, appName)
-	if err := os.MkdirAll(filepath.Join(app, "Contents", "MacOS"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(app, "old"), []byte("old"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Join(app, "Contents", "MacOS"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(app, "old"), []byte("old"), 0o600))
 
 	const version = "0.0.1-123.abcdef123456"
-	if err := applyAppPackage(testAppPackage(t, version), app, version); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, applyAppPackage(testAppPackage(t, version), app, version))
 	if _, err := os.Stat(filepath.Join(app, "old")); !os.IsNotExist(err) {
 		t.Fatalf("old bundle survived replacement: %v", err)
 	}
@@ -60,9 +56,7 @@ func TestBuiltPackageSatisfiesTheUpdater(t *testing.T) {
 		t.Skip("set QUESMA_SHIPPER_PKG and QUESMA_SHIPPER_RELEASE_VERSION to check a built package")
 	}
 	raw, err := os.ReadFile(pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := expandAppPackage(raw, t.TempDir(), version); err != nil {
 		t.Fatalf("the updater rejects the built package: %v", err)
 	}
@@ -77,18 +71,12 @@ func installerChoices(t *testing.T, pkg string) map[string]bool {
 	show := exec.Command("/usr/sbin/installer", "-showChoicesXML", "-pkg", pkg, "-target", "CurrentUserHomeDirectory")
 	convert := exec.Command("/usr/bin/plutil", "-convert", "json", "-o", "-", "-")
 	xml, err := show.Output()
-	if err != nil {
-		t.Fatalf("installer -showChoicesXML: %v", err)
-	}
+	require.NoErrorf(t, err, "installer -showChoicesXML: %v", err)
 	convert.Stdin = strings.NewReader(string(xml))
 	out, err := convert.Output()
-	if err != nil {
-		t.Fatalf("plutil -convert json: %v", err)
-	}
+	require.NoErrorf(t, err, "plutil -convert json: %v", err)
 	var choices []installerChoice
-	if err := json.Unmarshal(out, &choices); err != nil {
-		t.Fatalf("parsing choices: %v\n%s", err, out)
-	}
+	require.NoError(t, json.Unmarshal(out, &choices))
 	selected := map[string]bool{}
 	var walk func([]installerChoice)
 	walk = func(cs []installerChoice) {
@@ -116,9 +104,7 @@ func testAppPackage(t *testing.T, version string) []byte {
 	root := t.TempDir()
 	app := filepath.Join(root, "Applications", appName)
 	writeTestBundle(t, app, version)
-	if err := os.WriteFile(filepath.Join(app, "new"), []byte("new"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(app, "new"), []byte("new"), 0o644))
 
 	work := t.TempDir()
 	component := filepath.Join(work, componentPackage)
@@ -131,9 +117,7 @@ func testAppPackage(t *testing.T, version string) []byte {
 		t.Fatalf("productbuild: %v: %s", err, out)
 	}
 	raw, err := os.ReadFile(pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return raw
 }
 
@@ -146,28 +130,18 @@ func writeTestBundle(t *testing.T, app, version string) string {
 <key>CFBundleIdentifier</key><string>` + bundleIdentifier + `</string>
 <key>` + releaseVersionField + `</key><string>` + version + `</string>
 </dict></plist>`
-	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(executable, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644))
+	require.NoError(t, os.Chmod(executable, 0o755))
 	return executable
 }
 
 func writeTestApp(t *testing.T, app, bundleID, executableName string) string {
 	t.Helper()
 	executable := filepath.Join(app, "Contents", "MacOS", executableName)
-	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(executable), 0o755))
 	plist := `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>` + bundleID + `</string></dict></plist>`
-	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644))
+	require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o755))
 	return executable
 }

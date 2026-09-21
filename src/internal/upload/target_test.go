@@ -2,8 +2,10 @@ package upload
 
 import (
 	"errors"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewUploadTargetAccepts(t *testing.T) {
@@ -41,12 +43,8 @@ func TestNewUploadTargetAccepts(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			target, err := NewUploadTarget(c.spec)
-			if err != nil {
-				t.Fatalf("NewUploadTarget: %v", err)
-			}
-			if got := target.Origin(); got != c.wantOrigin {
-				t.Fatalf("origin = %q, want %q", got, c.wantOrigin)
-			}
+			require.NoErrorf(t, err, "NewUploadTarget: %v", err)
+			require.Equal(t, target.Origin(), c.wantOrigin)
 		})
 	}
 }
@@ -86,13 +84,9 @@ func TestNewUploadTargetRejects(t *testing.T) {
 
 func TestUploadTargetListMatch(t *testing.T) {
 	archive, err := NewUploadTarget(TargetSpec{Origin: "https://archive.example.invalid", Addressing: VirtualHosted})
-	if err != nil {
-		t.Fatalf("build target: %v", err)
-	}
+	require.NoErrorf(t, err, "build target: %v", err)
 	minio, err := NewUploadTarget(TargetSpec{Origin: "https://minio.example.invalid:9000", Addressing: PathStyle, PathPrefix: "/trajectories"})
-	if err != nil {
-		t.Fatalf("build target: %v", err)
-	}
+	require.NoErrorf(t, err, "build target: %v", err)
 	list := UploadTargetList{archive, minio}
 
 	matched := []struct {
@@ -106,12 +100,8 @@ func TestUploadTargetListMatch(t *testing.T) {
 	}
 	for _, c := range matched {
 		got, err := list.Match(c.url)
-		if err != nil {
-			t.Fatalf("Match(%q): %v", c.url, err)
-		}
-		if got.Origin() != c.want {
-			t.Fatalf("Match(%q) = %s, want %s", c.url, got.Origin(), c.want)
-		}
+		require.NoError(t, err)
+		require.Equalf(t, c.want, got.Origin(), "Match(%q) = %s, want %s", c.url, got.Origin(), c.want)
 	}
 
 	refused := map[string]string{
@@ -140,15 +130,9 @@ func TestUploadTargetListMatch(t *testing.T) {
 // An empty allowlist is unpinned: only a configured entry may admit anything weaker than https.
 func TestEmptyAllowlistAdoptsTheTicketOrigin(t *testing.T) {
 	target, err := (UploadTargetList{}).Match("https://archive.example.invalid/v1/object.age")
-	if err != nil {
-		t.Fatalf("unpinned match: %v", err)
-	}
-	if target.addressing != addressingUnpinned {
-		t.Error("the adopted target is not marked unpinned")
-	}
-	if got := target.Origin(); got != "https://archive.example.invalid:443" {
-		t.Errorf("adopted origin %q", got)
-	}
+	require.NoErrorf(t, err, "unpinned match: %v", err)
+	assert.Equal(t, addressingUnpinned, target.addressing, "the adopted target is not marked unpinned")
+	assert.Equal(t, "https://archive.example.invalid:443", target.Origin())
 
 	for name, raw := range map[string]string{
 		"http":          "http://archive.example.invalid/v1/object.age",
@@ -165,14 +149,10 @@ func TestEmptyAllowlistAdoptsTheTicketOrigin(t *testing.T) {
 // The origin is diagnosable; the rest of a presigned URL is a bearer credential.
 func TestMatchErrorCarriesNoURL(t *testing.T) {
 	target, err := NewUploadTarget(TargetSpec{Origin: "https://archive.example.invalid", Addressing: VirtualHosted})
-	if err != nil {
-		t.Fatalf("build target: %v", err)
-	}
+	require.NoErrorf(t, err, "build target: %v", err)
 	raw := "https://evil.example.invalid/v1/organization%3Dacme/object.age?X-Amz-Signature=deadbeef"
 	_, err = UploadTargetList{target}.Match(raw)
-	if err == nil {
-		t.Fatal("Match accepted an unlisted origin")
-	}
+	require.Error(t, err, "Match accepted an unlisted origin")
 	assertNoURLLeak(t, err, raw)
 }
 
@@ -180,8 +160,6 @@ func assertNoURLLeak(t *testing.T, err error, rawURL string) {
 	t.Helper()
 	message := err.Error()
 	for _, secret := range []string{rawURL, "X-Amz-Signature", "deadbeef", "FIXTURE", "?"} {
-		if strings.Contains(message, secret) {
-			t.Fatalf("error leaked %q: %s", secret, message)
-		}
+		require.NotContainsf(t, message, secret, "error leaked %q: %s", secret, message)
 	}
 }

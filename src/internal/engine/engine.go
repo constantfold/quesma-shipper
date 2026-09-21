@@ -1,6 +1,3 @@
-// Package engine is the flush loop: discover, detect change, read whole, scrub, seal,
-// upload, commit. Retry is re-run: with no pending-upload state, a crash before the fingerprint
-// commit re-ships onto the same path-derived key. Nothing is durable until that commit.
 package engine
 
 import (
@@ -12,117 +9,10 @@ import (
 	"slices"
 	"time"
 
-	"filippo.io/age"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
-	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
-
-// backoffCap bounds retry backoff. There is no max-retry: giving up is silent data loss.
-const backoffCap = time.Hour
-
-// Options configures one run.
-type Options struct {
-	// Plan is what the loop needs from the configuration, and nothing else.
-	Plan     Plan
-	Identity *identity.Unit
-	Log      *auditlog.Log
-	Registry *sources.Registry
-
-	// Upload is the write path. Required for a run that ships; a preview seals without one.
-	Upload UploadPort
-
-	// Recipients the object is encrypted to; an enterprise deployment adds org recipients.
-	Recipients []age.Recipient
-
-	// Unbounded ignores max_files_per_run. Set by the drain only; see Run.
-	Unbounded bool
-
-	// DryRun reads, scrubs and seals but neither uploads nor commits. This is `preview`.
-	DryRun bool
-
-	// Enrichers is the compiled registry. Nil disables enrichment, and a source declaring one
-	// is then refused rather than silently collected raw-only.
-	Enrichers *transforms.Registry
-
-	// Env expands an enricher's database candidates with the same ~ and $VAR rules as catalog roots.
-	Env sources.Env
-
-	// Heartbeat publishes discovery health after a run. Optional and best-effort: it fails open.
-	Heartbeat func(context.Context, Report) error
-
-	// Progress streams each file's outcome as it is decided. Optional; nil is silent.
-	Progress formats.Progress
-
-	// RunID is the process's crash-journal id, stamped into every manifest this run seals.
-	RunID string
-
-	// Now is injectable so tests are not timing-dependent.
-	Now func() time.Time
-
-	// CommitBatch bounds how many fingerprints buffer before the state document is replaced.
-	// Zero takes the default; it is not configuration.
-	CommitBatch int
-
-	// Workers pins how many files a source pass computes at once. Zero takes GOMAXPROCS.
-	Workers int
-
-	// UploadWorkers pins how many PUTs are in flight at once. Zero takes eight times the
-	// compute pool; see uploadConcurrency in pool.go.
-	UploadWorkers int
-
-	// Client is the build stamped into every manifest this run writes.
-	Client transforms.Client
-
-	// user is the placeholder username, set by Run before anything that reads it.
-	user string
-
-	// The run's compiled scrubber, shared by the raw and derived paths.
-	scrub    *transforms.Scrubber
-	scrubErr error
-}
-
-// The run's vocabulary lives in the contract layer, aliased here so an adapter that needs one
-// of these types does not import the core.
-type (
-	FileOutcome   = formats.FileOutcome
-	SourceOutcome = formats.SourceOutcome
-	Report        = formats.Report
-)
-
-// Plan is the configuration the loop actually reads: every field is one it branches on. This
-// keeps the core free of the config package and testable from a struct literal.
-type Plan struct {
-	// OrganizationID is the organization= key segment; empty means the standalone placeholder.
-	OrganizationID string
-
-	StateDir       string
-	MaxFilesPerRun int
-	Interval       time.Duration
-
-	Sources []sources.Resolved
-
-	// RulePacks and StructuralEx configure redaction; the scrub floor is an adapter's decision.
-	RulePacks      []string
-	SecretKeyNames []string
-	StructuralEx   map[string][]string
-
-	// Deny is the compiled path deny list. Required: a nil deny list would read as "nothing is denied".
-	Deny *sources.List
-
-	// Ignore drops candidates of an ignored repository. Nil is the ordinary state and
-	// means nothing is ignored.
-	Ignore *sources.RepoFilter
-
-	ConfigVersion int
-
-	// ConfigExpired stamps every manifest. Expiry does not stop collection; it makes staleness visible.
-	ConfigExpired bool
-}
 
 // Run performs one flush. Sources flush sequentially: the loop is poll-shaped, so a missed tick
 // is a catch-up rather than a loss.
@@ -209,15 +99,7 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 			continue
 		}
 
-		prim, err := o.Registry.For(src.Gather)
-		if err != nil {
-			out.Health = sources.MatchPresentUnreadable
-			out.Reason = err.Error()
-			rep.Sources = append(rep.Sources, out)
-			continue
-		}
-
-		disc, err := prim.Discover(sources.Request{
+		disc, err := sources.Discover(sources.Request{
 			Source:   src,
 			All:      o.Plan.Sources,
 			Deny:     o.Plan.Deny,
@@ -256,7 +138,7 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 		out.Unreadable = disc.Unreadable
 		out.UnreadableExample = disc.UnreadableExample
 		out.UnreadableReason = disc.UnreadableReason
-		if out.Unreadable > 0 && o.Log != nil {
+		if out.Unreadable > 0 {
 			_ = o.Log.Append(auditlog.Entry{
 				Decision:      auditlog.DecisionSkipped,
 				SourceID:      src.ID,
@@ -271,9 +153,6 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 		for _, big := range disc.Oversize {
 			if big.Size > out.OversizeLargest {
 				out.OversizeLargest, out.OversizeExample, out.OversizeLimit = big.Size, big.RelPath, big.Limit
-			}
-			if o.Log == nil {
-				continue
 			}
 			_ = o.Log.Append(auditlog.Entry{
 				Decision:      auditlog.DecisionSkipped,
@@ -337,15 +216,13 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 			if n, derr := store.DropVanished(src.ID, live); derr != nil {
 				return rep, derr
 			} else if n > 0 {
-				if o.Log != nil {
-					_ = o.Log.Append(auditlog.Entry{
-						Decision:      auditlog.DecisionSkipped,
-						SourceID:      src.ID,
-						ConfigVersion: o.Plan.ConfigVersion,
-						Reason: fmt.Sprintf(
-							"forgot %d fingerprint(s) for files this source no longer has", n),
-					})
-				}
+				_ = o.Log.Append(auditlog.Entry{
+					Decision:      auditlog.DecisionSkipped,
+					SourceID:      src.ID,
+					ConfigVersion: o.Plan.ConfigVersion,
+					Reason: fmt.Sprintf(
+						"forgot %d fingerprint(s) for files this source no longer has", n),
+				})
 			}
 		}
 
@@ -362,7 +239,7 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 	if !o.DryRun && o.Heartbeat != nil {
 		// Health reporting fails open; only redaction fails closed.
 		err := o.Heartbeat(ctx, rep)
-		if err != nil && o.Log != nil {
+		if err != nil {
 			_ = o.Log.Append(auditlog.Entry{
 				Decision: auditlog.DecisionFailed,
 				Reason:   "heartbeat write failed: " + err.Error(),
@@ -370,64 +247,4 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 		}
 	}
 	return rep, nil
-}
-
-// summarize totals bytes from the outcomes rather than accumulating: derived.go appends outcomes
-// without passing through the fold. Emitted and derived are excluded so an idle run totals zero.
-func summarize(rep *Report) {
-	var shippedIn []int64
-	for _, s := range rep.Sources {
-		if s.Emitted {
-			continue
-		}
-		for _, f := range s.Files {
-			if f.Derived {
-				continue
-			}
-			rep.BytesRead += f.BytesIn
-			rep.BytesSealed += f.BytesOut
-			if f.Decision == formats.DecisionShipped {
-				shippedIn = append(shippedIn, f.BytesIn)
-			}
-		}
-	}
-	rep.MedianFileBytes = median(shippedIn)
-}
-
-func median(v []int64) int64 {
-	if len(v) == 0 {
-		return 0
-	}
-	sorted := slices.Clone(v)
-	slices.Sort(sorted)
-	return sorted[len(sorted)/2]
-}
-
-func (o Options) scrubber() (*transforms.Scrubber, error) {
-	cfg := transforms.DefaultConfig()
-	cfg.RulePacks = o.Plan.RulePacks
-	// Additive: configuration can only lengthen the compiled default list, never replace it.
-	cfg.SecretKeyNames = append(cfg.SecretKeyNames, o.Plan.SecretKeyNames...)
-	cfg.Exemptions = o.Plan.StructuralEx
-	cfg.Username = o.user
-	return transforms.New(cfg)
-}
-
-// orgOf is the organization= key segment, always the RESOLVED value: a hardcoded "default" splits
-// one enrolled install across two organization subtrees. The fallback keeps key depth constant.
-func orgOf(p Plan) string {
-	if p.OrganizationID == "" {
-		return "default"
-	}
-	return p.OrganizationID
-}
-
-// backoffFor computes the next attempt delay: a minute, doubling, capped at an hour, with up to
-// 12.5% of jitter subtracted so correlated failures do not wake together. Derived from attempt and
-// spread rather than rand, so runs stay reproducible, and subtracted so the cap stays a ceiling.
-func backoffFor(attempt int, spread uint64) time.Duration {
-	d := min(time.Minute<<min(attempt, 8), backoffCap)
-	// Up to an eighth off, so the spread is visible without meaningfully shortening the delay.
-	jitter := time.Duration(spread%9) * d / 64
-	return d - jitter
 }

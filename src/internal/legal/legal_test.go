@@ -5,31 +5,26 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The embedded copies must match the repository's canonical files, or `quesma-shipper licenses` lies.
 func TestEmbeddedCopiesMatchRepository(t *testing.T) {
 	for name, canonical := range map[string]string{"LICENSE": "../../../LICENSE", "NOTICE": "../../../NOTICE"} {
 		want, err := os.ReadFile(canonical)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		got, err := FS.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("%s differs from %s; run make licenses", name, canonical)
-		}
+		require.NoError(t, err)
+		assert.Truef(t, bytes.Equal(got, want), "%s differs from %s; run make licenses", name, canonical)
 	}
 }
 
 // Every row of the inventory has a license text in the tree, and the tree has no orphan.
 func TestInventoryMatchesTexts(t *testing.T) {
 	csv, err := FS.ReadFile("third_party/licenses.csv")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, line := range strings.Split(strings.TrimSpace(string(csv)), "\n") {
 		pkg := strings.SplitN(line, ",", 2)[0]
 		found := false
@@ -39,18 +34,12 @@ func TestInventoryMatchesTexts(t *testing.T) {
 				break
 			}
 		}
-		if !found {
-			t.Errorf("%s is in licenses.csv but has no license text under third_party/licenses", pkg)
-		}
+		assert.Truef(t, found, "%s is in licenses.csv but has no license text under third_party/licenses", pkg)
 	}
 	var out bytes.Buffer
-	if err := Write(&out); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, Write(&out))
 	for _, must := range []string{"Copyright 2026 Quesma Inc.", "Apache License", "The Update Framework Authors", "mousetrap", "Zachary Rice"} {
-		if !strings.Contains(out.String(), must) {
-			t.Errorf("licenses output lacks %q", must)
-		}
+		assert.Containsf(t, out.String(), must, "licenses output lacks %q", must)
 	}
 }
 

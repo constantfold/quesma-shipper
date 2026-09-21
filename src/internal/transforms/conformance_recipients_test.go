@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
@@ -28,45 +30,32 @@ type recipientsVector struct {
 
 func TestConformanceRecipients(t *testing.T) {
 	raw, err := os.ReadFile(recipientsVectorPath)
-	if err != nil {
-		t.Fatalf("read vector: %v", err)
-	}
+	require.NoErrorf(t, err, "read vector: %v", err)
 	var v recipientsVector
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &v))
 
 	install, org, escrow := identity(t), identity(t), identity(t)
 	recipients := []age.Recipient{install.Recipient(), org.Recipient(), escrow.Recipient()}
 	payload := []byte("{\"type\":\"user\"}\n")
 
 	obj, _, err := transforms.Seal(manifest(), payload, recipients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// key_id_order: the manifest records the set in seal argument order, so an auditor sees exactly
 	// what the seal was told.
 	m, _, err := transforms.Open(obj, install)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if v.Scheme != "age" || m.Encryption == nil || m.Encryption.Scheme != v.Scheme {
 		t.Fatalf("scheme: vector says %q, manifest says %+v", v.Scheme, m.Encryption)
 	}
 	wantIDs := []string{
 		install.Recipient().String(), org.Recipient().String(), escrow.Recipient().String(),
 	}
-	if !slices.Equal(m.Encryption.RecipientKeyIDs, wantIDs) {
-		t.Errorf("recipient_key_ids:\n got %v\nwant %v (seal argument order)",
-			m.Encryption.RecipientKeyIDs, wantIDs)
-	}
+	assert.Truef(t, slices.Equal(m.Encryption.RecipientKeyIDs, wantIDs), "recipient_key_ids:\n got %v\nwant %v (seal argument order)", m.Encryption.RecipientKeyIDs, wantIDs)
 
 	// any_single_identity_suffices: the org reader and the escrow key each open the object alone,
 	// which is what makes the ETL keyring work without any install's key.
-	if !v.AnySingleIdentitySuffices {
-		t.Fatal("the vector must claim any-single-identity: age's envelope construction guarantees it")
-	}
+	require.True(t, v.AnySingleIdentitySuffices, "the vector must claim any-single-identity: age's envelope construction guarantees it")
 	for name, id := range map[string]*age.X25519Identity{"org": org, "escrow": escrow} {
 		if _, got, err := transforms.Open(obj, id); err != nil {
 			t.Errorf("the %s identity alone must open the object: %v", name, err)
@@ -81,9 +70,7 @@ func TestConformanceRecipients(t *testing.T) {
 	}
 
 	// min_recipients: encryption is not optional, so zero recipients is a refusal.
-	if v.MinRecipients != 1 {
-		t.Fatalf("min_recipients drifted: %d", v.MinRecipients)
-	}
+	require.Equalf(t, 1, v.MinRecipients, "min_recipients drifted: %d", v.MinRecipients)
 	if _, _, err := transforms.Seal(manifest(), payload, nil); err == nil {
 		t.Error("sealing to no recipients must be refused")
 	}
