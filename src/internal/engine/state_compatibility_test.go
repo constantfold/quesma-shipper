@@ -121,10 +121,7 @@ func TestCommitOfAnUnserializableEntryFails(t *testing.T) {
 	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
 	require.NoError(t, err)
 
-	bad := engine.Key{
-		SourceID:   "claude-code-transcripts",
-		NativePath: "",
-	}
+	bad := engine.Key{SourceID: "claude-code-transcripts", NativePath: ""}
 	require.Error(t, commit(s, bad, fingerprint()), "a document that would not satisfy its own schema must not be written")
 
 	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
@@ -137,10 +134,7 @@ func TestDerivedEntryRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
 
-	k := engine.Key{
-		SourceID:   "cursor-transcripts",
-		NativePath: "/c/c8cbeb0b.jsonl.enriched.jsonl",
-	}
+	k := engine.Key{SourceID: "cursor-transcripts", NativePath: "/c/c8cbeb0b.jsonl.enriched.jsonl"}
 	fp := fingerprint()
 	fp.Enricher = &engine.EnricherRef{ID: "cursor-transcript-join", Version: 1}
 	fp.OutputHash = otherSha

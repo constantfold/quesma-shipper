@@ -123,10 +123,7 @@ func run(m *testing.M) int {
 		// Public scrape auth because the S3 request count is read off a metrics page, which
 		// otherwise answers 403. CI_CD drops MinIO's preallocation, keeping the store out of the
 		// way of the memory budgets the scenarios next door run under.
-		testcontainers.WithEnv(map[string]string{
-			"MINIO_PROMETHEUS_AUTH_TYPE": "public",
-			"CI_CD":                      "true",
-		}),
+		testcontainers.WithEnv(map[string]string{"MINIO_PROMETHEUS_AUTH_TYPE": "public", "CI_CD": "true"}),
 		// The internal-only store has no host port, so wait on its ready log.
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("API:").
@@ -240,10 +237,8 @@ func createVersionedBucket(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	if _, err := adminS3.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
-		Bucket: aws.String(name),
-		VersioningConfiguration: &types.VersioningConfiguration{
-			Status: types.BucketVersioningStatusEnabled,
-		},
+		Bucket:                  aws.String(name),
+		VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
 	}); err != nil {
 		return "", err
 	}
@@ -296,10 +291,7 @@ func withLatency(t *testing.T, rtt, jitter time.Duration) {
 	half := rtt / 2
 	for _, stream := range []string{"upstream", "downstream"} {
 		_, err := storeProxy.AddToxic("latency_"+stream, "latency", stream, 1,
-			toxiproxy.Attributes{
-				"latency": half.Milliseconds(),
-				"jitter":  (jitter / 2).Milliseconds(),
-			})
+			toxiproxy.Attributes{"latency": half.Milliseconds(), "jitter": (jitter / 2).Milliseconds()})
 		require.Falsef(t, err != nil, "add %s latency toxic: %v", stream, err)
 	}
 	// /reset removes every toxic and re-enables every proxy, however the test exits.
@@ -315,10 +307,7 @@ func withLatency(t *testing.T, rtt, jitter time.Duration) {
 // not a dial: the toxic delays data, so a connect-only probe would pass with no shaping at all.
 func assertShapingIsLive(t *testing.T, rtt time.Duration) {
 	t.Helper()
-	client := &http.Client{
-		Transport: &http.Transport{DisableKeepAlives: true},
-		Timeout:   30 * time.Second,
-	}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 30 * time.Second}
 	start := time.Now()
 	resp, err := client.Get(storeEndpoint + "/minio/health/live")
 	require.Falsef(t, err != nil, "probe the shaped link: %v", err)
@@ -352,11 +341,7 @@ func aroundStore(t *testing.T, fn func()) storeCounters {
 	fn()
 
 	up, down := proxiedBytesByDirection(t)
-	return storeCounters{
-		up:       up - upBefore,
-		down:     down - downBefore,
-		requests: s3RequestCount(t) - requestsBefore,
-	}
+	return storeCounters{up: up - upBefore, down: down - downBefore, requests: s3RequestCount(t) - requestsBefore}
 }
 
 // One reading of the shaped proxy's four byte counters; toxiproxy counts each link's bytes twice,

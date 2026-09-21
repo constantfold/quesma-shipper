@@ -30,18 +30,9 @@ func TestAbsolutePathsAreShortenedOnTheWayOut(t *testing.T) {
 			"copy /var/lib/quesma/state/a.json to /home/USER/work/b.json",
 			"copy …/state/a.json to …/work/b.json",
 		},
-		"a short path is left alone": {
-			"read /etc/hosts failed",
-			"read /etc/hosts failed",
-		},
-		"a bare slash is left alone": {
-			"ratio 3/4 exceeded",
-			"ratio 3/4 exceeded",
-		},
-		"a route is shortened too": {
-			"backend: /v2/uploads/authorize: 503",
-			"backend: …/uploads/authorize: 503",
-		},
+		"a short path is left alone": {"read /etc/hosts failed", "read /etc/hosts failed"},
+		"a bare slash is left alone": {"ratio 3/4 exceeded", "ratio 3/4 exceeded"},
+		"a route is shortened too":   {"backend: /v2/uploads/authorize: 503", "backend: …/uploads/authorize: 503"},
 	} {
 		assert.Equal(t, tc.want, shortenTelemetryPaths(tc.in), name)
 	}

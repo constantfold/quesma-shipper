@@ -346,10 +346,7 @@ func (w *world) currentKeys(t *testing.T) []string {
 func (w *world) versionCounts(t *testing.T) map[string]int {
 	t.Helper()
 	counts := map[string]int{}
-	in := &awss3.ListObjectVersionsInput{
-		Bucket: aws.String(w.bucket),
-		Prefix: aws.String(w.keyRoot + "/"),
-	}
+	in := &awss3.ListObjectVersionsInput{Bucket: aws.String(w.bucket), Prefix: aws.String(w.keyRoot + "/")}
 	for {
 		out, err := adminS3.ListObjectVersions(context.Background(), in)
 		require.Falsef(t, err != nil, "list versions: %v", err)

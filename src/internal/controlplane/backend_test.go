@@ -99,10 +99,7 @@ func (p *fakePlane) start() *httptest.Server {
 			http.Error(w, "this service serves config_version 1 only", http.StatusConflict)
 			return
 		}
-		writeJSON(w, controlplane.ConfigResponse{
-			Config:    []byte(p.config),
-			ExpiresAt: p.expiresAt,
-		})
+		writeJSON(w, controlplane.ConfigResponse{Config: []byte(p.config), ExpiresAt: p.expiresAt})
 	})
 
 	srv := httptest.NewServer(mux)

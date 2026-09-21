@@ -169,10 +169,7 @@ func TestManifestRedactionSummaryRejectsByteRanges(t *testing.T) {
 	b, _ := json.Marshal(doc)
 	require.NoError(t, formats.Validate(formats.Manifest, decode(t, string(b))))
 
-	doc["redaction"] = map[string]any{
-		"density": 0.012,
-		"spans":   []any{map[string]int{"offset": 128, "length": 40}},
-	}
+	doc["redaction"] = map[string]any{"density": 0.012, "spans": []any{map[string]int{"offset": 128, "length": 40}}}
 	b, _ = json.Marshal(doc)
 	require.Error(t, formats.Validate(formats.Manifest, decode(t, string(b))), "byte-range spans in a redaction summary must be rejected")
 }

@@ -217,11 +217,7 @@ func sidecarSource() config.ResolvedSource {
 				Fields:    []string{"cwd", "payload.cwd"},
 				ScanBytes: 65536,
 			},
-			GitRead: &sources.GitRead{
-				WalkUp:           true,
-				FollowGitdirFile: true,
-				Take:             []string{"remote.*.url"},
-			},
+			GitRead: &sources.GitRead{WalkUp: true, FollowGitdirFile: true, Take: []string{"remote.*.url"}},
 		},
 		Enabled: true,
 	}

@@ -92,14 +92,12 @@ func TestTheBootGateKeepsItsPromises(t *testing.T) {
 		{"a dev build never does, silently", dev, nil, "", false, false},
 		{"a dev build ignores even a stray re-exec guard", dev,
 			map[string]string{app.ReexecGuardEnv: "0.0.1-9.x"}, "", false, false},
-		{"the env kill switch wins and says so", release,
-			map[string]string{app.NoSelfUpdateEnv: "1"}, "", false, true},
+		{"the env kill switch wins and says so", release, map[string]string{app.NoSelfUpdateEnv: "1"}, "", false, true},
 		{"the hop guard stops a second update this boot and says so", release,
 			map[string]string{app.ReexecGuardEnv: "0.0.1-124.def456def456"}, "", false, true},
 		{"a hop to a version we are not running blocks and says so", release, nil,
 			"0.0.1-124.def456def456", false, true},
-		{"a hop that landed on this build stops blocking", release, nil,
-			release.Version, true, false},
+		{"a hop that landed on this build stops blocking", release, nil, release.Version, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run, why := selfUpdateGate(tc.build, env(tc.vars), tc.hop)

@@ -167,12 +167,7 @@ func generateContainerVectors(t *testing.T) []byte {
 		LayerOrder: []string{"tar", "zstd", "age"},
 		EntryOrder: []string{transforms.ManifestEntry, transforms.PayloadEntry},
 		ZstdLevel:  transforms.ZstdLevel,
-		TarHeader: tarHeaderVector{
-			Mode:            "0600",
-			UIDGID:          0,
-			Format:          "USTAR",
-			ManifestModTime: "1970-01-01T00:00:00Z",
-		},
+		TarHeader:  tarHeaderVector{Mode: "0600", UIDGID: 0, Format: "USTAR", ManifestModTime: "1970-01-01T00:00:00Z"},
 	}
 
 	for _, c := range cases {

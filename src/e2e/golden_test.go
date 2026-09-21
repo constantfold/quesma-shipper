@@ -192,11 +192,7 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 // the runner.
 func scrubEnvironment(b []byte, w *world, username string) []byte {
 	s := string(b)
-	for from, to := range map[string]string{
-		w.Home:   "<HOME>",
-		w.State:  "<STATE>",
-		w.Config: "<CONFIG>",
-	} {
+	for from, to := range map[string]string{w.Home: "<HOME>", w.State: "<STATE>", w.Config: "<CONFIG>"} {
 		s = strings.ReplaceAll(s, from, to)
 	}
 	if len(username) >= 2 {

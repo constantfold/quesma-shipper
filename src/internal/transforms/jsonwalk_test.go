@@ -81,12 +81,7 @@ func TestSourcePatchingCoversKeysDuplicatesAndBareStrings(t *testing.T) {
 
 func TestSourcePatchingNormalizesExceptionalBytesInDirtyStrings(t *testing.T) {
 	s := sourcePatchScrubber(t)
-	for _, tc := range []struct {
-		name, prefix string
-	}{
-		{"invalid UTF-8", "\xff"},
-		{"unpaired surrogate", `\ud800`},
-	} {
+	for _, tc := range []struct{ name, prefix string }{{"invalid UTF-8", "\xff"}, {"unpaired surrogate", `\ud800`}} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := `{"text":"` + tc.prefix + ` / AKIAIOSFODNN7EXAMPLE / \u0041"}`
 			want := `{"text":"� / __REDACTED:aws-access-key-id__ / A"}`

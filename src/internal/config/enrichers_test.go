@@ -58,11 +58,7 @@ sources:
 	}
 
 	// The same catalog, no override: if the first resolution wrote through, this still sees the enricher disabled.
-	clean, err := config.Resolve(config.Input{
-		Catalog:  shared,
-		Env:      env(home, nil),
-		StateDir: t.TempDir(),
-	})
+	clean, err := config.Resolve(config.Input{Catalog: shared, Env: env(home, nil), StateDir: t.TempDir()})
 	require.NoError(t, err)
 	assert.True(t, enrichersOf(clean, "cursor-transcripts")["cursor-transcript-join"], "a previous resolution's override leaked into the compiled catalog")
 }

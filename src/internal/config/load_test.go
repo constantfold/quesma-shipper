@@ -38,8 +38,6 @@ func TestLoadLayersAcceptsTheSendBlockOlderBuildsWrote(t *testing.T) {
 
 // A missing file stays the clone-and-run case: no layers, no error.
 func TestLoadLayersSkipsAMissingFile(t *testing.T) {
-	layers, err := config.LoadLayers(config.Paths{
-		User: filepath.Join(t.TempDir(), "absent.yaml"),
-	})
+	layers, err := config.LoadLayers(config.Paths{User: filepath.Join(t.TempDir(), "absent.yaml")})
 	require.Truef(t, err == nil && len(layers) == 0, "a missing file returned layers=%d err=%v", len(layers), err)
 }

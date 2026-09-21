@@ -355,19 +355,13 @@ func TestALiveDatabaseIsNotCopiedRaw(t *testing.T) {
 
 func TestAnUndeclaredTableIsRefused(t *testing.T) {
 	path := newStore(t, map[string]string{"composerData:c1": `{}`})
-	_, err := sqliteread.Read(sqliteread.Options{
-		Path:       path,
-		ScratchDir: t.TempDir(),
-	})
+	_, err := sqliteread.Read(sqliteread.Options{Path: path, ScratchDir: t.TempDir()})
 	// Scope is declared: a read with no table is a programming fault, not something to guess at.
 	require.Error(t, err, "a read with no declared table was accepted")
 }
 
 func TestALikeWildcardInAPrefixMatchesLiterally(t *testing.T) {
-	path := newStore(t, map[string]string{
-		"composerData:c1": `{"composerId":"c1"}`,
-		"bubbleId:c1:b1":  `{"type":1}`,
-	})
+	path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`, "bubbleId:c1:b1": `{"type":1}`})
 	res := read(t, path, func(o *sqliteread.Options) {
 		// A prefix containing % must not sweep in every key: declared scope has to mean what it says.
 		o.KeyPrefixes = []string{"%"}
@@ -397,11 +391,7 @@ func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(path, old, old))
 
-	methods := []sqliteread.ReadMethod{
-		sqliteread.ReadInPlace,
-		sqliteread.ReadSnapshot,
-		sqliteread.ReadColdCopy,
-	}
+	methods := []sqliteread.ReadMethod{sqliteread.ReadInPlace, sqliteread.ReadSnapshot, sqliteread.ReadColdCopy}
 	var reference []sqliteread.Row
 
 	for _, want := range methods {

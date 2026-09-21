@@ -64,8 +64,7 @@ type fakePlane struct {
 
 func startFakePlane(t *testing.T, store *fakeStore, pub ed25519.PublicKey) *fakePlane {
 	t.Helper()
-	p := &fakePlane{store: store, pub: pub, status: http.StatusOK, ttl: 10 * time.Minute,
-		writers: map[string]bool{}}
+	p := &fakePlane{store: store, pub: pub, status: http.StatusOK, ttl: 10 * time.Minute, writers: map[string]bool{}}
 	p.server = httptest.NewServer(http.HandlerFunc(p.serve))
 	t.Cleanup(p.server.Close)
 	return p

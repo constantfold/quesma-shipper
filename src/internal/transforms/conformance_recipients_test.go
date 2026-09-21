@@ -48,9 +48,7 @@ func TestConformanceRecipients(t *testing.T) {
 	if v.Scheme != "age" || m.Encryption == nil || m.Encryption.Scheme != v.Scheme {
 		t.Fatalf("scheme: vector says %q, manifest says %+v", v.Scheme, m.Encryption)
 	}
-	wantIDs := []string{
-		install.Recipient().String(), org.Recipient().String(), escrow.Recipient().String(),
-	}
+	wantIDs := []string{install.Recipient().String(), org.Recipient().String(), escrow.Recipient().String()}
 	assert.Truef(t, slices.Equal(m.Encryption.RecipientKeyIDs, wantIDs), "recipient_key_ids:\n got %v\nwant %v (seal argument order)", m.Encryption.RecipientKeyIDs, wantIDs)
 
 	// any_single_identity_suffices: the org reader and the escrow key each open the object alone,

@@ -77,11 +77,7 @@ func TestLoginWithoutTokenOrServerFails(t *testing.T) {
 func TestLocalDevRefusesLoggedInInstall(t *testing.T) {
 	w := stageBareWorld(t)
 
-	rec := backend.Enrollment{
-		InstallID:    testInstallID,
-		Organization: "acme",
-		Endpoint:     "https://cp.example",
-	}
+	rec := backend.Enrollment{InstallID: testInstallID, Organization: "acme", Endpoint: "https://cp.example"}
 	require.NoError(t, os.MkdirAll(statePath(w), 0o700))
 	require.NoError(t, rec.Save(statePath(w)))
 

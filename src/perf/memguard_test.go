@@ -387,9 +387,7 @@ func probeMemoryCapKills() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), memoryCapProbeTimeout)
 	defer cancel()
-	argv := append(memoryCapArgs(memoryCapProbeBytes, []string{
-		fmt.Sprintf("%s=%d", memoryHogEnv, want),
-	}), self)
+	argv := append(memoryCapArgs(memoryCapProbeBytes, []string{fmt.Sprintf("%s=%d", memoryHogEnv, want)}), self)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.WaitDelay = waitDelay
 	out, err := cmd.CombinedOutput()

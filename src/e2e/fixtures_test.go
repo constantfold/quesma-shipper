@@ -112,11 +112,7 @@ func cursorConversationRepeat() []cursorTurn {
 			Result:  "ok  \tdemo/internal/api\t0.24s",
 		},
 		// Byte-identical to the run above and recorded nowhere: the store kept one row for both.
-		{
-			BubbleID: "r3", Kind: 2, Tool: "run_terminal_cmd",
-			Command:  "go test ./internal/...",
-			NoBubble: true,
-		},
+		{BubbleID: "r3", Kind: 2, Tool: "run_terminal_cmd", Command: "go test ./internal/...", NoBubble: true},
 		{BubbleID: "r4", Kind: 2, Text: "Both runs passed.", Model: "claude-opus-5"},
 	}
 }

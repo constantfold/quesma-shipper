@@ -100,22 +100,14 @@ func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 	require.NoError(t, err)
 	p := b.Build()
 
-	for _, value := range []string{
-		"apikey", "APIKEY", "ApiKey",
-		"KUBECTL",
-		"xxKubectl xx",
-	} {
+	for _, value := range []string{"apikey", "APIKEY", "ApiKey", "KUBECTL", "xxKubectl xx"} {
 		if seen := p.Scan(value); !seen.Has(gate) {
 			t.Errorf("gate did not fire on %q", value)
 		}
 		assert.Truef(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 
-	for _, value := range []string{
-		"AP" + testDottedI + "KEY",
-		testKelvin + "UBECTL",
-		"ap" + testLongS + "key",
-	} {
+	for _, value := range []string{"AP" + testDottedI + "KEY", testKelvin + "UBECTL", "ap" + testLongS + "key"} {
 		if seen := p.Scan(value); seen.Has(gate) {
 			t.Errorf("the fold is ASCII only: a keyword gate must not fire on %q", value)
 		}

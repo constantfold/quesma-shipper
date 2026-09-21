@@ -42,10 +42,7 @@ func repoDir(t *testing.T, home, rel string, marked bool) string {
 }
 
 func TestRepoNameIsTheLastSegment(t *testing.T) {
-	for _, tc := range []struct{ cwd, want string }{
-		{"/Users/jane/work/client-acme", "client-acme"},
-		{"", ""},
-	} {
+	for _, tc := range []struct{ cwd, want string }{{"/Users/jane/work/client-acme", "client-acme"}, {"", ""}} {
 		assert.Equal(t, RepoName(tc.cwd), tc.want)
 	}
 }

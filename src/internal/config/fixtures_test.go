@@ -76,12 +76,7 @@ func servedLayer(t *testing.T, layer config.Layer, body string) config.LayeredDo
 
 func baseInput(t *testing.T, home string, layers ...config.LayeredDocument) config.Input {
 	t.Helper()
-	return config.Input{
-		Catalog:  loadCatalog(t),
-		Layers:   layers,
-		Env:      env(home, nil),
-		StateDir: t.TempDir(),
-	}
+	return config.Input{Catalog: loadCatalog(t), Layers: layers, Env: env(home, nil), StateDir: t.TempDir()}
 }
 
 func resolved(t *testing.T, home string, layers ...config.LayeredDocument) *config.Effective {

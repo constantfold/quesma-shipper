@@ -38,10 +38,7 @@ func seedForeignDoc(t *testing.T, dir string, entries int) {
 }
 
 func key(path string) engine.Key {
-	return engine.Key{
-		SourceID:   "claude-code-transcripts",
-		NativePath: path,
-	}
+	return engine.Key{SourceID: "claude-code-transcripts", NativePath: path}
 }
 
 // fixedMTime keeps the fixture deterministic. The nanoseconds are not decoration: a whole-second
@@ -49,11 +46,7 @@ func key(path string) engine.Key {
 var fixedMTime = time.Date(2026, 7, 30, 10, 0, 0, 987654321, time.UTC)
 
 func fingerprint() engine.Fingerprint {
-	return engine.Fingerprint{
-		SourceSize:  4096,
-		SourceMTime: fixedMTime,
-		SourceHash:  sha,
-	}
+	return engine.Fingerprint{SourceSize: 4096, SourceMTime: fixedMTime, SourceHash: sha}
 }
 
 // commit is the one-entry CommitAll these tests are written against.

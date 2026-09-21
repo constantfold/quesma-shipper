@@ -120,16 +120,12 @@ func syntheticBigValueAt(size int) []byte {
 	rng := rand.New(rand.NewSource(20260819))
 	body := randCommandOutputAt(rng, size)
 	line, err := json.Marshal(map[string]any{
-		"type":      "user",
-		"uuid":      randUUID(rng),
-		"sessionId": randUUID(rng),
-		"cwd":       "/Users/devuser/git/trajectory-shipper",
-		"toolUseResult": map[string]any{
-			"stdout":      body,
-			"stderr":      "",
-			"tool_use_id": "toolu_01" + randToken(rng, 22),
-		},
-		"timestamp": "2026-08-16T09:13:02.900Z",
+		"type":          "user",
+		"uuid":          randUUID(rng),
+		"sessionId":     randUUID(rng),
+		"cwd":           "/Users/devuser/git/trajectory-shipper",
+		"toolUseResult": map[string]any{"stdout": body, "stderr": "", "tool_use_id": "toolu_01" + randToken(rng, 22)},
+		"timestamp":     "2026-08-16T09:13:02.900Z",
 	})
 	if err != nil {
 		panic(err)

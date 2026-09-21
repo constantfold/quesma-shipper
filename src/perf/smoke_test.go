@@ -140,11 +140,7 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 		meas := smokeRepeat(t, m, coldRuns)
 		counts := summary(t, meas.last.Output)
 		moved := meas.counters.up + meas.counters.down
-		result = smokeBacklogResult{
-			best:     meas.best,
-			bytes:    moved,
-			versions: m.w.versionCounts(t),
-		}
+		result = smokeBacklogResult{best: meas.best, bytes: moved, versions: m.w.versionCounts(t)}
 
 		// Half the overlap an admission round can reach, so a loaded runner has somewhere to go.
 		// Derived from the round and not from the upload pool: on the vend path the pool is spent

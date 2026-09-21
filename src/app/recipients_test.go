@@ -70,10 +70,7 @@ func TestRecipientsForRefusesAnEmptySet(t *testing.T) {
 }
 
 func TestRecipientsForRefusesAnUnparseableRecipient(t *testing.T) {
-	eff := &config.Effective{
-		IncludeInstallRecipient: true,
-		AdditionalRecipients:    []string{"not-an-age-key"},
-	}
+	eff := &config.Effective{IncludeInstallRecipient: true, AdditionalRecipients: []string{"not-an-age-key"}}
 	if _, err := recipientsFor(eff, testUnit(t)); err == nil {
 		t.Error("an Effective built by hand with a bad recipient must be refused, " +
 			"not sealed to fewer readers than configured")

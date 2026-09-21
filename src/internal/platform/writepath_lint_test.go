@@ -175,10 +175,7 @@ func formatFinding(file string, line int, call, why string) string {
 
 // bannedExec are the calls that create a process. os/exec wraps os.StartProcess, so its import is
 // banned outright; syscall's process spawners are named directly.
-var bannedExec = map[string]map[string]bool{
-	"os":      {"StartProcess": true},
-	"syscall": {"Exec": true, "ForkExec": true},
-}
+var bannedExec = map[string]map[string]bool{"os": {"StartProcess": true}, "syscall": {"Exec": true, "ForkExec": true}}
 
 // TestNoExecOutsidePackaging: os/exec reads as malware to an auditor, so the collector's data path
 // only permits packaging processes and the macOS Keychain reader.

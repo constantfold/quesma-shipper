@@ -96,12 +96,7 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	peak := watchPeakRSS(cmd.Process.Pid)
 	err := cmd.Wait()
 	vmHWM := peak()
-	obs := childObservation{
-		Output:   out.String(),
-		Elapsed:  time.Since(start),
-		TimedOut: ctx.Err() != nil,
-		Err:      err,
-	}
+	obs := childObservation{Output: out.String(), Elapsed: time.Since(start), TimedOut: ctx.Err() != nil, Err: err}
 
 	st := cmd.ProcessState
 	require.Falsef(t, st == nil, "the shipper left no process state behind: %v", err)

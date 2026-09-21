@@ -1,14 +1,4 @@
-# Claude Code (CLI + Agent SDK) — the richest local trajectory store, and the
-# highest-value family: nine agents share its <root>/projects/<encoded-cwd>/
-# path grammar and at least two emit its own compaction marker, so one decoder
-# amortizes across the family.
-#
-# Scope is v1 row. Deferred to v1.1: repo-local CLAUDE.md and
-# .cursor/rules, which sit outside the compiled roots.
-#
-# Retention trap this source exists to beat: cleanupPeriodDays defaults to 30
-# and deletion runs silently at startup, so a first sync must backfill
-# immediately or the reaper wins the race for everything older than install.
+# Claude Code retains transcripts for 30 days by default; initial collection must backfill promptly.
 spec_version: 1
 family: claude-code
 display_name: Claude Code
@@ -23,19 +13,12 @@ sources:
       and they hold the largest tool outputs analysis wants.
     gather: file_glob
     artifact_class: trajectory
-    roots:
+    roots: &claude_code_roots
       - $CLAUDE_CONFIG_DIR
       - ~/.claude
       - $XDG_CONFIG_HOME/claude
     require_subdir: projects
-    # A hard ceiling on what will be READ, checked against the stat before the file is
-    # opened. Measured on a working machine: p50 34 KB, p95 599 KB, p99 15.4 MB, largest
-    # 60.9 MB. This is four times that largest, and two orders below the failure it exists
-    # to prevent — sessions that reach multi-GB through a writer defect that re-serialises
-    # the whole conversation into every "progress" entry (anthropics/claude-code#18905),
-    # one of which reached 3.8 GB and hangs the agent that wrote it (#22365). The pipeline
-    # holds the payload several times over, so reading one of those needs tens of GB and
-    # takes the daemon with it. A file above the line is skipped, counted and reported.
+    # Bound reads: writer defects can create multi-GB transcripts that exhaust memory.
     max_file_bytes: 268435456
     include:
       - "projects/**/*.jsonl"
@@ -53,15 +36,9 @@ sources:
       window can expire the only historical copy of a file that still exists.
     gather: file_glob
     artifact_class: context
-    roots:
-      - $CLAUDE_CONFIG_DIR
-      - ~/.claude
-      - $XDG_CONFIG_HOME/claude
+    roots: *claude_code_roots
     require_subdir: projects
-    # Context artifacts are ordinary files a developer edited — a file-history snapshot is a
-    # copy of whatever was open. Measured here: 1457 files, p95 39 KB, largest 0.1 MB. 64 MiB
-    # is far above anything observed and still bounds what one bad file can make the pipeline
-    # hold; a checkpoint of a huge generated file is the realistic way this gets hit.
+    # File-history snapshots can contain large generated files, unlike ordinary context notes.
     max_file_bytes: 67108864
     include:
       - "projects/**/memory/**"
@@ -80,13 +57,9 @@ sources:
       glob and an OAuth token.
     gather: file_glob
     artifact_class: context
-    roots:
-      - $CLAUDE_CONFIG_DIR
-      - ~/.claude
-      - $XDG_CONFIG_HOME/claude
+    roots: *claude_code_roots
     require_subdir: projects
-    # CLAUDE.md and settings.json. Kilobytes in every install anyone has looked at; the cap
-    # exists so an accident in that directory cannot become an OOM.
+    # Settings are normally kilobytes; bound accidental large files here too.
     max_file_bytes: 8388608
     include:
       - "CLAUDE.md"
@@ -98,10 +71,7 @@ sources:
     description: Account and raw provider usage snapshots each collection interval.
     gather: account
     scrub: false
-    roots:
-      - $CLAUDE_CONFIG_DIR
-      - ~/.claude
-      - $XDG_CONFIG_HOME/claude
+    roots: *claude_code_roots
     artifact_class: context
     max_file_bytes: 8388608
     emit: account

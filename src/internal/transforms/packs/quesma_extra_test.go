@@ -49,11 +49,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("dop_v1_" + hexs(63)),
 			not("Xdop_v1_" + hexs(64)), // glued to a word: \b must refuse
 		},
-		"databricks-api-token": {
-			tok("dapi" + hexs(32)),
-			not("dapi" + hexs(31)),
-			not("updapi" + hexs(32)),
-		},
+		"databricks-api-token": {tok("dapi" + hexs(32)), not("dapi" + hexs(31)), not("updapi" + hexs(32))},
 		"huggingface-access-token": {
 			tok("hf_" + letters(34)),
 			tok("hf_" + alnum(34)),
@@ -66,18 +62,12 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("shpat_" + hexs(31)),
 			not("shpzz_" + hexs(32)),
 		},
-		"linear-api-key": {
-			tok("lin_api_" + alnum(40)),
-			not("lin_api_" + alnum(39)),
-		},
+		"linear-api-key": {tok("lin_api_" + alnum(40)), not("lin_api_" + alnum(39))},
 		"notion-token": {
 			tok("ntn_12345678901" + alnum(35)),
 			not("ntn_1234567890" + letters(36)), // ten digits, not eleven
 		},
-		"postman-api-token": {
-			tok("PMAK-" + hexs(24) + "-" + hexs(34)),
-			not("pmak-" + hexs(24) + "-" + hexs(34)),
-		},
+		"postman-api-token": {tok("PMAK-" + hexs(24) + "-" + hexs(34)), not("pmak-" + hexs(24) + "-" + hexs(34))},
 		"grafana-token": {
 			tok("glc_" + alnum(64) + "="),
 			tok("glsa_" + alnum(32) + "_" + hexs(8)),
@@ -100,14 +90,8 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			tok("pscale_pw_" + alnum(43)),
 			not("pscale_tkn_" + alnum(31)),
 		},
-		"pulumi-api-token": {
-			tok("pul-" + hexs(40)),
-			not("pul-" + strings.ToUpper(hexs(40))),
-		},
-		"rubygems-api-token": {
-			tok("rubygems_" + hexs(48)),
-			not("rubygems_" + hexs(47)),
-		},
+		"pulumi-api-token":   {tok("pul-" + hexs(40)), not("pul-" + strings.ToUpper(hexs(40)))},
+		"rubygems-api-token": {tok("rubygems_" + hexs(48)), not("rubygems_" + hexs(47))},
 		"hashicorp-tf-api-token": {
 			tok(alnum(14) + ".atlasv1." + alnum(64)),
 			not(alnum(13) + ".atlasv1." + alnum(64)),
@@ -137,10 +121,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			tok("sntrys_" + alnum(120)),
 			not("sntryz_" + hexs(64)),
 		},
-		"1password-service-account-token": {
-			tok("ops_eyJ" + alnum(220) + "="),
-			not("ops_eyJ" + alnum(150)),
-		},
+		"1password-service-account-token": {tok("ops_eyJ" + alnum(220) + "="), not("ops_eyJ" + alnum(150))},
 		"langsmith-api-key": {
 			tok("lsv2_pt_" + hexs(32) + "_" + hexs(10)),
 			tok("lsv2_sk_" + hexs(32) + "_" + hexs(10)),
@@ -161,10 +142,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("Xsig=" + alnum(43) + "="), // glued to a word: \b must refuse
 			not("SIG=" + alnum(43) + "="),  // the query param is lowercase
 		},
-		"perplexity-api-key": {
-			tok("pplx-" + alnum(48)),
-			not("pplx-" + alnum(47)),
-		},
+		"perplexity-api-key": {tok("pplx-" + alnum(48)), not("pplx-" + alnum(47))},
 		"heroku-api-key": {
 			tok("HRKU-AA" + alnum(58)),
 			tok("HRKU-AA" + alnum(57) + "-"),
@@ -183,19 +161,9 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			tok("whsec_" + alnum(20) + "/" + alnum(20)),
 			not("whsec_" + alnum(31)),
 		},
-		"groq-api-key": {
-			tok("gsk_" + alnum(52)),
-			not("gsk_" + alnum(51)),
-		},
-		"xai-api-key": {
-			tok("xai-" + alnum(80)),
-			not("xai-" + alnum(79)),
-		},
-		"replicate-api-token": {
-			tok("r8_" + alnum(37)),
-			tok("r8_" + alnum(36) + "-"),
-			not("r8_" + alnum(36)),
-		},
+		"groq-api-key":        {tok("gsk_" + alnum(52)), not("gsk_" + alnum(51))},
+		"xai-api-key":         {tok("xai-" + alnum(80)), not("xai-" + alnum(79))},
+		"replicate-api-token": {tok("r8_" + alnum(37)), tok("r8_" + alnum(36) + "-"), not("r8_" + alnum(36))},
 		"dockerhub-token": {
 			tok("dckr_pat_" + alnum(27)),
 			tok("dckr_oat_" + alnum(32)),
@@ -206,25 +174,14 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("tskey-auth-kFGiAS7CNTRL"),
 			not("tskey-AUTH-kFGiAS7CNTRL-" + alnum(22)), // type segment is lowercase
 		},
-		"supabase-token": {
-			tok("sbp_" + hexs(40)),
-			not("sbp_" + hexs(39)),
-			not("sbp_" + strings.ToUpper(hexs(40))),
-		},
-		"netlify-pat": {
-			tok("nfp_" + alnum(36)),
-			not("nfp_" + alnum(35)),
-		},
+		"supabase-token": {tok("sbp_" + hexs(40)), not("sbp_" + hexs(39)), not("sbp_" + strings.ToUpper(hexs(40)))},
+		"netlify-pat":    {tok("nfp_" + alnum(36)), not("nfp_" + alnum(35))},
 		"atlassian-api-token": {
 			tok("ATATT3" + alnum(186)),
 			tok("ATATT3" + alnum(102)), // the official 108-char short-exception token
 			not("ATATT3" + alnum(99)),
 		},
-		"artifactory-token": {
-			tok("AKCp" + alnum(69)),
-			tok("cmVmd" + alnum(59)),
-			not("AKCp" + alnum(68)),
-		},
+		"artifactory-token": {tok("AKCp" + alnum(69)), tok("cmVmd" + alnum(59)), not("AKCp" + alnum(68))},
 	}
 
 	rules, err := Load(QuesmaExtra)

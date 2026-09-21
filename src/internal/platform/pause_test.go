@@ -47,23 +47,14 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 		name string
 		body string
 	}{
-		{
-			name: "not json at all",
-			body: "paused\n",
-		},
-		{
-			name: "truncated mid-write",
-			body: `{"paused":tr`,
-		},
+		{name: "not json at all", body: "paused\n"},
+		{name: "truncated mid-write", body: `{"paused":tr`},
 		{
 			name: "the flag says paused false",
 			// The file's PRESENCE is the switch: honouring the field would let a partial write silently resume collection.
 			body: `{"paused":false,"at":"2026-07-30T00:00:00Z"}`,
 		},
-		{
-			name: "empty file",
-			body: "",
-		},
+		{name: "empty file", body: ""},
 	}
 
 	for _, tc := range cases {

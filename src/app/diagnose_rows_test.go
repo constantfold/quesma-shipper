@@ -36,8 +36,7 @@ func TestDiscoveryRowsSeverity(t *testing.T) {
 			sources.Discovery{Health: sources.Collected, Sniff: sources.SniffUnexpectedShape},
 			SevWarn, "quesma-shipper preview"},
 		{"agent_absent", sources.Discovery{Health: sources.AgentAbsent, Reason: "no root"}, SevDim, ""},
-		{"moved", sources.Discovery{Health: sources.RootPresentNoMatch, Reason: "root exists"},
-			SevWarn, "moved"},
+		{"moved", sources.Discovery{Health: sources.RootPresentNoMatch, Reason: "root exists"}, SevWarn, "moved"},
 		{"unreadable", sources.Discovery{Health: sources.MatchPresentUnreadable, Reason: "denied"},
 			SevWarn, "permissions"},
 	}

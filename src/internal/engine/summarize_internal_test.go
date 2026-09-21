@@ -18,9 +18,7 @@ func TestSummarizeTotalsWhatTheOutcomesRecord(t *testing.T) {
 			// The pre-filter never opened this one, and a file nobody read cost no bytes.
 			{Decision: formats.DecisionUnchanged},
 		}},
-		{SourceID: "b", Files: []FileOutcome{
-			{Decision: formats.DecisionFailed, BytesIn: 200},
-		}},
+		{SourceID: "b", Files: []FileOutcome{{Decision: formats.DecisionFailed, BytesIn: 200}}},
 	}}
 	summarize(&rep)
 

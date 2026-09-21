@@ -103,9 +103,7 @@ func TestCandidatesAreOldestFirst(t *testing.T) {
 	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
 	require.Lenf(t, d.Candidates, 2, "expected 2 candidates, got %d", len(d.Candidates))
 	if !strings.HasSuffix(d.Candidates[0].RelPath, "older.jsonl") {
-		t.Errorf("oldest must come first, got %v", []string{
-			d.Candidates[0].RelPath, d.Candidates[1].RelPath,
-		})
+		t.Errorf("oldest must come first, got %v", []string{d.Candidates[0].RelPath, d.Candidates[1].RelPath})
 	}
 }
 

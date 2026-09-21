@@ -67,13 +67,11 @@ func syntheticTranscript(size int) []byte {
 				"version":     "1.0.60",
 				"type":        "assistant",
 				"message": map[string]any{
-					"id":    "msg_01" + randToken(rng, 22),
-					"role":  "assistant",
-					"model": "claude-opus-4",
-					"content": []any{
-						map[string]any{"type": "text", "text": randProse(rng, 200+rng.Intn(600))},
-					},
-					"usage": map[string]any{"input_tokens": 4211, "output_tokens": 118},
+					"id":      "msg_01" + randToken(rng, 22),
+					"role":    "assistant",
+					"model":   "claude-opus-4",
+					"content": []any{map[string]any{"type": "text", "text": randProse(rng, 200+rng.Intn(600))}},
+					"usage":   map[string]any{"input_tokens": 4211, "output_tokens": 118},
 				},
 				"uuid":      randUUID(rng),
 				"timestamp": "2026-08-16T09:12:44.117Z",
@@ -108,12 +106,9 @@ func syntheticTranscript(size int) []byte {
 				"cwd":        "/Users/devuser/git/trajectory-shipper",
 				"sessionId":  randUUID(rng),
 				"type":       "user",
-				"message": map[string]any{
-					"role":    "user",
-					"content": randProse(rng, 120+rng.Intn(300)),
-				},
-				"uuid":      randUUID(rng),
-				"timestamp": "2026-08-16T09:12:46.551Z",
+				"message":    map[string]any{"role": "user", "content": randProse(rng, 120+rng.Intn(300))},
+				"uuid":       randUUID(rng),
+				"timestamp":  "2026-08-16T09:12:46.551Z",
 			}
 			if i%37 == 0 {
 				// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
@@ -137,16 +132,12 @@ func syntheticBigValue(size int) []byte {
 	rng := rand.New(rand.NewSource(20260817))
 	body := randCommandOutput(rng, size)
 	line, err := json.Marshal(map[string]any{
-		"type":      "user",
-		"uuid":      randUUID(rng),
-		"sessionId": randUUID(rng),
-		"cwd":       "/Users/devuser/git/trajectory-shipper",
-		"toolUseResult": map[string]any{
-			"stdout":      body,
-			"stderr":      "",
-			"tool_use_id": "toolu_01" + randToken(rng, 22),
-		},
-		"timestamp": "2026-08-16T09:13:02.900Z",
+		"type":          "user",
+		"uuid":          randUUID(rng),
+		"sessionId":     randUUID(rng),
+		"cwd":           "/Users/devuser/git/trajectory-shipper",
+		"toolUseResult": map[string]any{"stdout": body, "stderr": "", "tool_use_id": "toolu_01" + randToken(rng, 22)},
+		"timestamp":     "2026-08-16T09:13:02.900Z",
 	})
 	if err != nil {
 		panic(err)

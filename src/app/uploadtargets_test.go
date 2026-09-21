@@ -53,11 +53,7 @@ func TestToUploadTicketFeedsValidation(t *testing.T) {
 		Key:        "organization=acme/source=claude-code/object.age",
 		Body:       []byte("sealed"),
 		SourceHash: "sha256:abc",
-		Metadata: map[string]string{
-			"manifest-version": "3",
-			"artifact-class":   "trajectory",
-			"kind":             "mirror",
-		},
+		Metadata:   map[string]string{"manifest-version": "3", "artifact-class": "trajectory", "kind": "mirror"},
 	}
 	issued := controlplane.Ticket{
 		TicketID:  "ticket-1",

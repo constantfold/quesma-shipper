@@ -43,14 +43,7 @@ func newFixture(t *testing.T) *fixture {
 	log, err := auditlog.Open(stateDir)
 	require.NoError(t, err)
 
-	f := &fixture{
-		t:        t,
-		home:     home,
-		stateDir: stateDir,
-		port:     newPort(),
-		unit:     unit,
-		log:      log,
-	}
+	f := &fixture{t: t, home: home, stateDir: stateDir, port: newPort(), unit: unit, log: log}
 	f.eff = f.effective(nil)
 	f.reopen()
 	return f

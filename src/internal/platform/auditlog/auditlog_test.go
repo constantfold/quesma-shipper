@@ -100,10 +100,7 @@ func TestReasonNewlinesAreFlattened(t *testing.T) {
 
 func TestOverlongReasonIsTruncated(t *testing.T) {
 	l, path := open(t)
-	require.NoError(t, l.Append(auditlog.Entry{
-		Decision: auditlog.DecisionFailed,
-		Reason:   strings.Repeat("x", 5000),
-	}))
+	require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: strings.Repeat("x", 5000)}))
 	entries, err := auditlog.Tail(path, 0)
 	require.NoError(t, err)
 	assert.Truef(t, len(entries[0].Reason) <= 600, "reason not truncated: %d bytes", len(entries[0].Reason))

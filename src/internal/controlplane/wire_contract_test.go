@@ -100,9 +100,7 @@ func TestStructsMatchSchemas(t *testing.T) {
 			DevicePublicKey: fixtureDeviceKey, AgeRecipient: fixtureRecipient,
 			Hostname: "managed-host", Platform: "linux/amd64",
 		}},
-		{"enroll response", "enroll-response.schema.json", controlplane.EnrollResponse{
-			Organization: "acme",
-		}},
+		{"enroll response", "enroll-response.schema.json", controlplane.EnrollResponse{Organization: "acme"}},
 		{"config request", "config-request.schema.json", controlplane.ConfigRequest{
 			AgentVersion: "0.0.0-test", ConfigVersions: []int{1},
 		}},
@@ -158,9 +156,7 @@ func TestStructsMatchSchemas(t *testing.T) {
 			}},
 		}},
 		{"v2 authorize response, already present", "v2/uploads-authorize-response.schema.json", controlplane.AuthorizeResponse{
-			Tickets: []controlplane.Ticket{{
-				TicketID: fixtureTicketID, ObjectID: "trajectory-1", AlreadyPresent: true,
-			}},
+			Tickets: []controlplane.Ticket{{TicketID: fixtureTicketID, ObjectID: "trajectory-1", AlreadyPresent: true}},
 		}},
 		{"v2 authorize response, gcs", "v2/uploads-authorize-response.schema.json", controlplane.AuthorizeResponse{
 			Tickets: []controlplane.Ticket{{

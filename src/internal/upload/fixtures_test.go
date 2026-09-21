@@ -81,10 +81,7 @@ func readFixture(t *testing.T, name string, into any) {
 // goldenTarget is the machine-owner allowlist entry the fixture URLs belong to.
 func goldenTarget(t *testing.T) UploadTarget {
 	t.Helper()
-	target, err := NewUploadTarget(TargetSpec{
-		Origin:     "https://archive.example.invalid",
-		Addressing: VirtualHosted,
-	})
+	target, err := NewUploadTarget(TargetSpec{Origin: "https://archive.example.invalid", Addressing: VirtualHosted})
 	require.NoErrorf(t, err, "build golden target: %v", err)
 	return target
 }

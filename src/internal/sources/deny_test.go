@@ -17,11 +17,7 @@ const testHome = "/home/u"
 func TestMatchTreeOnlyAnswersForWholeTrees(t *testing.T) {
 	d := New(testHome)
 
-	for _, dir := range []string{
-		testHome + "/.ssh",
-		testHome + "/.ssh/keys",
-		testHome + "/Library/Keychains",
-	} {
+	for _, dir := range []string{testHome + "/.ssh", testHome + "/.ssh/keys", testHome + "/Library/Keychains"} {
 		if denied, _ := d.MatchTree(dir); !denied {
 			t.Errorf("%s is a denied tree", dir)
 		}

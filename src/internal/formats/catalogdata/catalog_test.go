@@ -130,11 +130,7 @@ sources:
 func TestGroupOneCoverage(t *testing.T) {
 	files, err := catalogdata.Files()
 	require.NoError(t, err)
-	want := map[string]bool{
-		"claude-code.yaml": false,
-		"codex.yaml":       false,
-		"cursor.yaml":      false,
-	}
+	want := map[string]bool{"claude-code.yaml": false, "codex.yaml": false, "cursor.yaml": false}
 	for _, f := range files {
 		if _, ok := want[f]; ok {
 			want[f] = true

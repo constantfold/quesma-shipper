@@ -119,9 +119,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			reject: "drain_deadline: -5m\n",
 		},
 
-		"state_dir": {
-			reject: "state_dir: /var/lib/shipper\n",
-		},
+		"state_dir": {reject: "state_dir: /var/lib/shipper\n"},
 
 		"upload_targets": {
 			reject: "upload_targets:\n  - origin: https://evil.example.com\n    addressing: virtual-hosted\n",
@@ -239,9 +237,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			mustReject(t, err, "attaching an unregistered enricher")
 		}},
 
-		"a source id not in the compiled catalog": {
-			reject: "sources:\n  - id: no-such-source\n    enabled: false\n",
-		},
+		"a source id not in the compiled catalog": {reject: "sources:\n  - id: no-such-source\n    enabled: false\n"},
 
 		// The probe uses the document a pre-removal control plane serves: older clients still honor the disable.
 		"crash_report.enabled / dsn": {

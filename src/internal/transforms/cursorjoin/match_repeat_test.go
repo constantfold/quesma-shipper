@@ -232,11 +232,7 @@ func TestARepeatWhoseOwnBubbleIsOutOfReachIsAMismatchNotARepeat(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/work/api/internal/config/resolve.go"}}]}}
 {"role":"assistant","message":{"content":[{"type":"text","text":"The resolver is bounded."}]}}
 `
-	headers := []string{
-		`{"bubbleId":"b1","type":1}`,
-		`{"bubbleId":"r1","type":2}`,
-		`{"bubbleId":"prose","type":2}`,
-	}
+	headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"r1","type":2}`, `{"bubbleId":"prose","type":2}`}
 	rows := []storeRow{
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"check the resolver twice"}`),
 		bubbleRow("r1", `{"bubbleId":"r1","type":2,"capabilityType":15,
