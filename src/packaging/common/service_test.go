@@ -1,8 +1,6 @@
 package common
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,21 +13,6 @@ func testSpec() Spec {
 	return Spec{Executable: "/usr/local/bin/quesma-shipper", Args: []string{"run"},
 		Home: "/Users/jane", StateDir: "/Users/jane/.local/state/trajectory-shipper",
 		LogDir: "/Users/jane/.local/state/trajectory-shipper/logs"}
-}
-
-func TestRunMarkerRoundTrips(t *testing.T) {
-	dir := t.TempDir()
-	at := time.Date(2026, 7, 30, 10, 30, 0, 0, time.UTC)
-	require.NoError(t, RecordRun(dir, at))
-	if got := LastRun(dir); !got.Equal(at) {
-		t.Errorf("last run = %s, want %s", got, at)
-	}
-}
-
-func TestACorruptRunMarkerReadsAsNever(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, RunMarker), []byte("yesterday\n"), 0o644))
-	assert.True(t, LastRun(dir).IsZero(), "a corrupt marker was parsed as a real timestamp")
 }
 
 func TestInstallSpecRequiresAnAbsoluteExecutable(t *testing.T) {

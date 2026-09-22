@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 func writeFile(t *testing.T, path, body string) {
@@ -66,7 +68,7 @@ func TestDiscoversMatchingFiles(t *testing.T) {
 	src.Exclude = []string{"**/node_modules/**"}
 	d := discover(t, src, nil)
 
-	assert.Equalf(t, Collected, d.Health, "reason %q", d.Reason)
+	assert.Equalf(t, formats.Collected, d.Health, "reason %q", d.Reason)
 	assert.ElementsMatch(t, []string{"projects/p/a.jsonl", "projects/p/b.jsonl"}, relPaths(d))
 	for _, c := range d.Candidates {
 		assert.Truef(t, filepath.IsAbs(c.Path), "candidate path should be absolute: %q", c.Path)
@@ -82,11 +84,11 @@ func TestZeroCandidateHealthIsDistinguishedAndExplained(t *testing.T) {
 
 	for _, tc := range []struct {
 		src  Resolved
-		want HealthState
+		want formats.HealthState
 	}{
-		{absent, AgentAbsent},
-		{globSource(noMatch, "projects/**/*.jsonl"), RootPresentNoMatch},
-		{globSource(t.TempDir(), "**/*.jsonl"), RootPresentNoMatch},
+		{absent, formats.AgentAbsent},
+		{globSource(noMatch, "projects/**/*.jsonl"), formats.RootPresentNoMatch},
+		{globSource(t.TempDir(), "**/*.jsonl"), formats.RootPresentNoMatch},
 	} {
 		d := discover(t, tc.src, nil)
 		assert.Equal(t, tc.want, d.Health)
@@ -113,18 +115,18 @@ func TestDiscoverySniffsStoreShapeAndVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, body, version string
 		spec                      *Sniff
-		sniff                     SniffResult
+		sniff                     formats.SniffResult
 	}{
-		{"binary store", "projects/p/a.jsonl", "\x00\x01\x02binary garbage\x00", "", nil, SniffUnexpectedShape},
-		{"sqlite replacing jsonl", "projects/p/a.jsonl", "SQLite format 3\x00\x04\x00\x01", "", nil, SniffUnexpectedShape},
-		{"empty file", "projects/p/a.jsonl", "", "", nil, SniffEmpty},
-		{"version on first line", "projects/p/a.jsonl", `{"type":"user","uuid":"u1","version":"2.1.220"}` + "\n", "2.1.220", nil, SniffOK},
+		{"binary store", "projects/p/a.jsonl", "\x00\x01\x02binary garbage\x00", "", nil, formats.SniffUnexpectedShape},
+		{"sqlite replacing jsonl", "projects/p/a.jsonl", "SQLite format 3\x00\x04\x00\x01", "", nil, formats.SniffUnexpectedShape},
+		{"empty file", "projects/p/a.jsonl", "", "", nil, formats.SniffEmpty},
+		{"version on first line", "projects/p/a.jsonl", `{"type":"user","uuid":"u1","version":"2.1.220"}` + "\n", "2.1.220", nil, formats.SniffOK},
 		{"version below first line", "projects/p/a.jsonl", `{"type":"summary","sessionId":"s"}` + "\n" +
-			`{"type":"user","sessionId":"s"}` + "\n" + `{"type":"assistant","version":"2.1.245"}` + "\n", "2.1.245", nil, SniffOK},
+			`{"type":"user","sessionId":"s"}` + "\n" + `{"type":"assistant","version":"2.1.245"}` + "\n", "2.1.245", nil, formats.SniffOK},
 		{"codex nested version", "sessions/r.jsonl",
-			`{"timestamp":"t","type":"session_meta","payload":{"cli_version":"0.144.1"}}` + "\n", "0.144.1", nil, SniffOK},
-		{"zstd magic", "sessions/r.jsonl.zst", "\x28\xb5\x2f\xfd\x00\x01\x02", "", zstd, SniffOK},
-		{"wrong magic", "sessions/r.jsonl.zst", "not zstd at all", "", zstd, SniffUnexpectedShape},
+			`{"timestamp":"t","type":"session_meta","payload":{"cli_version":"0.144.1"}}` + "\n", "0.144.1", nil, formats.SniffOK},
+		{"zstd magic", "sessions/r.jsonl.zst", "\x28\xb5\x2f\xfd\x00\x01\x02", "", zstd, formats.SniffOK},
+		{"wrong magic", "sessions/r.jsonl.zst", "not zstd at all", "", zstd, formats.SniffUnexpectedShape},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -136,11 +138,11 @@ func TestDiscoverySniffsStoreShapeAndVersion(t *testing.T) {
 			d := discover(t, src, nil)
 			assert.Equal(t, tc.sniff, d.Sniff)
 			assert.Equal(t, tc.version, d.AgentVersion)
-			if tc.sniff == SniffUnexpectedShape {
-				assert.Equal(t, MatchPresentUnreadable, d.Health)
+			if tc.sniff == formats.SniffUnexpectedShape {
+				assert.Equal(t, formats.MatchPresentUnreadable, d.Health)
 				assert.Empty(t, d.Candidates)
 			} else {
-				assert.Equal(t, Collected, d.Health)
+				assert.Equal(t, formats.Collected, d.Health)
 				assert.Len(t, d.Candidates, 1)
 			}
 		})
@@ -170,11 +172,11 @@ func TestSniffSamplesTheStore(t *testing.T) {
 			}
 			d := discover(t, globSource(root, "projects/**/*.jsonl"), nil)
 			if tc.collected {
-				assert.Equalf(t, Collected, d.Health, "reason %s", d.Reason)
+				assert.Equalf(t, formats.Collected, d.Health, "reason %s", d.Reason)
 				assert.Len(t, d.Candidates, tc.bad+tc.good)
 				assert.NotZero(t, d.SniffFailures, "the bad file should be counted even when the source is fine")
 			} else {
-				assert.NotEqual(t, Collected, d.Health)
+				assert.NotEqual(t, formats.Collected, d.Health)
 				assert.Empty(t, d.Candidates)
 			}
 		})
@@ -198,7 +200,7 @@ func TestAnOversizedFileIsSkippedAndCounted(t *testing.T) {
 	assert.Equal(t, []string{"projects/p/small.jsonl"}, relPaths(d))
 	require.Len(t, d.Oversize, 1)
 	assert.Greater(t, d.Oversize[0].Size, d.Oversize[0].Limit)
-	assert.Equal(t, Collected, d.Health)
+	assert.Equal(t, formats.Collected, d.Health)
 }
 
 // The walk does not follow symlinks, which pairs with O_NOFOLLOW at open time; neither is sufficient alone.

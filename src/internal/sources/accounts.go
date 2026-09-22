@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
 )
@@ -34,9 +35,9 @@ type accountObservation struct {
 }
 
 func (p *accounts) discover(req Request) (Discovery, error) {
-	d := Discovery{Health: RootPresentNoMatch, Sniff: SniffOK}
+	d := Discovery{Health: formats.RootPresentNoMatch, Sniff: formats.SniffOK}
 	if req.Source.Root == "" {
-		d.Health = AgentAbsent
+		d.Health = formats.AgentAbsent
 		return d, nil
 	}
 	if !req.Capture {
@@ -56,7 +57,7 @@ func (p *accounts) discover(req Request) (Discovery, error) {
 	d.Candidates = []Candidate{{Path: name, RelPath: name, Size: req.Source.MaxFileBytes, MTime: bucket,
 		Load: func(ctx context.Context) (Payload, error) { return p.load(ctx, req, bucket) },
 	}}
-	d.Health = Collected
+	d.Health = formats.Collected
 	return d, nil
 }
 

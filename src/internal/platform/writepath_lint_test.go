@@ -87,13 +87,12 @@ var writeCapablePackages = []string{
 // writeCapableFiles is the file-granular half, for merged packages: a directory grant to platform
 // would extend write rights to memstat and buildinfo, which have none and must stay that way.
 var writeCapableFiles = []string{
-	"internal/platform/safeio.go",    // the sanctioned write path itself
-	"internal/platform/pause.go",     // the pause flag
-	"internal/engine/state.go",       // the fingerprint document
-	"internal/sources/ignore.go",     // the .notrajectories repository marker
-	"packaging/common/service.go",    // service state
-	"packaging/common/remove.go",     // the installed standalone executable
-	"packaging/common/selfupdate.go", // the self-update hop guard
+	"internal/platform/safeio.go", // the sanctioned write path itself
+	"internal/platform/pause.go",  // the pause flag
+	"internal/engine/state.go",    // the fingerprint document
+	"internal/sources/ignore.go",  // the .notrajectories repository marker
+	"packaging/service.go",        // service state and the self-update hop guard
+	"packaging/common/remove.go",  // the installed standalone executable
 }
 
 // bannedWrites are the os-level calls that create or truncate a file.

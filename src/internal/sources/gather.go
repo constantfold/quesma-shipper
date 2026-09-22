@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 // Discover dispatches only to collectors compiled into this build.
@@ -23,7 +25,7 @@ func Discover(req Request) (Discovery, error) {
 
 func discoverByGlob(req Request) (Discovery, error) {
 	src := req.Source
-	d := Discovery{Health: AgentAbsent}
+	d := Discovery{Health: formats.AgentAbsent}
 	if src.Root == "" {
 		d.Reason = cmp.Or(src.RootUnresolvedReason, "no candidate root resolved")
 		return d, nil
@@ -35,17 +37,17 @@ func discoverByGlob(req Request) (Discovery, error) {
 	d.UnreadableReason = bad.reason()
 	if len(matched) == 0 {
 		// Root present, globs matched nothing: probable drift, and never to be confused with agent_absent.
-		d.Health = RootPresentNoMatch
+		d.Health = formats.RootPresentNoMatch
 		d.Reason = fmt.Sprintf("root %s exists but no file matched %v", src.Root, src.Include)
 		switch {
 		case bad.count > 0:
-			d.Health = MatchPresentUnreadable
+			d.Health = formats.MatchPresentUnreadable
 			d.Reason = bad.reason()
 		case d.Ignored:
 			d.Reason = ignoredReason
 		case len(oversize) > 0:
 			// Every match was over the cap: saying "no file matched" would send the reader to their globs instead.
-			d.Health = MatchPresentUnreadable
+			d.Health = formats.MatchPresentUnreadable
 			d.Reason = fmt.Sprintf("%d file(s) matched but every one is over the %d-byte cap",
 				len(oversize), src.MaxFileBytes)
 		}
@@ -57,12 +59,12 @@ func discoverByGlob(req Request) (Discovery, error) {
 		return cmp.Or(a.MTime.Compare(b.MTime), strings.Compare(a.RelPath, b.RelPath))
 	})
 	d.Candidates = matched
-	d.Health = Collected
+	d.Health = formats.Collected
 	// Sampled, not single-file: the source is condemned only if EVERY sample fails, since one bad file is the per-file path's problem.
 	d.Sniff, d.AgentVersion, d.SniffFailures = sniffSample(matched, src.Sniff)
-	if d.Sniff == SniffUnreadable || d.Sniff == SniffUnexpectedShape {
+	if d.Sniff == formats.SniffUnreadable || d.Sniff == formats.SniffUnexpectedShape {
 		// Found but unusable: a store that switched substrate lands here rather than shipping garbage.
-		d.Health = MatchPresentUnreadable
+		d.Health = formats.MatchPresentUnreadable
 		d.Reason = fmt.Sprintf("shape sniff failed on every one of %d sampled files; last was %s",
 			d.SniffFailures, d.Sniff)
 		d.Candidates = nil

@@ -7,21 +7,22 @@ import (
 	"os"
 	"strings"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 // sniff runs the catalog's shape assertion: shape, never semantics, so a drifted format is a data fix rather than a release.
-func sniff(path string, spec *Sniff) (SniffResult, string) {
+func sniff(path string, spec *Sniff) (formats.SniffResult, string) {
 	if spec == nil || spec.Kind == "" || spec.Kind == "none" {
-		return SniffOK, ""
+		return formats.SniffOK, ""
 	}
 
 	head, info, err := readHead(path, spec.MaxScanBytes)
 	if err != nil {
-		return SniffUnreadable, ""
+		return formats.SniffUnreadable, ""
 	}
 	if len(head) == 0 {
-		return SniffEmpty, ""
+		return formats.SniffEmpty, ""
 	}
 	// Whether the head stopped at the budget or at end of file changes what a missing newline means.
 	truncated := info != nil && info.Size() > int64(len(head))
@@ -31,19 +32,19 @@ func sniff(path string, spec *Sniff) (SniffResult, string) {
 		return sniffJSONL(head, truncated)
 	case "json":
 		if body := bytes.TrimLeft(head, " \t\n\r"); len(body) == 0 || (body[0] != '{' && body[0] != '[') {
-			return SniffUnexpectedShape, ""
+			return formats.SniffUnexpectedShape, ""
 		}
 	case "magic":
 		want, err := hex.DecodeString(spec.MagicHex)
 		if err != nil || !bytes.HasPrefix(head, want) {
-			return SniffUnexpectedShape, ""
+			return formats.SniffUnexpectedShape, ""
 		}
 	case "text":
 		if bytes.IndexByte(head, 0) >= 0 {
-			return SniffUnexpectedShape, ""
+			return formats.SniffUnexpectedShape, ""
 		}
 	}
-	return SniffOK, ""
+	return formats.SniffOK, ""
 }
 
 // readHead reads up to budget bytes, 64 KiB when budget is not positive.
@@ -73,8 +74,8 @@ const sniffSampleSize = 5
 
 // sniffSample asks several files spread evenly across the ordering, always including the first and
 // the last, and returns the best answer. Deterministic: a source must not oscillate across ticks.
-func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
-	var best SniffResult
+func sniffSample(matched []Candidate, spec *Sniff) (formats.SniffResult, string, int) {
+	var best formats.SniffResult
 	failures, version := 0, ""
 	// Scan the whole sample so every unreadable file is counted, and take the version from the
 	// newest readable one (the sample ascends by mtime): the closest proxy for the current install.
@@ -84,7 +85,7 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 			at = i * (len(matched) - 1) / (sniffSampleSize - 1)
 		}
 		result, agentVersion := sniff(matched[at].Path, spec)
-		if result == SniffUnreadable || result == SniffUnexpectedShape {
+		if result == formats.SniffUnreadable || result == formats.SniffUnexpectedShape {
 			failures++
 			if i == 0 {
 				best = result
@@ -97,10 +98,10 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 }
 
 // sniffJSONL asserts the first non-empty line parses as JSON, and opportunistically reads the producer version out of the head.
-func sniffJSONL(head []byte, truncated bool) (SniffResult, string) {
+func sniffJSONL(head []byte, truncated bool) (formats.SniffResult, string) {
 	// A NUL byte settles it: no JSONL store contains one, so this store became binary.
 	if bytes.IndexByte(head, 0) >= 0 {
-		return SniffUnexpectedShape, ""
+		return formats.SniffUnexpectedShape, ""
 	}
 
 	line, terminated := firstLine(head)
@@ -110,19 +111,19 @@ func sniffJSONL(head []byte, truncated bool) (SniffResult, string) {
 
 	if strings.TrimSpace(line) == "" {
 		if unjudgeable {
-			return SniffOK, ""
+			return formats.SniffOK, ""
 		}
-		return SniffEmpty, ""
+		return formats.SniffEmpty, ""
 	}
 
 	var rec map[string]json.RawMessage
 	if json.Unmarshal([]byte(line), &rec) != nil {
 		if unjudgeable {
-			return SniffOK, ""
+			return formats.SniffOK, ""
 		}
-		return SniffUnexpectedShape, ""
+		return formats.SniffUnexpectedShape, ""
 	}
-	return SniffOK, versionFromHead(head)
+	return formats.SniffOK, versionFromHead(head)
 }
 
 // The version rides a header line that is not always the first: the first line plus sixteen more.

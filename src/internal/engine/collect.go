@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
@@ -12,7 +13,7 @@ import (
 func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sources.Resolved, budget *int, rep *Report) (*SourceOutcome, error) {
 	out := SourceOutcome{SourceID: src.ID, Family: src.Family, Root: src.Root, Emitted: src.Emit != ""}
 	if !src.Enabled {
-		out.Health, out.Reason = sources.AgentAbsent, "disabled by configuration"
+		out.Health, out.Reason = formats.AgentAbsent, "disabled by configuration"
 		return &out, nil
 	}
 
@@ -30,7 +31,7 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 		Capture:  !o.DryRun,
 	})
 	if err != nil {
-		out.Health, out.Reason = sources.MatchPresentUnreadable, err.Error()
+		out.Health, out.Reason = formats.MatchPresentUnreadable, err.Error()
 		return &out, nil
 	}
 	out.Health, out.Sniff, out.AgentVersion, out.Reason = disc.Health, disc.Sniff, disc.AgentVersion, disc.Reason
@@ -86,7 +87,7 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 	}
 
 	// Only a source that collected every candidate proves absence; a truncated run forgets nothing.
-	if !o.DryRun && out.Health == sources.Collected && len(disc.Candidates) > 0 && out.Remaining == 0 {
+	if !o.DryRun && out.Health == formats.Collected && len(disc.Candidates) > 0 && out.Remaining == 0 {
 		live := make(map[string]bool, len(disc.Candidates))
 		for _, c := range disc.Candidates {
 			live[c.Path] = true

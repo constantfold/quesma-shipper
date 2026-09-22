@@ -32,7 +32,7 @@ type ProjectRecord struct {
 // discoverSidecar records repository mappings before the sessions that reveal them are reaped.
 func discoverSidecar(req Request) (Discovery, error) {
 	src := req.Source
-	d := Discovery{Health: AgentAbsent, Sniff: SniffOK}
+	d := Discovery{Health: formats.AgentAbsent, Sniff: formats.SniffOK}
 
 	probe := src.CWDProbe
 	if probe == nil {
@@ -107,7 +107,7 @@ func discoverSidecar(req Request) (Discovery, error) {
 		return d, err
 	}
 
-	d.Health = Collected
+	d.Health = formats.Collected
 	d.Candidates = []Candidate{{Path: path, RelPath: name, Size: info.Size(), MTime: info.ModTime().UTC(),
 		Load: fileLoader(path, src.MaxFileBytes)}}
 	d.Reason = fmt.Sprintf("%d project directories mapped", len(records))

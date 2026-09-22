@@ -79,31 +79,31 @@ func discoveryRows(src config.ResolvedSource, d sources.Discovery) []Row {
 	}
 	head := Row{Sev: SevWarn, Label: src.ID, Detail: string(d.Health) + ", " + d.Reason}
 	switch d.Health {
-	case sources.Collected:
+	case formats.Collected:
 		head.Sev = SevOK
 		head.Detail = fmt.Sprintf("%s - %d candidate(s)", d.Health, len(d.Candidates))
 		if d.AgentVersion != "" {
 			head.Detail += ", agent " + d.AgentVersion
 		}
-		if d.Sniff != "" && d.Sniff != sources.SniffOK {
+		if d.Sniff != "" && d.Sniff != formats.SniffOK {
 			head.Sev = SevWarn
 			head.Detail += ", sniff " + string(d.Sniff)
 			head.Fix = "the agent's format may have changed under this build, `quesma-shipper preview` shows what would ship"
 		}
-	case sources.AgentAbsent:
+	case formats.AgentAbsent:
 		head.Sev = SevDim
-	case sources.RootPresentNoMatch:
+	case formats.RootPresentNoMatch:
 		if d.Ignored {
 			head.Sev = SevDim
 		} else {
 			head.Fix = "the store may have moved, files there are not collected"
 		}
-	case sources.MatchPresentUnreadable:
+	case formats.MatchPresentUnreadable:
 		head.Fix = "fix permissions on the store, or the agent changed its format under this build"
 	}
 	rows := []Row{head}
 
-	if d.Unreadable > 0 && d.Health != sources.MatchPresentUnreadable {
+	if d.Unreadable > 0 && d.Health != formats.MatchPresentUnreadable {
 		rows = append(rows, Row{Sev: SevWarn, Label: "  unreadable",
 			Detail: fmt.Sprintf("%d path(s) unreadable during discovery - %s", d.Unreadable, d.UnreadableReason),
 			Fix:    "first failing path: " + d.UnreadableExample})

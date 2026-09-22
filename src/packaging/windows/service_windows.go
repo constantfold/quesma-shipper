@@ -83,7 +83,7 @@ func UninstallService() error {
 	}
 	if verifyErr != nil {
 		return fmt.Errorf("%w: %s (could not verify absence: %v)",
-			ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
+			common.ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
 	}
 	return fmt.Errorf("supervise: delete scheduled task: %s", commandError(err, out))
 }
@@ -144,10 +144,6 @@ func queryOwnTask(ctx context.Context, userSID string) (string, []byte, error) {
 	}
 	return name, out, err
 }
-
-// ErrTaskDeleteUnverified marks a delete whose outcome could not be confirmed either way. Removal
-// must not be blocked by it: a user who wants the software gone has to be able to get there.
-var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")
 
 func ServiceState(ctx context.Context) Status {
 	sid, err := currentUserSID()
@@ -220,12 +216,6 @@ func RemoveProgram(executable string) (string, error) {
 	}
 	return executable, errors.New("this is a portable executable; remove it after this command exits")
 }
-
-func SameProgram(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
-}
-
-func ProgramRemovalDeferred() bool { return true }
 
 func schtasks(args ...string) ([]byte, error) {
 	return exec.Command("schtasks.exe", args...).CombinedOutput()

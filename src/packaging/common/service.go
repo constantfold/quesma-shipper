@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 // Kind is the supervision mechanism in use on this host.
@@ -121,25 +119,9 @@ func ValidateInstall(spec Spec) error {
 var ErrCronManual = errors.New("supervise: this host has no systemd --user; " +
 	"add the printed crontab line yourself")
 
-// RunMarker is the file the loop touches after each completed flush.
-const RunMarker = "last_run"
-
-// RecordRun stamps the marker after every flush, including one that shipped nothing: the
-// fingerprint document only advances on collection, so it cannot show a quiet install is alive.
-func RecordRun(stateDir string, at time.Time) error {
-	return platform.WriteAtomic(filepath.Join(stateDir, RunMarker),
-		[]byte(at.UTC().Format(time.RFC3339)+"\n"), 0o644)
-}
-
-// LastRun reads the marker. Zero time means never.
-func LastRun(stateDir string) time.Time {
-	raw, _, err := platform.ReadWhole(filepath.Join(stateDir, RunMarker), 128)
-	if err != nil {
-		return time.Time{}
-	}
-	t, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
-	return t
-}
+// ErrTaskDeleteUnverified marks a Windows task delete whose outcome could not be confirmed either
+// way. Removal must not be blocked by it: a user who wants the software gone has to get there.
+var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")
 
 // CronHint is the non-systemd fallback, a line the operator adds manually.
 func CronHint(spec Spec) string {
@@ -195,10 +177,6 @@ func XMLText(s string) string {
 	var b strings.Builder
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
-}
-
-func RemoveState(stateDir string) error {
-	return os.RemoveAll(stateDir)
 }
 
 // CurrentExecutable is this binary's real path, behind any package-installed symlink.

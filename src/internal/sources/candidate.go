@@ -8,25 +8,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// HealthState is the per-source discovery verdict, aliased so gather and the heartbeat document agree on one set of strings.
-type HealthState = formats.HealthState
-
-const (
-	AgentAbsent            = formats.AgentAbsent
-	RootPresentNoMatch     = formats.RootPresentNoMatch
-	MatchPresentUnreadable = formats.MatchPresentUnreadable
-	Collected              = formats.Collected
-)
-
-type SniffResult = formats.SniffResult
-
-const (
-	SniffOK              = formats.SniffOK
-	SniffEmpty           = formats.SniffEmpty
-	SniffUnexpectedShape = formats.SniffUnexpectedShape
-	SniffUnreadable      = formats.SniffUnreadable
-)
-
 // Candidate is one discovered file or generated payload.
 type Candidate struct {
 	// Path is absolute for files, or a stable name for generated content.
@@ -59,7 +40,7 @@ func fileLoader(path string, maxBytes int64) func(context.Context) (Payload, err
 
 // Discovery is what one source's discovery pass found, plus why.
 type Discovery struct {
-	Health HealthState
+	Health formats.HealthState
 	// Reason explains a non-collected health state, for doctor and the heartbeat.
 	Reason string
 	// Deferred means inspection skipped a check that requires collection.
@@ -75,7 +56,7 @@ type Discovery struct {
 
 	// Sniff lands verbatim in manifests, heartbeats and doctor output; SniffFailures condemns the
 	// source only when every sample failed.
-	Sniff         SniffResult
+	Sniff         formats.SniffResult
 	SniffFailures int
 	// AgentVersion is read from the store, making a parse-failure spike attributable to an agent release.
 	AgentVersion string
