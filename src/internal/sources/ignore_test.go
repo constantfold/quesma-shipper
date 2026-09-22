@@ -32,7 +32,6 @@ func writeSession(t *testing.T, root, rel, cwd string) Candidate {
 	return Candidate{Path: filepath.Join(root, rel), RelPath: rel}
 }
 
-// repoDir makes a directory under home, optionally carrying the marker.
 func repoDir(t *testing.T, home, rel string, marked bool) string {
 	t.Helper()
 	dir := filepath.Join(home, rel)
@@ -43,7 +42,6 @@ func repoDir(t *testing.T, home, rel string, marked bool) string {
 	return dir
 }
 
-// gitRepo makes a checkout with a real .git directory.
 func gitRepo(t *testing.T, home, rel string) string {
 	t.Helper()
 	dir := repoDir(t, home, rel, false)
@@ -197,7 +195,6 @@ func TestWorktreeMarkerScope(t *testing.T) {
 	}
 }
 
-// A checkout at home does not become the repository of every directory under it.
 func TestACheckoutAtHomeDoesNotClaimEverything(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o700))

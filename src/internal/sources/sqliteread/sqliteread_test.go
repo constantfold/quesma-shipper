@@ -190,7 +190,6 @@ func TestUnreadableDatabaseFallbacks(t *testing.T) {
 // THE SIDECAR BASENAME RULE. A mistake this project already made once.
 func TestColdCopyKeepsSidecarsAndRefusesOverwrite(t *testing.T) {
 	src := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-	// Give it a WAL and an SHM, as a live database has.
 	for _, suffix := range []string{"-wal", "-shm"} {
 		require.NoError(t, os.WriteFile(src+suffix, []byte("sidecar"), 0o600))
 	}

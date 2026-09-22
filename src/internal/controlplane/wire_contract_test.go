@@ -28,7 +28,6 @@ var wireTypes = map[string]func() any{
 	"v2/uploads-authorize-response.schema.json": func() any { return &controlplane.AuthorizeResponse{} },
 }
 
-// validateWire validates a JSON document against one embedded protocol schema.
 func validateWire(t *testing.T, name string, raw []byte) error {
 	t.Helper()
 	schemaRaw, err := fs.ReadFile(protocol.FS, pathpkg.Join("schemas", name))

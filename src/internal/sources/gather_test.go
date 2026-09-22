@@ -238,7 +238,6 @@ func TestDenyListAppliesAtDiscoveryTime(t *testing.T) {
 	assert.Zerof(t, d.Unreadable, "the denied tree was opened: %s", d.UnreadableReason)
 }
 
-// A permission denial deep in a store must not abort the walk.
 func TestUnreadableSubtreeDoesNotAbortTheWalk(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("permission bits do not apply")
