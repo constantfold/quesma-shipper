@@ -78,8 +78,7 @@ const ignoredReason = "every file this source found belongs to a repository you 
 
 // Candidate is one discovered file or generated payload.
 type Candidate struct {
-	// Path is absolute for files, or a stable name for generated content.
-	Path string
+	Path string // absolute for files, or a stable name for generated content
 	// RelPath is relative to the resolved root and derives the mirror key, so a store that moves keeps its keys.
 	RelPath string
 	Load    func(context.Context) (Payload, error)
@@ -108,11 +107,9 @@ func fileLoader(path string, maxBytes int64) func(context.Context) (Payload, err
 
 // Discovery is what one source's discovery pass found, plus why.
 type Discovery struct {
-	Health formats.HealthState
-	// Reason explains a non-collected health state, for doctor and the heartbeat.
-	Reason string
-	// Deferred means inspection skipped a check that requires collection.
-	Deferred bool
+	Health   formats.HealthState
+	Reason   string // explains a non-collected health state, for doctor and the heartbeat
+	Deferred bool   // inspection skipped a check that requires collection
 	// Ignored says the ignore list dropped something, so a source emptied by it is not mistaken for drift.
 	Ignored bool
 
@@ -135,8 +132,7 @@ type Discovery struct {
 // Request is everything a discovery pass is given; each primitive uses a different slice of it.
 type Request struct {
 	Source Resolved
-	// All is every resolved source, for a primitive whose input is another source's files.
-	All []Resolved
+	All    []Resolved // every resolved source, for a primitive whose input is another source's files
 	// Deny and Ignore are install-wide; a nil Ignore drops nothing.
 	Deny   *List
 	Ignore *RepoFilter

@@ -181,8 +181,7 @@ func TestUnreadableDatabaseFallbacks(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
 			_, err := sqliteread.Read(sqliteread.Options{Path: path, ScratchDir: scratch, Table: "cursorDiskKV"})
-			require.Error(t, err, "an unreadable database produced a successful read")
-			assert.Contains(t, err.Error(), tc.want)
+			require.ErrorContains(t, err, tc.want, "an unreadable database produced a successful read")
 		})
 	}
 }

@@ -61,10 +61,9 @@ func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key stri
 
 	var patternSpans, heuristicSpans []Span
 	for _, p := range s.patterns {
-		if !seen.Has(p.gate) {
-			continue
+		if seen.Has(p.gate) {
+			patternSpans = append(patternSpans, p.m.MatchScannedIn(value, scan)...)
 		}
-		patternSpans = append(patternSpans, p.m.MatchScannedIn(value, scan)...)
 	}
 	if entropy != nil {
 		heuristicSpans = entropy.Match(value)

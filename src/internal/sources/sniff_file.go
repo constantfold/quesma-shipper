@@ -104,21 +104,17 @@ func sniffJSONL(head []byte, truncated bool) (formats.SniffResult, string) {
 	// "No newline" means two things: a truncated head simply ran past the scan budget, a whole file with none is real drift.
 	unjudgeable := !terminated && truncated
 
-	if len(bytes.TrimSpace(line)) == 0 {
-		if unjudgeable {
-			return formats.SniffOK, ""
-		}
+	blank := len(bytes.TrimSpace(line)) == 0
+	var rec map[string]json.RawMessage
+	switch {
+	case !blank && json.Unmarshal(line, &rec) == nil:
+		return formats.SniffOK, versionFromHead(head)
+	case unjudgeable:
+		return formats.SniffOK, ""
+	case blank:
 		return formats.SniffEmpty, ""
 	}
-
-	var rec map[string]json.RawMessage
-	if json.Unmarshal(line, &rec) != nil {
-		if unjudgeable {
-			return formats.SniffOK, ""
-		}
-		return formats.SniffUnexpectedShape, ""
-	}
-	return formats.SniffOK, versionFromHead(head)
+	return formats.SniffUnexpectedShape, ""
 }
 
 // The version rides a header line that is not always the first: the first line plus sixteen more.

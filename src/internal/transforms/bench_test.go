@@ -19,16 +19,8 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 	benchmarkSynthetic(b, syntheticTranscript(1<<20), syntheticBigValue(8<<20, 20260817, randCommandOutput))
 }
 
-func benchScrubber(b *testing.B) *Scrubber {
-	cfg := DefaultConfig()
-	cfg.Username = "devuser"
-	s, err := New(cfg)
-	require.NoError(b, err)
-	return s
-}
-
 func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
-	s := benchScrubber(b)
+	s := scrubberAs(b, "devuser")
 	cases := []struct {
 		name    string
 		payload []byte
@@ -301,7 +293,7 @@ func BenchmarkScrubRealData(b *testing.B) {
 	require.NotEqualf(b, 0, total, "no .jsonl files under %s", root)
 	b.Logf("real corpus: %d files, %.1f MiB", len(files), float64(total)/(1<<20))
 
-	s := benchScrubber(b)
+	s := scrubberAs(b, "devuser")
 	hint := Hint{Family: "claude-code", JSONL: true}
 	b.SetBytes(int64(total))
 	b.ReportAllocs()

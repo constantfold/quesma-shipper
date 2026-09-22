@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -139,12 +140,10 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 
 // matchesAny expects patterns already normalised by normalizeGlobs.
 func matchesAny(rel string, patterns []string) bool {
-	for _, p := range patterns {
-		if ok, err := doublestar.Match(p, rel); err == nil && ok {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(patterns, func(p string) bool {
+		ok, err := doublestar.Match(p, rel)
+		return err == nil && ok
+	})
 }
 
 func normalizeGlobs(globs []string) []string {
