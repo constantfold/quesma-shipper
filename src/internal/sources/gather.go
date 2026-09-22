@@ -24,7 +24,6 @@ func Discover(req Request) (Discovery, error) {
 func discoverByGlob(req Request) (Discovery, error) {
 	src := req.Source
 	d := Discovery{Health: AgentAbsent}
-
 	if src.Root == "" {
 		d.Reason = cmp.Or(src.RootUnresolvedReason, "no candidate root resolved")
 		return d, nil
@@ -34,7 +33,6 @@ func discoverByGlob(req Request) (Discovery, error) {
 	d.Oversize, d.Ignored = oversize, ignored
 	d.Unreadable, d.UnreadableExample = bad.count, bad.example
 	d.UnreadableReason = bad.reason()
-
 	if len(matched) == 0 {
 		// Root present, globs matched nothing: probable drift, and never to be confused with agent_absent.
 		d.Health = RootPresentNoMatch
@@ -56,12 +54,8 @@ func discoverByGlob(req Request) (Discovery, error) {
 
 	// Oldest first: for a source with a known reaper these are the ones closest to deletion.
 	slices.SortFunc(matched, func(a, b Candidate) int {
-		if c := a.MTime.Compare(b.MTime); c != 0 {
-			return c
-		}
-		return strings.Compare(a.RelPath, b.RelPath)
+		return cmp.Or(a.MTime.Compare(b.MTime), strings.Compare(a.RelPath, b.RelPath))
 	})
-
 	d.Candidates = matched
 	d.Health = Collected
 	// Sampled, not single-file: the source is condemned only if EVERY sample fails, since one bad file is the per-file path's problem.

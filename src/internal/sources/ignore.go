@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const notrajectories = ".notrajectories"
-
 // RepoFilter skips sessions from repositories marked .notrajectories.
 // Attribution uses the catalog’s bounded cwd probe where paths do not encode the repository.
 type RepoFilter struct {
@@ -21,15 +19,14 @@ type RepoFilter struct {
 	scopes map[string]gitScope
 }
 
-// gitScope is the checkout containing a working directory and the repository's main
-// checkout; both empty outside git, main alone empty for a bare repository.
+// gitScope is the checkout containing a working directory and the repository's main checkout;
+// both empty outside git, main alone empty for a bare repository.
 type gitScope struct {
 	root, main string
 }
 
-// RepoFilter builds the attributor from the catalog's cwd probe and the git rules of that
-// same source, so the field names and what may be read stay data. With no probe nothing is
-// attributed and nothing is ignored.
+// RepoFilter takes the cwd probe and git rules from the catalog, so what may be read stays data.
+// With no probe nothing is attributed and nothing is ignored.
 func (c *Compiled) RepoFilter() *RepoFilter {
 	var probe *CWDProbe
 	var git *GitRead
@@ -47,8 +44,7 @@ func newRepoFilter(probe *CWDProbe, git *GitRead, home string) *RepoFilter {
 	return &RepoFilter{probe: probe, git: git, home: home, cwds: map[string]string{}, scopes: map[string]gitScope{}}
 }
 
-// CWD is the working directory a candidate's session ran in, or "" when none was found,
-// which is a legal outcome.
+// CWD is the working directory a candidate's session ran in, or "" when none was found.
 func (f *RepoFilter) CWD(src Resolved, c Candidate) string {
 	if f == nil || f.probe == nil || !slices.Contains(f.probe.From, src.ID) {
 		return ""
@@ -63,10 +59,8 @@ func (f *RepoFilter) CWD(src Resolved, c Candidate) string {
 	if cwd, hit := f.cwds[c.Path]; hit {
 		return cwd
 	}
-	cwd := ""
-	if p, ok := probeCWD(c.Path, f.probe); ok {
-		cwd = cleanCWD(p)
-	}
+	p, _ := probeCWD(c.Path, f.probe)
+	cwd := cleanCWD(p)
 	if cwd != "" {
 		f.cwds[key] = cwd
 	}
@@ -82,8 +76,7 @@ func cleanCWD(cwd string) string {
 	return p
 }
 
-// RepoName is the last path segment, matched exactly: "acme" must never also mean
-// "client-acme", because over-ignoring is silent.
+// RepoName is the last path segment, matched exactly: over-ignoring "client-acme" as "acme" would be silent.
 func RepoName(cwd string) string {
 	if cwd == "" {
 		return ""
@@ -91,8 +84,8 @@ func RepoName(cwd string) string {
 	return filepath.Base(cwd)
 }
 
-// Marker is the .notrajectories governing dir: the nearest up to the checkout root (home
-// outside git), else the main checkout's. A marker above a repository never counts.
+// Marker is the .notrajectories governing dir: the nearest up to the checkout root (home outside git),
+// else the main checkout's. A marker above a repository never counts.
 func (f *RepoFilter) Marker(dir string) (string, bool) {
 	if f == nil || dir == "" {
 		return "", false
@@ -107,8 +100,7 @@ func (f *RepoFilter) Marker(dir string) (string, bool) {
 	return "", false
 }
 
-// markerBetween walks from dir up to stop inclusive; an empty stop means the walk runs to
-// the home directory, and the filesystem root always ends it.
+// markerBetween walks from dir up to stop inclusive, never past home or the filesystem root.
 func (f *RepoFilter) markerBetween(dir, stop string) (string, bool) {
 	for d := dir; ; d = filepath.Dir(d) {
 		if p, ok := markerAt(d); ok {
@@ -121,7 +113,7 @@ func (f *RepoFilter) markerBetween(dir, stop string) (string, bool) {
 }
 
 func MarkerPath(dir string) string {
-	return filepath.Join(dir, notrajectories)
+	return filepath.Join(dir, ".notrajectories")
 }
 
 func markerAt(dir string) (string, bool) {
@@ -132,9 +124,8 @@ func markerAt(dir string) (string, bool) {
 	return p, true
 }
 
-// RepoDir is the directory that stands for a candidate's repository: the main working
-// tree when the session ran inside a git checkout (so a worktree folds into its
-// repository), the session's own working directory otherwise, "" when none was found.
+// RepoDir stands for a candidate's repository: the main working tree inside a git checkout, so a
+// worktree folds into its repository, else the session's own working directory.
 func (f *RepoFilter) RepoDir(src Resolved, c Candidate) string {
 	cwd := f.CWD(src, c)
 	if main := f.scopeOf(cwd).main; main != "" {
@@ -167,15 +158,14 @@ func (f *RepoFilter) Match(src Resolved, c Candidate) bool {
 	return marked
 }
 
-// Untrack drops a marker in dir; Track removes dir's own marker. Both are idempotent, and
-// Track deliberately never removes an ancestor's marker: that one may govern other
+// Untrack and Track are idempotent. Track never removes an ancestor's marker: it may govern other
 // repositories too, so lifting it is a decision to make where the file is.
 func (f *RepoFilter) Untrack(dir string) error {
 	return os.WriteFile(MarkerPath(dir), nil, 0o644)
 }
 
 func (f *RepoFilter) Track(dir string) error {
-	if err := os.Remove(MarkerPath(dir)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(MarkerPath(dir)); !os.IsNotExist(err) {
 		return err
 	}
 	return nil

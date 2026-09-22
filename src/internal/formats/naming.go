@@ -14,27 +14,21 @@ import (
 // NameKeySize is the per-install secret's length in bytes, sized for HMAC-SHA256.
 const NameKeySize = 32
 
-// mirrorDomain tags the HMAC input so a later name kind cannot collide with mirror keys.
-const mirrorDomain = "mirror:"
-
 // UserPlaceholder replaces the OS user's name inside a canonical path. For convergence, not
 // concealment: the same logical file keeps its key when the home path changes underneath it.
 const UserPlaceholder = "__USER__"
 
-// identifierRe is the grammar for organization, install and source ids. Enforced because a
-// value containing "/" or "=" is interpolated into an object key and could forge a path.
+// identifierRe is the grammar for organization, install and source ids: a "/" or "=" in a key segment could forge a path.
 var identifierRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // CanonicalPath is the deterministic string a mirror name is derived from: identical on every run
 // and every machine of the identity unit, so a re-ship after state loss overwrites, never duplicates.
 func CanonicalPath(sourceRelPath, username string) string {
-	p := path.Clean(strings.ReplaceAll(sourceRelPath, `\`, "/"))
-	p = strings.TrimPrefix(p, "/")
+	p := strings.TrimPrefix(path.Clean(strings.ReplaceAll(sourceRelPath, `\`, "/")), "/")
 	if p == "." {
 		p = ""
 	}
 	p = ApplyUserPlaceholder(p, username)
-
 	segs := strings.Split(p, "/")
 	for i, s := range segs {
 		segs[i] = encodeSegment(s)
@@ -48,7 +42,6 @@ func ApplyUserPlaceholder(s, username string) string {
 	if len(username) < 2 || s == "" {
 		return s
 	}
-
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		if strings.HasPrefix(s[i:], username) {
@@ -80,8 +73,8 @@ func encodeSegment(s string) string {
 // and never content-derived, so a file's whole history lands on one key.
 func MirrorName(nameKey []byte, canonicalPath string) string {
 	m := hmac.New(sha256.New, nameKey)
-	m.Write([]byte(mirrorDomain))
-	m.Write([]byte(canonicalPath))
+	// The domain tag keeps a later name kind from colliding with mirror keys.
+	m.Write([]byte("mirror:" + canonicalPath))
 	return hex.EncodeToString(m.Sum(nil))
 }
 
@@ -98,8 +91,7 @@ func MirrorKey(org, installID, sourceID string, nameKey []byte, canonicalPath st
 	if len(nameKey) != NameKeySize {
 		return "", fmt.Errorf("identity: name_key is %d bytes, want %d", len(nameKey), NameKeySize)
 	}
-	return fmt.Sprintf("%s/mirror/source=%s/%s.age",
-		root, sourceID, MirrorName(nameKey, canonicalPath)), nil
+	return fmt.Sprintf("%s/mirror/source=%s/%s.age", root, sourceID, MirrorName(nameKey, canonicalPath)), nil
 }
 
 // StateKey composes the key of an install-owned state object, under the same install prefix

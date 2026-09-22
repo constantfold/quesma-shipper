@@ -13,38 +13,27 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
-
 	"filippo.io/age"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// IdentitySchema versions the on-disk unit. An unknown value means downgrade or corruption:
-// refuse it rather than guess.
+// IdentitySchema versions the on-disk unit; an unknown value means downgrade or corruption.
 const IdentitySchema = 1
 
-// FileName is the unit's file name inside the state directory.
 const FileName = "identity.json"
 
-// Unit is the install's identity, a value type so callers pass it rather than reach for globals.
 type Unit struct {
 	// InstallID is the machine pseudonym and the unit of erasure: one prefix sweep deletes a device.
 	InstallID uuid.UUID
-
-	// Identity is the age identity, the user-held default recipient in a standalone install. An
-	// enterprise deployment adds org recipients and may withhold this one.
+	// Identity is the default recipient in a standalone install; an enterprise may withhold it.
 	Identity *age.X25519Identity
-
-	// NameKey keys the mirror-name HMAC, blinding object names rather than merely hashing them: a
-	// plaintext hash in a listable key is a confirmation oracle for anyone who can list the bucket.
-	NameKey []byte
-
-	// CreatedAt is when the unit was minted, UTC.
+	// NameKey keys the mirror-name HMAC, so a listable object name is no confirmation oracle.
+	NameKey   []byte
 	CreatedAt time.Time
 }
 
-// unitFile is the on-disk shape, kept separate so the file format is explicit.
 type unitFile struct {
 	IdentitySchema int    `json:"identity_schema"`
 	InstallID      string `json:"install_id"`
@@ -54,7 +43,6 @@ type unitFile struct {
 	CreatedAt      string `json:"created_at"`
 }
 
-// Recipient returns the public recipient for this install's own identity.
 func (u *Unit) Recipient() *age.X25519Recipient {
 	return u.Identity.Recipient()
 }
@@ -76,7 +64,6 @@ func Mint(stateDir string) (*Unit, error) {
 	if err := platform.EnsureDir(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("identity: %w", err)
 	}
-
 	path := filepath.Join(stateDir, FileName)
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("identity: %s already exists: refusing to mint over an existing unit", path)
@@ -89,33 +76,27 @@ func Mint(stateDir string) (*Unit, error) {
 		return nil, fmt.Errorf("identity: generate age identity: %w", err)
 	}
 	nameKey := make([]byte, formats.NameKeySize)
-	if _, err := rand.Read(nameKey); err != nil {
-		return nil, fmt.Errorf("identity: generate name_key: %w", err)
-	}
+	rand.Read(nameKey) // never fails since Go 1.24
 
-	u := &Unit{
-		InstallID: uuid.New(),
-		Identity:  id,
-		NameKey:   nameKey,
-		CreatedAt: time.Now().UTC().Truncate(time.Second),
-	}
-	if err := save(path, u); err != nil {
-		return nil, err
+	u := &Unit{InstallID: uuid.New(), Identity: id, NameKey: nameKey, CreatedAt: time.Now().UTC().Truncate(time.Second)}
+	// Written atomically, so a crash leaves no unit or a complete one.
+	if err := platform.WriteJSON(path, unitFile{
+		IdentitySchema: IdentitySchema,
+		InstallID:      u.InstallID.String(),
+		AgeIdentity:    u.Identity.String(),
+		AgeRecipient:   u.Identity.Recipient().String(),
+		NameKey:        hex.EncodeToString(u.NameKey),
+		CreatedAt:      u.CreatedAt.Format(time.RFC3339),
+	}, 0o600); err != nil {
+		return nil, fmt.Errorf("identity: %w", err)
 	}
 	return u, nil
 }
 
-// maxUnitBytes bounds the read: a cap means a replaced file cannot be a memory attack.
-const maxUnitBytes = 1 << 20
-
-// Load reads the identity unit from stateDir.
 func Load(stateDir string) (*Unit, error) {
 	path := filepath.Join(stateDir, FileName)
-
-	// One open, with the mode checked on the FILE that was opened: a symlink swapped in between a
-	// stat and a read would let the mode of one file authorise reading another. It holds the
-	// private age identity, so ReadPrivate's mode gate applies.
-	raw, err := platform.ReadPrivate(path, maxUnitBytes)
+	// ReadPrivate checks the mode on the file it opened, so a swapped-in symlink cannot borrow another file's mode.
+	raw, err := platform.ReadPrivate(path, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("identity: %w", err)
 	}
@@ -127,7 +108,6 @@ func Load(stateDir string) (*Unit, error) {
 		return nil, fmt.Errorf("identity: %s has identity_schema %d, this client speaks %d: refusing to guess",
 			path, uf.IdentitySchema, IdentitySchema)
 	}
-
 	installID, err := uuid.Parse(uf.InstallID)
 	if err != nil {
 		return nil, fmt.Errorf("identity: install_id: %w", err)
@@ -147,33 +127,10 @@ func Load(stateDir string) (*Unit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("identity: created_at: %w", err)
 	}
-	// A stored recipient that disagrees means the file was edited, and the naming and encryption
-	// halves may no longer belong together.
+	// A disagreeing recipient means the file was edited and its halves may no longer belong together.
 	if got := ageID.Recipient().String(); uf.AgeRecipient != "" && uf.AgeRecipient != got {
 		return nil, fmt.Errorf("identity: age_recipient does not match age_identity")
 	}
 
-	return &Unit{
-		InstallID: installID,
-		Identity:  ageID,
-		NameKey:   nameKey,
-		CreatedAt: createdAt.UTC(),
-	}, nil
-}
-
-// save writes through the one sanctioned write path, so a crash leaves either no unit or a
-// complete one, never a half-written key.
-func save(path string, u *Unit) error {
-	uf := unitFile{
-		IdentitySchema: IdentitySchema,
-		InstallID:      u.InstallID.String(),
-		AgeIdentity:    u.Identity.String(),
-		AgeRecipient:   u.Identity.Recipient().String(),
-		NameKey:        hex.EncodeToString(u.NameKey),
-		CreatedAt:      u.CreatedAt.Format(time.RFC3339),
-	}
-	if err := platform.WriteJSON(path, uf, 0o600); err != nil {
-		return fmt.Errorf("identity: %w", err)
-	}
-	return nil
+	return &Unit{InstallID: installID, Identity: ageID, NameKey: nameKey, CreatedAt: createdAt.UTC()}, nil
 }

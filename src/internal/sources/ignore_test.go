@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,135 +15,32 @@ func testProbe() *CWDProbe {
 	return &CWDProbe{From: []string{"claude-code-transcripts", "codex-rollouts"}, Fields: []string{"cwd", "payload.cwd"}, ScanBytes: 64 << 10}
 }
 
-func writeSession(t *testing.T, path, cwd string) {
+func testGitRead() *GitRead { return &GitRead{WalkUp: true, FollowGitdirFile: true} }
+
+func claudeSource(root string) Resolved {
+	return Resolved{Source: Source{ID: "claude-code-transcripts", Include: []string{"projects/**/*.jsonl"}}, Root: root, Enabled: true}
+}
+
+// writeSession writes a session under root whose second line names cwd, or none when cwd is empty.
+func writeSession(t *testing.T, root, rel, cwd string) Candidate {
 	t.Helper()
 	body := "{}\n"
 	if cwd != "" {
 		body = `{"type":"summary"}` + "\n" + `{"type":"user","cwd":` + strconv.Quote(cwd) + `}` + "\n"
 	}
-	writeFile(t, path, body)
-}
-
-func candidateFor(root, rel string) Candidate {
+	writeFile(t, filepath.Join(root, rel), body)
 	return Candidate{Path: filepath.Join(root, rel), RelPath: rel}
 }
 
-// repoDir makes a repository directory under home, optionally carrying the marker.
+// repoDir makes a directory under home, optionally carrying the marker.
 func repoDir(t *testing.T, home, rel string, marked bool) string {
 	t.Helper()
 	dir := filepath.Join(home, rel)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	if marked {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, notrajectories), nil, 0o600))
+		writeFile(t, MarkerPath(dir), "")
 	}
 	return dir
-}
-
-func TestRepoNameIsTheLastSegment(t *testing.T) {
-	for _, tc := range []struct{ cwd, want string }{{"/Users/jane/work/client-acme", "client-acme"}, {"", ""}} {
-		assert.Equal(t, RepoName(tc.cwd), tc.want)
-	}
-}
-
-// A marker in the repository drops its sessions; a sibling with no cwd inherits its
-// project directory's answer; an unmarked repository and an unattributable file ship.
-func TestMarkerDropsARepositorysSessions(t *testing.T) {
-	home := t.TempDir()
-	acme := repoDir(t, home, "work/acme", true)
-	keeper := repoDir(t, home, "work/keeper", false)
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "projects/p-acme/a.jsonl"), acme)
-	writeSession(t, filepath.Join(root, "projects/p-acme/b.jsonl"), "")
-	writeSession(t, filepath.Join(root, "projects/p-keeper/c.jsonl"), keeper)
-	writeSession(t, filepath.Join(root, "projects/p-orphan/d.jsonl"), "")
-	src := Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}
-	f := newRepoFilter(testProbe(), nil, home)
-
-	for _, tc := range []struct {
-		rel  string
-		want bool
-	}{
-		{"projects/p-acme/a.jsonl", true},
-		{"projects/p-acme/b.jsonl", true},
-		{"projects/p-keeper/c.jsonl", false},
-		{"projects/p-orphan/d.jsonl", false},
-	} {
-		assert.Equal(t, f.Match(src, candidateFor(root, tc.rel)), tc.want)
-	}
-}
-
-// A marker covers everything under it, and the walk stops at home: a marker above home
-// must not turn the whole machine off by accident.
-func TestMarkerCoversDescendantsAndStopsAtHome(t *testing.T) {
-	outer := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(outer, notrajectories), nil, 0o600))
-	home := filepath.Join(outer, "home")
-	repoDir(t, home, "work", true)
-	inside := repoDir(t, home, "work/acme/sub", false)
-	unmarked := repoDir(t, home, "other/repo", false)
-
-	f := newRepoFilter(testProbe(), nil, home)
-	if _, ok := f.Marker(inside); !ok {
-		t.Error("an ancestor's marker must cover a nested working directory")
-	}
-	if _, ok := f.Marker(unmarked); ok {
-		t.Error("a marker above home must not count")
-	}
-}
-
-// Codex files rollouts under a date directory, so attribution is per file there: one
-// session must not be attributed to another's repository.
-func TestMarkersDoNotLeakAcrossADateDirectory(t *testing.T) {
-	home := t.TempDir()
-	acme := repoDir(t, home, "work/acme", true)
-	keeper := repoDir(t, home, "work/keeper", false)
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "sessions/2026/07/20/rollout-a.jsonl"), acme)
-	writeSession(t, filepath.Join(root, "sessions/2026/07/20/rollout-b.jsonl"), keeper)
-	src := Resolved{Source: Source{ID: "codex-rollouts"}, Root: root}
-	f := newRepoFilter(testProbe(), nil, home)
-	assert.True(t, f.Match(src, candidateFor(root, "sessions/2026/07/20/rollout-a.jsonl")), "the marked repository's rollout must match")
-	assert.True(t, !f.Match(src, candidateFor(root, "sessions/2026/07/20/rollout-b.jsonl")), "a rollout from another repository must not match")
-}
-
-// A catalog without a probe attributes nothing, and a source the probe does not name is
-// never read.
-func TestRepoFilterScope(t *testing.T) {
-	home := t.TempDir()
-	acme := repoDir(t, home, "work/acme", true)
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "a.jsonl"), acme)
-	c := candidateFor(root, "a.jsonl")
-	require.True(t, !newRepoFilter(nil, nil, home).Match(Resolved{}, c) && !newRepoFilter(testProbe(), nil, home).Match(Resolved{Source: Source{ID: "cursor-transcripts"}, Root: root}, c), "matched with nothing to match on")
-}
-
-// A marker created while the process runs bites on the next look: only attribution is
-// memoised, never the marker itself.
-func TestAMarkerCreatedLaterIsSeen(t *testing.T) {
-	home := t.TempDir()
-	acme := repoDir(t, home, "work/acme", false)
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "projects/p-acme/a.jsonl"), acme)
-	src := Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}
-	f := newRepoFilter(testProbe(), nil, home)
-	c := candidateFor(root, "projects/p-acme/a.jsonl")
-
-	require.True(t, !f.Match(src, c), "nothing is marked yet")
-	require.NoError(t, f.Untrack(acme))
-	assert.True(t, f.Match(src, c), "a marker created after the first look must be seen")
-	require.NoError(t, f.Track(acme))
-	assert.True(t, !f.Match(src, c), "a removed marker must stop matching")
-	assert.NoError(t, f.Track(acme))
-}
-
-func testGitRead() *GitRead {
-	return &GitRead{WalkUp: true, FollowGitdirFile: true}
-}
-
-func writeFile(t *testing.T, path, body string) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 }
 
 // gitRepo makes a checkout with a real .git directory.
@@ -166,33 +62,86 @@ func writeWorktree(t *testing.T, main, at, name string) string {
 	return wt
 }
 
-// A session run in a worktree belongs to the repository's main checkout, not to the
-// worktree directory's disposable name; a cwd outside git keeps its own directory.
+func TestRepoNameIsTheLastSegment(t *testing.T) {
+	assert.Equal(t, "client-acme", RepoName("/Users/jane/work/client-acme"))
+	assert.Empty(t, RepoName(""))
+}
+
+// A marker in the repository drops its sessions; a sibling with no cwd inherits its project
+// directory's answer; an unmarked repository, an unattributable file and a separate Codex
+// rollout in the same date directory ship.
+func TestMarkerDropsARepositorysSessions(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	acme := repoDir(t, home, "work/acme", true)
+	keeper := repoDir(t, home, "work/keeper", false)
+	f := newRepoFilter(testProbe(), nil, home)
+	codex := Resolved{Source: Source{ID: "codex-rollouts"}, Root: root}
+
+	for _, tc := range []struct {
+		src      Resolved
+		rel, cwd string
+		want     bool
+	}{
+		{claudeSource(root), "projects/p-acme/a.jsonl", acme, true},
+		{claudeSource(root), "projects/p-acme/b.jsonl", "", true},
+		{claudeSource(root), "projects/p-keeper/c.jsonl", keeper, false},
+		{claudeSource(root), "projects/p-orphan/d.jsonl", "", false},
+		{codex, "sessions/2026/07/20/rollout-a.jsonl", acme, true},
+		{codex, "sessions/2026/07/20/rollout-b.jsonl", keeper, false},
+	} {
+		assert.Equal(t, tc.want, f.Match(tc.src, writeSession(t, root, tc.rel, tc.cwd)), tc.rel)
+	}
+}
+
+// A catalog without a probe attributes nothing, and a source the probe does not name is never read.
+func TestRepoFilterScope(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	c := writeSession(t, root, "a.jsonl", repoDir(t, home, "work/acme", true))
+	assert.False(t, newRepoFilter(nil, nil, home).Match(Resolved{}, c))
+	assert.False(t, newRepoFilter(testProbe(), nil, home).Match(Resolved{Source: Source{ID: "cursor-transcripts"}, Root: root}, c))
+}
+
+// Only attribution is memoised, never the marker: one created or removed while the process runs bites on the next look.
+func TestAMarkerCreatedLaterIsSeen(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	acme := repoDir(t, home, "work/acme", false)
+	c := writeSession(t, root, "projects/p-acme/a.jsonl", acme)
+	f := newRepoFilter(testProbe(), nil, home)
+
+	require.False(t, f.Match(claudeSource(root), c), "nothing is marked yet")
+	require.NoError(t, f.Untrack(acme))
+	assert.True(t, f.Match(claudeSource(root), c), "a marker created after the first look must be seen")
+	require.NoError(t, f.Track(acme))
+	assert.False(t, f.Match(claudeSource(root), c), "a removed marker must stop matching")
+	assert.NoError(t, f.Track(acme))
+}
+
+// A session run in a worktree belongs to the repository's main checkout, whether the filter
+// comes from the test or the catalog; a cwd outside git, or with no git rules, keeps its own directory.
 func TestRepoDirIsTheMainWorktree(t *testing.T) {
-	home := t.TempDir()
+	catalog, err := Load()
+	require.NoError(t, err)
+	home, root := t.TempDir(), t.TempDir()
 	repo := gitRepo(t, home, "work/acme")
 	nested := writeWorktree(t, repo, filepath.Join(repo, ".claude", "worktrees"), "woolly-kindling")
 	elsewhere := writeWorktree(t, repo, filepath.Join(home, "wt"), "stray")
-	gone := filepath.Join(repo, ".claude", "worktrees", "deleted")
 	plain := repoDir(t, home, "notes", false)
 
-	root := t.TempDir()
-	src := Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}
 	f := newRepoFilter(testProbe(), testGitRead(), home)
 	for i, tc := range []struct{ cwd, want string }{
 		{repo, repo},
 		{nested, repo},
 		{filepath.Join(nested, "internal", "db"), repo},
 		{elsewhere, repo},
-		{gone, repo},
+		{filepath.Join(repo, ".claude", "worktrees", "deleted"), repo},
 		{plain, plain},
 	} {
-		rel := fmt.Sprintf("projects/p-%d/s.jsonl", i)
-		writeSession(t, filepath.Join(root, rel), tc.cwd)
-		assert.Equal(t, f.RepoDir(src, candidateFor(root, rel)), tc.want)
+		c := writeSession(t, root, fmt.Sprintf("projects/p-%d/s.jsonl", i), tc.cwd)
+		assert.Equal(t, tc.want, f.RepoDir(claudeSource(root), c), tc.cwd)
+		assert.Equal(t, tc.want, catalog.RepoFilter().RepoDir(claudeSource(root), c), tc.cwd)
 	}
-
-	assert.Equal(t, newRepoFilter(testProbe(), nil, home).RepoDir(src, candidateFor(root, "projects/p-1/s.jsonl")), nested)
+	c := writeSession(t, root, "projects/p-nogit/s.jsonl", nested)
+	assert.Equal(t, nested, newRepoFilter(testProbe(), nil, home).RepoDir(claudeSource(root), c))
 }
 
 // Markers govern a checkout, one worktree, or a plain directory according to their placement.
@@ -204,7 +153,7 @@ func TestWorktreeMarkerScope(t *testing.T) {
 	for name, setup := range map[string]func(*testing.T, string) []session{
 		"repository covers its worktrees": func(t *testing.T, home string) []session {
 			acme := gitRepo(t, home, "work/acme")
-			writeFile(t, filepath.Join(acme, notrajectories), "")
+			writeFile(t, MarkerPath(acme), "")
 			keeper := gitRepo(t, home, "work/keeper")
 			return []session{
 				{writeWorktree(t, acme, filepath.Join(acme, ".claude", "worktrees"), "nested"), true},
@@ -216,29 +165,35 @@ func TestWorktreeMarkerScope(t *testing.T) {
 		"worktree covers only itself": func(t *testing.T, home string) []session {
 			repo := gitRepo(t, home, "work/acme")
 			marked := writeWorktree(t, repo, filepath.Join(home, "wt"), "marked")
-			writeFile(t, filepath.Join(marked, notrajectories), "")
+			writeFile(t, MarkerPath(marked), "")
 			open := writeWorktree(t, repo, filepath.Join(home, "wt"), "open")
 			return []session{{marked, true}, {open, false}, {repo, false}}
 		},
 		"ancestor covers plain directories only": func(t *testing.T, home string) []session {
-			writeFile(t, filepath.Join(home, "clients", notrajectories), "")
+			writeFile(t, MarkerPath(filepath.Join(home, "clients")), "")
 			repo := gitRepo(t, home, "clients/acme")
 			wt := writeWorktree(t, repo, filepath.Join(home, "clients", "wt"), "stray")
-			plain := repoDir(t, home, "clients/notes", false)
-			return []session{{repo, false}, {wt, false}, {plain, true}}
+			return []session{{repo, false}, {wt, false}, {repoDir(t, home, "clients/notes", false), true}}
+		},
+		// A marker above home must not turn the whole machine off by accident.
+		"ancestors count up to home only": func(t *testing.T, home string) []session {
+			writeFile(t, MarkerPath(filepath.Dir(home)), "")
+			repoDir(t, home, "work", true)
+			return []session{{repoDir(t, home, "work/acme/sub", false), true}, {repoDir(t, home, "other/repo", false), false}}
+		},
+		// A checkout at home (dotfiles) must not claim every directory under it.
+		"a marker at home stays out of checkouts": func(t *testing.T, home string) []session {
+			require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o700))
+			writeFile(t, MarkerPath(home), "")
+			return []session{{repoDir(t, home, "notes", false), true}, {gitRepo(t, home, "work/acme"), false}}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, root := t.TempDir(), t.TempDir()
 			f := newRepoFilter(testProbe(), testGitRead(), home)
-			src := Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}
-			sessions := setup(t, home)
-			for i, tc := range sessions {
-				rel := fmt.Sprintf("projects/p-%d/s.jsonl", i)
-				writeSession(t, filepath.Join(root, rel), tc.cwd)
-				assert.Equal(t, tc.want, f.Match(src, candidateFor(root, rel)), tc.cwd)
-			}
-			for _, tc := range sessions {
+			for i, tc := range setup(t, home) {
+				c := writeSession(t, root, fmt.Sprintf("projects/p-%d/s.jsonl", i), tc.cwd)
+				assert.Equal(t, tc.want, f.Match(claudeSource(root), c), tc.cwd)
 				_, marked := f.Marker(tc.cwd)
 				assert.Equal(t, tc.want, marked, tc.cwd)
 			}
@@ -246,78 +201,36 @@ func TestWorktreeMarkerScope(t *testing.T) {
 	}
 }
 
-// Worktrees inherit repository attribution and markers through both configured and catalog filters.
-func TestWorktreeAttributionAndTracking(t *testing.T) {
-	catalog, err := Load()
-	require.NoError(t, err)
-	for _, parent := range []string{"work/acme/.claude/worktrees", "wt"} {
-		t.Run(parent, func(t *testing.T) {
-			home := t.TempDir()
-			repo := gitRepo(t, home, "work/acme")
-			wt := writeWorktree(t, repo, filepath.Join(home, parent), "stray")
-			root := t.TempDir()
-			c := candidateFor(root, "projects/p-wt/s.jsonl")
-			writeSession(t, c.Path, wt)
-			src := Resolved{Source: Source{ID: "claude-code-transcripts", Include: []string{"projects/**/*.jsonl"}}, Root: root, Enabled: true}
-			f := newRepoFilter(testProbe(), testGitRead(), home)
-			assert.Equal(t, repo, catalog.RepoFilter().RepoDir(src, c))
-			marker, marked := f.Marker(wt)
-			assert.Empty(t, marker)
-			assert.False(t, marked)
-
-			markerPath := filepath.Join(repo, notrajectories)
-			writeFile(t, markerPath, "")
-			marker, marked = f.Marker(wt)
-			assert.Equal(t, markerPath, marker)
-			assert.True(t, marked)
-			for _, filter := range []*RepoFilter{f, newRepoFilter(testProbe(), testGitRead(), home)} {
-				d, err := discoverByGlob(Request{Source: src, Deny: New(t.TempDir()), Ignore: filter})
-				require.NoError(t, err)
-				assert.Empty(t, d.Candidates)
-				assert.True(t, d.Ignored)
-			}
-			require.NoError(t, f.Track(repo))
-			assert.False(t, f.Match(src, c), "removing the repository marker resumes its worktrees")
-		})
-	}
-}
-
-// A source emptied by the markers says so, and is not the drift state; an oversized file
-// in an untracked repository is not reported by name either.
-func TestDiscoveryDistinguishesIgnoredFromDrift(t *testing.T) {
-	home := t.TempDir()
-	acme := repoDir(t, home, "work/acme", true)
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "projects/p-acme/a.jsonl"), acme)
-	writeSession(t, filepath.Join(root, "projects/p-acme/b.jsonl"), "")
-	d, err := discoverByGlob(Request{
-		Source: Resolved{Source: Source{ID: "claude-code-transcripts", Include: []string{"projects/**/*.jsonl"}, MaxFileBytes: 4}, Root: root, Enabled: true},
-		Deny:   New(t.TempDir()),
-		Ignore: newRepoFilter(testProbe(), nil, home),
-	})
-	require.NoError(t, err)
-	assert.Truef(t, len(d.Candidates) == 0 && len(d.Oversize) == 0 && d.Ignored && strings.Contains(d.Reason, "not tracking"), "want an empty, deliberately ignored source; got %d candidates, %d oversize, ignored=%v, reason %q", len(d.Candidates), len(d.Oversize), d.Ignored, d.Reason)
-}
-
+// A checkout at home does not become the repository of every directory under it.
 func TestACheckoutAtHomeDoesNotClaimEverything(t *testing.T) {
-	home := t.TempDir()
+	home, root := t.TempDir(), t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o700))
 	notes := repoDir(t, home, "notes", false)
 	acme := gitRepo(t, home, "work/acme")
-
-	root := t.TempDir()
-	src := Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}
 	f := newRepoFilter(testProbe(), testGitRead(), home)
-	for i, tc := range []struct{ cwd, want string }{{notes, notes}, {home, home}, {acme, acme}} {
-		rel := fmt.Sprintf("projects/p-%d/s.jsonl", i)
-		writeSession(t, filepath.Join(root, rel), tc.cwd)
-		assert.Equal(t, f.RepoDir(src, candidateFor(root, rel)), tc.want)
+	for i, dir := range []string{notes, home, acme} {
+		c := writeSession(t, root, fmt.Sprintf("projects/p-%d/s.jsonl", i), dir)
+		assert.Equal(t, dir, f.RepoDir(claudeSource(root), c))
 	}
-	writeFile(t, filepath.Join(home, notrajectories), "")
-	if _, ok := f.Marker(notes); !ok {
-		t.Error("a marker at home should cover a plain directory under it")
-	}
-	if _, ok := f.Marker(acme); ok {
-		t.Error("a marker at home must not reach into a checkout")
-	}
+}
+
+// A source emptied by markers says so, and is not the drift state, whether the session ran in
+// the repository or one of its worktrees; an oversized file in an untracked repository is not
+// reported by name either.
+func TestDiscoveryDistinguishesIgnoredFromDrift(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	repo := gitRepo(t, home, "work/acme")
+	writeFile(t, MarkerPath(repo), "")
+	writeSession(t, root, "projects/p-acme/a.jsonl", repo)
+	writeSession(t, root, "projects/p-acme/b.jsonl", "")
+	writeSession(t, root, "projects/p-wt/c.jsonl", writeWorktree(t, repo, filepath.Join(home, "wt"), "stray"))
+	src := claudeSource(root)
+	src.MaxFileBytes = 4
+
+	d, err := discoverByGlob(Request{Source: src, Deny: New(t.TempDir()), Ignore: newRepoFilter(testProbe(), testGitRead(), home)})
+	require.NoError(t, err)
+	assert.Empty(t, d.Candidates)
+	assert.Empty(t, d.Oversize)
+	assert.True(t, d.Ignored)
+	assert.Equal(t, ignoredReason, d.Reason)
 }

@@ -3,29 +3,7 @@
 // release. No resolution happens here (env, globs, deny lists); that is the config layer.
 package catalogdata
 
-import (
-	"embed"
-	"fmt"
-	"io/fs"
-)
+import "embed"
 
 //go:embed *.yaml
 var FS embed.FS
-
-// Files returns the embedded catalog file names, sorted.
-func Files() ([]string, error) {
-	names, err := fs.Glob(FS, "*.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("catalog: read embedded dir: %w", err)
-	}
-	return names, nil
-}
-
-// Read returns the raw bytes of one embedded catalog file.
-func Read(name string) ([]byte, error) {
-	b, err := FS.ReadFile(name)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: read %s: %w", name, err)
-	}
-	return b, nil
-}

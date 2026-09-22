@@ -3,7 +3,6 @@ package sources
 import (
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,41 +26,32 @@ func (u unreadable) reason() string {
 	return fmt.Sprintf("%d paths unreadable, first %s: %v", u.count, u.example, u.err)
 }
 
-// walkGlobs walks the root once against the globs, the deny list and the ignore list
-// (the last return says whether ignore dropped anything); symlinks below the root are
-// never followed, which pairs with O_NOFOLLOW at open time.
+// walkGlobs walks the root once against the globs, the deny list and the ignore list (the last return says
+// whether ignore dropped anything); symlinks below the root are never followed, pairing with O_NOFOLLOW at open.
 func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Oversize, unreadable, bool) {
 	var out []Candidate
 	var oversize []Oversize
 	var bad unreadable
 	include, exclude := normalizeGlobs(src.Include), normalizeGlobs(src.Exclude)
 	ignored := false
-
-	// Dir to its resolved form: a candidate is never a symlink, so resolving the parent answers for every file in it.
-	resolvedDirs := map[string]string{}
-	resolveDir := func(dir string) string {
-		if r, ok := resolvedDirs[dir]; ok {
-			return r
-		}
-		r, err := filepath.EvalSymlinks(dir)
-		if err != nil {
-			r = ""
-		}
-		resolvedDirs[dir] = r
-		return r
+	if deny == nil {
+		deny = &List{}
 	}
 
-	// resolveName is one file's resolved spelling, or "" when the parent resolves to itself or not at all.
+	// A candidate is never a symlink, so resolving its parent once answers for every file in it; "" means
+	// the parent resolves to itself or not at all.
+	resolvedDirs := map[string]string{}
 	resolveName := func(p string) string {
 		dir := filepath.Dir(p)
-		if dir == "" {
+		r, ok := resolvedDirs[dir]
+		if !ok {
+			r, _ = filepath.EvalSymlinks(dir)
+			resolvedDirs[dir] = r
+		}
+		if r == "" || r == dir {
 			return ""
 		}
-		rdir := resolveDir(dir)
-		if rdir == "" || rdir == dir {
-			return ""
-		}
-		return filepath.Join(rdir, filepath.Base(p))
+		return filepath.Join(r, filepath.Base(p))
 	}
 
 	note := func(path string, err error) {
@@ -76,12 +66,9 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 	// the resolved root is re-checked against the deny list.
 	root := src.Root
 	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != root {
-		if deny != nil {
-			if denied, pattern := deny.Match(resolved); denied {
-				note(root, fmt.Errorf("root resolves to %s, which the deny list refuses (%s)",
-					resolved, pattern))
-				return out, oversize, bad, ignored
-			}
+		if denied, pattern := deny.Match(resolved); denied {
+			note(root, fmt.Errorf("root resolves to %s, which the deny list refuses (%s)", resolved, pattern))
+			return out, oversize, bad, ignored
 		}
 		root = resolved
 	}
@@ -97,25 +84,16 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		}
 		if d.IsDir() {
 			// MatchTree, not Match: only a whole-tree pattern licenses pruning, and the per-file check below stays the authority.
-			if deny != nil {
-				if denied, _ := deny.MatchTree(path); denied {
-					return fs.SkipDir
-				}
+			if denied, _ := deny.MatchTree(path); denied {
+				return fs.SkipDir
 			}
 			return nil
 		}
-		// Type() reports the entry's own type without following it.
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
+		// Type() reports the entry's own type, so a symlink is skipped rather than followed.
 		if !d.Type().IsRegular() {
 			return nil
 		}
-
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
-		}
+		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 
 		if !matchesAny(rel, include) || matchesAny(rel, exclude) {
@@ -124,21 +102,18 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		// The path as the operator spells it: what downstream records, and what the deny list is written against.
 		named := filepath.Join(src.Root, rel)
 
-		if deny != nil {
-			// BOTH spellings: the walk may run under a resolved root (~/.claude -> ~/dotfiles/claude, /var -> /private/var),
-			// so a rule written against one does not match a string built from the other. A file is denied if EITHER name is.
-			if denied, _ := deny.MatchPair(path, resolveName(path)); denied {
+		// BOTH spellings: the walk may run under a resolved root (~/.claude -> ~/dotfiles/claude, /var -> /private/var),
+		// so a rule written against one does not match a string built from the other. A file is denied if EITHER name is.
+		if denied, _ := deny.MatchPair(path, resolveName(path)); denied {
+			return nil
+		}
+		if named != path {
+			if denied, _ := deny.MatchPair(named, resolveName(named)); denied {
 				return nil
-			}
-			if named != path {
-				if denied, _ := deny.MatchPair(named, resolveName(named)); denied {
-					return nil
-				}
 			}
 		}
 
-		// Before the size cap, so an ignored repository's oversized file is not reported
-		// by name either.
+		// Before the size cap, so an ignored repository's oversized file is not reported by name either.
 		if ignore.Match(src, Candidate{Path: named, RelPath: rel}) {
 			ignored = true
 			return nil
@@ -170,8 +145,7 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 	})
 	// A walk that failed at the root: WalkDir's own error, which the callback never saw.
 	if err != nil && bad.err == nil {
-		bad.count++
-		bad.example, bad.err = src.Root, err
+		note(src.Root, err)
 	}
 	return out, oversize, bad, ignored
 }

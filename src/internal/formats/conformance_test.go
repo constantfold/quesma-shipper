@@ -21,10 +21,7 @@ var update = flag.Bool("update", false, "regenerate the conformance vectors")
 const vectorDir = "../../conformance/v1/naming"
 
 type canonicalPathVectors struct {
-	VectorSet     string `json:"vector_set"`
-	VectorVersion int    `json:"vector_version"`
-	Description   string `json:"description"`
-	Vectors       []struct {
+	Vectors []struct {
 		Name          string `json:"name"`
 		SourceRelPath string `json:"source_rel_path"`
 		Username      string `json:"username"`
@@ -37,20 +34,18 @@ type mirrorKeyVectors struct {
 	VectorVersion int               `json:"vector_version"`
 	Description   string            `json:"description"`
 	Keys          map[string]string `json:"keys"`
-	Vectors       []mirrorKeyVector `json:"vectors"`
-}
-
-type mirrorKeyVector struct {
-	Name          string `json:"name"`
-	Key           string `json:"key"`
-	CanonicalPath string `json:"canonical_path"`
-	MirrorName    string `json:"mirror_name"`
+	Vectors       []struct {
+		Name          string `json:"name"`
+		Key           string `json:"key"`
+		CanonicalPath string `json:"canonical_path"`
+		MirrorName    string `json:"mirror_name"`
+	} `json:"vectors"`
 }
 
 func readJSON(t *testing.T, name string, into any) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(vectorDir, name))
-	require.NoErrorf(t, err, "read vectors: %v", err)
+	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, into))
 }
 
@@ -58,53 +53,31 @@ func readJSON(t *testing.T, name string, into any) {
 func TestConformanceCanonicalPath(t *testing.T) {
 	var v canonicalPathVectors
 	readJSON(t, "canonical-path.json", &v)
-	require.NotEqual(t, 0, len(v.Vectors), "no canonical-path vectors")
+	require.NotEmpty(t, v.Vectors)
 	for _, c := range v.Vectors {
-		t.Run(c.Name, func(t *testing.T) {
-			got := formats.CanonicalPath(c.SourceRelPath, c.Username)
-			assert.Equalf(t, c.CanonicalPath, got, "CanonicalPath(%q, %q)\n got %q\nwant %q", c.SourceRelPath, c.Username, got, c.CanonicalPath)
-		})
+		assert.Equalf(t, c.CanonicalPath, formats.CanonicalPath(c.SourceRelPath, c.Username), "%s: CanonicalPath(%q, %q)", c.Name, c.SourceRelPath, c.Username)
 	}
 }
 
 func TestConformanceMirrorName(t *testing.T) {
-	path := filepath.Join(vectorDir, "mirror-key.json")
-
-	if *update {
-		require.NoError(t, os.WriteFile(path, generateMirrorKeyVectors(t), 0o644))
-		t.Logf("regenerated %s", path)
-	}
-
 	var v mirrorKeyVectors
 	readJSON(t, "mirror-key.json", &v)
-	require.NotEqual(t, 0, len(v.Vectors), "no mirror-key vectors")
-	for _, c := range v.Vectors {
-		t.Run(c.Name, func(t *testing.T) {
-			keyHex, ok := v.Keys[c.Key]
-			if !ok {
-				t.Fatalf("vector names key %q, which is not in keys", c.Key)
-			}
-			key, err := hex.DecodeString(keyHex)
-			require.NoError(t, err)
-			got := formats.MirrorName(key, c.CanonicalPath)
-			assert.Equalf(t, c.MirrorName, got, "MirrorName(%s, %q)\n got %s\nwant %s", c.Key, c.CanonicalPath, got, c.MirrorName)
-		})
-	}
-}
-
-func generateMirrorKeyVectors(t *testing.T) []byte {
-	t.Helper()
-	var out mirrorKeyVectors
-	readJSON(t, "mirror-key.json", &out)
-	for i := range out.Vectors {
-		c := &out.Vectors[i]
-		keyHex, ok := out.Keys[c.Key]
-		require.Truef(t, ok, "vector names unknown key %q", c.Key)
+	require.NotEmpty(t, v.Vectors)
+	for i, c := range v.Vectors {
+		keyHex, ok := v.Keys[c.Key]
+		require.Truef(t, ok, "vector %s names key %q, which is not in keys", c.Name, c.Key)
 		key, err := hex.DecodeString(keyHex)
 		require.NoError(t, err)
-		c.MirrorName = formats.MirrorName(key, c.CanonicalPath)
+		got := formats.MirrorName(key, c.CanonicalPath)
+		if *update {
+			v.Vectors[i].MirrorName = got
+			continue
+		}
+		assert.Equalf(t, c.MirrorName, got, "%s: MirrorName(%s, %q)", c.Name, c.Key, c.CanonicalPath)
 	}
-	b, err := json.MarshalIndent(out, "", "  ")
-	require.NoError(t, err)
-	return append(b, '\n')
+	if *update {
+		b, err := json.MarshalIndent(v, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(vectorDir, "mirror-key.json"), append(b, '\n'), 0o644))
+	}
 }
