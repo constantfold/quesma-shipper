@@ -13,8 +13,7 @@ import (
 	"uuid"
 )
 
-// TelemetryPath is the only route the signature is valid for: the preamble names it, so a
-// signature cannot be replayed onto another route, and a served path that differs is refused locally.
+// The preamble names TelemetryPath, so a signature cannot be replayed elsewhere and a different served path is refused locally.
 const (
 	TelemetryPath     = "/v1/telemetry"
 	TelemetryPreamble = "trajectory-shipper-telemetry-v1\nPOST\n" + TelemetryPath + "\n"
@@ -39,8 +38,7 @@ var (
 	ErrTelemetryUnavailable = errors.New("controlplane: telemetry could not be delivered")
 )
 
-// SubmitTelemetry posts one event to the served path, resolved against the enrolled origin so a
-// served document cannot point telemetry at a third party.
+// SubmitTelemetry posts to the served path on the enrolled origin, so a served document cannot point telemetry at a third party.
 func (c *Client) SubmitTelemetry(ctx context.Context, path, batchID string, issuedAt time.Time, payload json.RawMessage) error {
 	switch {
 	case c.o.InstallID == "":

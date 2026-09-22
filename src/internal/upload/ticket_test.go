@@ -141,9 +141,7 @@ func TestValidateTicketRejects(t *testing.T) {
 // Without a pinned target, either root-level keys or one bucket segment are allowed.
 func TestValidateTicketAddressing(t *testing.T) {
 	const origin = "https://minio.example.invalid:9000"
-	target, err := NewUploadTarget(TargetSpec{
-		Origin: origin, Addressing: PathStyle, PathPrefix: "/trajectories",
-	})
+	target, err := NewUploadTarget(TargetSpec{Origin: origin, Addressing: PathStyle, PathPrefix: "/trajectories"})
 	require.NoError(t, err)
 	prepared, ticket := goldenPair(t, "request.json", "response.json")
 	key := canonicalPath(prepared.Key)
@@ -187,8 +185,7 @@ func TestValidateTicketUnknownAddressing(t *testing.T) {
 	require.Error(t, ValidateTicket(UploadTargetList{target}, prepared, ticket), "unknown addressing was accepted")
 }
 
-// The exact-key check is a byte comparison, so the encoder must produce the store's spelling:
-// path escaping would leave "=" literal, while the signed key spelling requires %3D.
+// The exact-key check compares bytes, so the encoder must spell "=" as %3D like the signed key, not leave it literal.
 func TestCanonicalPathEscaping(t *testing.T) {
 	for key, want := range map[string]string{
 		"=":                 "%3D",

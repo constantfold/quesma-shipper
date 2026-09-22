@@ -26,8 +26,7 @@ type AuthorizeRequest struct {
 	Objects  []UploadObject `json:"objects"`
 }
 
-// UploadObject is one prepared object's descriptor. Size is the exact ciphertext byte count, and
-// SourceHash is the manifest's pre-redaction digest, never a checksum of the encrypted PUT body.
+// UploadObject: Size is the exact ciphertext length; SourceHash is the pre-redaction digest, not a checksum of the PUT body.
 type UploadObject struct {
 	ObjectID   string         `json:"object_id"`
 	Key        string         `json:"key"`
@@ -36,8 +35,7 @@ type UploadObject struct {
 	Metadata   UploadMetadata `json:"metadata"`
 }
 
-// UploadMetadata carries the closed plaintext-metadata allowlist, its json tags in order. source-hash
-// and ticket-id are absent by design: the server derives both. A heartbeat sets Kind alone.
+// UploadMetadata is the closed allowlist in order; the server derives source-hash and ticket-id, and a heartbeat sets Kind alone.
 type UploadMetadata struct {
 	ManifestVersion string `json:"manifest-version,omitempty"`
 	SourceID        string `json:"source-id,omitempty"`
@@ -54,8 +52,7 @@ type AuthorizeResponse struct {
 	Tickets []Ticket `json:"tickets"`
 }
 
-// Ticket is one bounded PUT capability, usable only after the caller matches it back to the
-// prepared object and validates its origin and exact key; this package does neither.
+// Ticket is one PUT capability; the caller, not this package, matches it to its object and validates origin and key.
 type Ticket struct {
 	TicketID        string        `json:"ticket_id"`
 	ObjectID        string        `json:"object_id"`
@@ -76,8 +73,7 @@ type TicketHeaders map[string]string
 // NewWriterID mints this process's writer identity, audit only and never persisted.
 func NewWriterID() string { return uuid.New().String() }
 
-// AuthorizeUploads exchanges prepared object descriptors for PUT tickets. 401/403 stops the run
-// and 429/5xx retries later: conflating them kills an install on a 429.
+// AuthorizeUploads: 401/403 stops the run and 429/5xx retries later, since conflating them kills an install on a 429.
 func (c *Client) AuthorizeUploads(ctx context.Context, req AuthorizeRequest) (AuthorizeResponse, error) {
 	switch {
 	case req.WriterID == "":

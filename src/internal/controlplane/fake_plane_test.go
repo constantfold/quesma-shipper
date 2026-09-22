@@ -16,8 +16,7 @@ import (
 
 const installID = "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061"
 
-// fakePlane serves enroll and config exactly as configured, including badly: the cases worth
-// testing in a client's refusals are all servers that are wrong in a specific way.
+// fakePlane serves enroll and config exactly as configured, including badly, since refusals are about wrong servers.
 type fakePlane struct {
 	config       string // replaced between requests to simulate a config push
 	expiresAt    time.Time

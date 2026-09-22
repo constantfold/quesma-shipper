@@ -37,11 +37,8 @@ func testTicket(origin string) (PreparedUpload, Ticket) {
 		ObjectID: "trajectory-1", Key: testKey, Body: []byte("sealed-object-bytes"), SourceHash: strings.Repeat("a", 64),
 		Metadata: map[string]string{"manifest-version": "1", "source-id": "claude-code-transcripts", "artifact-class": "trajectory"},
 	}
-	return prepared, Ticket{
-		TicketID: "b1bd1a73-f16d-4a51-aac6-29f1f48b0658",
-		ObjectID: "trajectory-1",
-		Method:   "PUT",
-		URL:      origin + "/" + canonicalPath(testKey) + "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef",
+	return prepared, Ticket{TicketID: "b1bd1a73-f16d-4a51-aac6-29f1f48b0658", ObjectID: "trajectory-1", Method: "PUT",
+		URL: origin + "/" + canonicalPath(testKey) + "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef",
 		RequiredHeaders: map[string]string{
 			"x-amz-meta-source-hash":      prepared.SourceHash,
 			"x-amz-meta-ticket-id":        "b1bd1a73-f16d-4a51-aac6-29f1f48b0658",
@@ -50,8 +47,7 @@ func testTicket(origin string) (PreparedUpload, Ticket) {
 			"x-amz-meta-artifact-class":   "trajectory",
 			"x-amz-tagging":               "class=trajectory",
 		},
-		ContentLength:       int64(len(prepared.Body)),
-		ContentLengthSigned: true,
+		ContentLength: int64(len(prepared.Body)), ContentLengthSigned: true,
 	}
 }
 

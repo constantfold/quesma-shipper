@@ -37,9 +37,7 @@ func resolveRoots(eff *Effective, in Input) error {
 	return nil
 }
 
-// pickRoot returns the first candidate that expands, exists and satisfies require_subdir, or the
-// reasons none qualified. A RejectionError is a configuration fault (a candidate that cannot expand,
-// or one the deny list forbids), unlike the ordinary absent agent, which is an empty root and a reason.
+// pickRoot returns the first usable candidate or why none was; an error is a config fault, an absent agent is "" and reasons.
 func pickRoot(eff *Effective, src *ResolvedSource, env sources.Env) (string, []string, error) {
 	rootsField := "sources." + src.ID + ".roots"
 	var reasons []string
@@ -77,8 +75,7 @@ func pickRoot(eff *Effective, src *ResolvedSource, env sources.Env) (string, []s
 	return "", reasons, nil
 }
 
-// RefreshAbsentRoots retries missing roots so newly installed agents become visible.
-// Resolved roots stay fixed to preserve fingerprint identity; failures leave a source absent.
+// RefreshAbsentRoots retries only missing roots, so newly installed agents appear and resolved ones keep their fingerprint identity.
 func RefreshAbsentRoots(eff *Effective, env sources.Env) []string {
 	var found []string
 	for i := range eff.Sources {

@@ -11,10 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The golden authorization pair from the shipper-protocol v2 fixtures anchors every validation test: key
-// grammar, escaped path and header set come from what the control plane is tested against.
-
-// goldenPair loads one fixture request and response into this package's types, as app/ does.
+// goldenPair loads a protocol fixture pair as app/ does, anchoring validation in what the control plane is tested against.
 func goldenPair(t *testing.T, requestFixture, responseFixture string) (PreparedUpload, Ticket) {
 	t.Helper()
 	var request struct {

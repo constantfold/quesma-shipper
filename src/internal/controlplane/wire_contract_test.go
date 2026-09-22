@@ -140,8 +140,7 @@ func TestStructsMatchSchemas(t *testing.T) {
 	}
 }
 
-// Bad fixtures must fail validation; good fixtures must also survive strict typed round trips.
-// The auth directory is not a message and has no schema.
+// Bad fixtures fail validation; good ones also survive strict typed round trips. auth/ is not a message.
 func TestWireFixtures(t *testing.T) {
 	paths, err := fs.Glob(protocol.FS, "fixtures/*/*/*.json")
 	require.NoError(t, err)

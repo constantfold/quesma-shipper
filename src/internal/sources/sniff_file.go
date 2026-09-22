@@ -23,7 +23,6 @@ func sniff(path string, spec *Sniff) (formats.SniffResult, string) {
 	if len(head) == 0 {
 		return formats.SniffEmpty, ""
 	}
-	// Whether the head stopped at the budget or at end of file changes what a missing newline means.
 	truncated := info != nil && info.Size() > int64(len(head))
 
 	switch spec.Kind {

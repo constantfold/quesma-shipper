@@ -21,8 +21,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
 
-// authFixture covers both versions of fixtures/*/auth/headers.json. Absent members stay zero:
-// v1 has no signing prefix and v2 has no config exchange.
+// authFixture covers both versions of fixtures/*/auth/headers.json; members a version lacks stay zero.
 type authFixture struct {
 	Comment          string         `json:"comment"`
 	Organization     string         `json:"organization"`
@@ -69,8 +68,7 @@ func deviceSignature(t *testing.T, authorization, organization, installID string
 	return sig
 }
 
-// v2SigningInput is the signed byte sequence from PROTOCOL.md, spelled out here so a silent change
-// to either the fixture or the client fails rather than redefines it.
+// v2SigningInput spells out PROTOCOL.md's signed bytes, so a silent change to fixture or client fails.
 func v2SigningInput(method, path, body string) []byte {
 	return []byte("trajectory-shipper-upload-authorize-v2\n" + method + "\n" + path + "\n" + body)
 }
@@ -82,8 +80,7 @@ func TestAuthFixtureGoldensVerify(t *testing.T) {
 	assert.True(t, ed25519.Verify(key.Public().(ed25519.PublicKey), []byte(fx.Config.Body), sig))
 }
 
-// The v2 golden verifies only over its domain-separated input, and every must-reject case fails for a
-// reason the protocol gives: another organization, a signature that does not verify, or a stale issued_at.
+// The v2 golden verifies only with domain separation; each reject case is another org, a bad signature, or stale.
 func TestAuthV2FixtureGoldensVerify(t *testing.T) {
 	fx, key := loadAuthFixture(t, "v2")
 	pub := key.Public().(ed25519.PublicKey)

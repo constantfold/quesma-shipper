@@ -57,13 +57,11 @@ func discoverByGlob(req Request) (Discovery, error) {
 		return d, nil
 	}
 
-	// Oldest first: for a source with a known reaper these are the ones closest to deletion.
 	slices.SortFunc(matched, func(a, b Candidate) int {
 		return cmp.Or(a.MTime.Compare(b.MTime), strings.Compare(a.RelPath, b.RelPath))
 	})
 	d.Candidates = matched
 	d.Health = formats.Collected
-	// Sampled, not single-file: the source is condemned only if EVERY sample fails, since one bad file is the per-file path's problem.
 	d.Sniff, d.AgentVersion, d.SniffFailures = sniffSample(matched, src.Sniff)
 	if d.Sniff == formats.SniffUnreadable || d.Sniff == formats.SniffUnexpectedShape {
 		// Found but unusable: a store that switched substrate lands here rather than shipping garbage.

@@ -40,14 +40,11 @@ func TestRemoteNormalisationStripsUserinfo(t *testing.T) {
 }
 
 func sidecarSource() Resolved {
-	return Resolved{
-		Source: Source{
-			ID: "project-map", Family: "project-map", Gather: "sidecar", ArtifactClass: "context", Emit: "git_project_map",
-			CWDProbe: &CWDProbe{From: []string{"claude-code-transcripts"}, Fields: []string{"cwd", "payload.cwd"}, ScanBytes: 65536},
-			GitRead:  &GitRead{WalkUp: true, FollowGitdirFile: true, Take: []string{"remote.*.url"}},
-		},
-		Enabled: true,
-	}
+	return Resolved{Enabled: true, Source: Source{
+		ID: "project-map", Family: "project-map", Gather: "sidecar", ArtifactClass: "context", Emit: "git_project_map",
+		CWDProbe: &CWDProbe{From: []string{"claude-code-transcripts"}, Fields: []string{"cwd", "payload.cwd"}, ScanBytes: 65536},
+		GitRead:  &GitRead{WalkUp: true, FollowGitdirFile: true, Take: []string{"remote.*.url"}},
+	}}
 }
 
 func sidecarBody(t *testing.T, home string, input, sidecar Resolved) string {
@@ -128,8 +125,7 @@ func TestSidecarResolvesTheRemote(t *testing.T) {
 		}},
 		// The trajectory outlives the checkout.
 		{"vanished cwd", "", "", func(t *testing.T, home string) string {
-			gone := filepath.Join(home, "deleted", "long", "ago")
-			return session(gone)
+			return session(filepath.Join(home, "deleted", "long", "ago"))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

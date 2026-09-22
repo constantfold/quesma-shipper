@@ -14,8 +14,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// update regenerates the vector files (go test ./internal/formats -run Conformance -update).
-// Never routine: a changed vector re-keys every previously shipped file and re-uploads it.
+// update regenerates the vectors; never routine, since a changed vector re-keys and re-uploads every shipped file.
 var update = flag.Bool("update", false, "regenerate the conformance vectors")
 
 const vectorDir = "../../conformance/v1/naming"

@@ -17,14 +17,9 @@ import (
 )
 
 func sampleAuthorizeRequest() controlplane.AuthorizeRequest {
-	return controlplane.AuthorizeRequest{
-		WriterID: fixtureWriterID,
-		IssuedAt: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
-		Objects: []controlplane.UploadObject{{
-			ObjectID: "trajectory-1", Key: fixtureMirrorKey, Size: 481239, SourceHash: fixtureSourceHash,
-			Metadata: controlplane.UploadMetadata{
-				ManifestVersion: "1", SourceID: "claude-code-transcripts", ShippedHash: fixtureShippedHash, ArtifactClass: "trajectory",
-			},
+	return controlplane.AuthorizeRequest{WriterID: fixtureWriterID, IssuedAt: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+		Objects: []controlplane.UploadObject{{ObjectID: "trajectory-1", Key: fixtureMirrorKey, Size: 481239, SourceHash: fixtureSourceHash,
+			Metadata: controlplane.UploadMetadata{ManifestVersion: "1", SourceID: "claude-code-transcripts", ShippedHash: fixtureShippedHash, ArtifactClass: "trajectory"},
 		}},
 	}
 }
@@ -36,8 +31,7 @@ func authorize(t *testing.T, status int, response string) (controlplane.Authoriz
 	return c.AuthorizeUploads(context.Background(), sampleAuthorizeRequest())
 }
 
-// Only 401 and 403 may reach the engine as refused credentials: an unavailable server that looked
-// like a revoked install would turn a bounded wait into a permanently dead run.
+// Only 401 and 403 are refused credentials: an unavailable server mistaken for revocation kills the run for good.
 func TestAuthorizeUploadsStatusMapping(t *testing.T) {
 	for status, want := range map[int]error{
 		http.StatusUnauthorized:        formats.ErrCredentialsRefused,
@@ -75,8 +69,7 @@ func TestAuthorizeUploadResponses(t *testing.T) {
 	}
 }
 
-// A redirect is refused rather than followed: following one either strips the device signature
-// or replays it against a host the operator never named.
+// Following a redirect would strip the device signature or replay it to a host the operator never named.
 func TestAuthorizeUploadsRefusesRedirect(t *testing.T) {
 	var hops int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

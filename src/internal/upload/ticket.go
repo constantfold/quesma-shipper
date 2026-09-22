@@ -26,8 +26,7 @@ func (d headerDialect) metadata(name string) string {
 	return d.metadataPrefix + name
 }
 
-// MetadataNames is the client-declarable metadata allowlist; source-hash and ticket-id are checked
-// against their own sources. A copy of controlplane's list, kept equal by a test in app.
+// MetadataNames is the declarable metadata allowlist, a copy of controlplane's kept equal by a test in app.
 var MetadataNames = []string{
 	"manifest-version", "source-id", "shipped-hash", "artifact-class",
 	"agent-version", "shape-sniff", "derived", "enrich-status", "kind",
@@ -60,8 +59,7 @@ type Ticket struct {
 	ContentLengthSigned bool // the provider signature confines the exact body size
 }
 
-// ValidateTicket refuses everything that is not exactly this prepared object at a configured
-// target. Errors name what disagreed and never the URL, its path, or its query.
+// ValidateTicket refuses anything but this exact object at a configured target; errors never quote the URL.
 func ValidateTicket(targets UploadTargetList, prepared PreparedUpload, ticket Ticket) error {
 	target, u, err := targets.match(ticket.URL)
 	id := prepared.ObjectID

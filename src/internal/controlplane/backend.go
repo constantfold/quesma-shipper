@@ -72,8 +72,7 @@ type ConfigRequest struct {
 	ConfigVersions []int  `json:"config_versions"`
 }
 
-// EnrollRequest is the one-time registration. Exactly one of Invite (single use) or Grant
-// (managed, multi-use) is set; omitempty keeps invite enrollments byte-identical for older servers.
+// EnrollRequest sets exactly one of Invite (single use) or Grant (managed); omitempty keeps invites byte-identical for older servers.
 type EnrollRequest struct {
 	Invite          string `json:"invite,omitempty"`
 	Grant           string `json:"grant,omitempty"`
@@ -106,8 +105,7 @@ func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse
 	return &out, nil
 }
 
-// FetchConfig returns the parsed document beside the raw response, which the cache stores verbatim so
-// fields this build does not know survive. A document that does not parse is refused whole.
+// FetchConfig also returns the raw response, cached verbatim so unknown fields survive; an unparseable document is refused whole.
 func (c *Client) FetchConfig(ctx context.Context, req ConfigRequest) (*config.Document, ConfigResponse, error) {
 	var out ConfigResponse
 	if err := c.post(ctx, "/v1/config", req, &out, true); err != nil {
@@ -144,8 +142,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any, signed bo
 	return nil
 }
 
-// exchange sends one JSON POST and returns its status and bounded body. A signed request carries
-// a detached signature over preamble+payload; v1 routes sign the body alone and pass "".
+// exchange sends one JSON POST; a signed one carries a signature over preamble+payload, and v1 routes pass an empty preamble.
 func (c *Client) exchange(ctx context.Context, path, preamble string, payload []byte, signed bool) (int, []byte, error) {
 	if signed && (c.o.InstallID == "" || c.o.Organization == "" || len(c.o.DeviceKey) == 0) {
 		return 0, nil, ErrNotEnrolled
