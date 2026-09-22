@@ -22,22 +22,18 @@ const (
 
 type headerDialect struct {
 	metadataPrefix, sourceHash, ticketID, tagging string
-	azure                                         bool
+	azure                                         bool // metadata names use _ for -, and x-ms-blob-type is required
 }
 
 var headerDialects = []headerDialect{
-	{metadataPrefix: metadataPrefix, sourceHash: sourceHashHeader,
-		ticketID: ticketIDHeader, tagging: taggingHeader},
-	{metadataPrefix: "x-goog-meta-", sourceHash: "x-goog-meta-source-hash",
-		ticketID: "x-goog-meta-ticket-id"},
-	{metadataPrefix: "x-ms-meta-", sourceHash: "x-ms-meta-source_hash",
-		ticketID: "x-ms-meta-ticket_id", tagging: "x-ms-tags", azure: true},
+	{metadataPrefix, sourceHashHeader, ticketIDHeader, taggingHeader, false},
+	{"x-goog-meta-", "x-goog-meta-source-hash", "x-goog-meta-ticket-id", "", false},
+	{"x-ms-meta-", "x-ms-meta-source_hash", "x-ms-meta-ticket_id", "x-ms-tags", true},
 }
 
-// MetadataNames is the client-declarable metadata allowlist, unprefixed. source-hash and
-// ticket-id are absent by design: each is checked against its own source instead.
-// A deliberate copy of controlplane's list (this package imports nothing internal); a test in
-// app, the one package that may import both, pins the two.
+// MetadataNames is the client-declarable metadata allowlist, unprefixed; source-hash and ticket-id
+// are checked against their own sources instead. A deliberate copy of controlplane's list (this
+// package imports nothing internal); a test in app, which may import both, keeps them equal.
 var MetadataNames = []string{
 	"manifest-version", "source-id", "shipped-hash", "artifact-class",
 	"agent-version", "shape-sniff", "derived", "enrich-status", "kind",
@@ -51,52 +47,43 @@ const maxKeyLength = 1024
 
 // PreparedUpload is the sealed object this machine holds: the trusted side of every comparison.
 type PreparedUpload struct {
-	ObjectID string
-	Key      string
-	Body     []byte
-	// SourceHash is the manifest's pre-redaction source digest, not a checksum of Body.
-	SourceHash string
-	// Metadata holds unprefixed names from the closed request allowlist.
-	Metadata map[string]string
+	ObjectID   string
+	Key        string
+	Body       []byte
+	SourceHash string            // the manifest's pre-redaction source digest, not a checksum of Body
+	Metadata   map[string]string // unprefixed names from MetadataNames
 }
 
 // Ticket mirrors the issued PUT capability, declared here so this package imports no plane client.
 type Ticket struct {
-	TicketID string
-	ObjectID string
-	Method   string
-	URL      string
-	// ExpiresAt is for the caller's reauthorization decision; the store decides actual expiry.
-	ExpiresAt time.Time
-	// RequiredHeaders is a map so the closed name set is enforced here; one value per name.
-	RequiredHeaders map[string]string
-	ContentLength   int64
-	// ContentLengthSigned proves the provider signature confines the exact body size.
-	ContentLengthSigned bool
+	TicketID            string
+	ObjectID            string
+	Method              string
+	URL                 string
+	ExpiresAt           time.Time // for the caller's reauthorization decision; the store decides actual expiry
+	RequiredHeaders     map[string]string
+	ContentLength       int64
+	ContentLengthSigned bool // the provider signature confines the exact body size
 }
 
 // ValidateTicket refuses everything that is not exactly this prepared object at a configured
 // target. Errors name what disagreed and never the URL, its path, or its query.
 func ValidateTicket(targets UploadTargetList, prepared PreparedUpload, ticket Ticket) error {
 	target, u, err := targets.match(ticket.URL)
-	if err != nil {
+	id := prepared.ObjectID
+	switch {
+	case err != nil:
 		return err
-	}
-	if prepared.ObjectID == "" {
+	case id == "":
 		return errors.New("upload: prepared object carries no object id")
-	}
-	if ticket.ObjectID != prepared.ObjectID {
-		return fmt.Errorf("upload: ticket names object %q, prepared object is %q", ticket.ObjectID, prepared.ObjectID)
-	}
-	if ticket.Method != "PUT" {
-		return fmt.Errorf("upload: ticket for object %q authorizes method %q", prepared.ObjectID, ticket.Method)
-	}
-	if ticket.ContentLength != int64(len(prepared.Body)) {
-		return fmt.Errorf("upload: ticket for object %q authorizes %d bytes, prepared object is %d",
-			prepared.ObjectID, ticket.ContentLength, len(prepared.Body))
-	}
-	if !ticket.ContentLengthSigned {
-		return fmt.Errorf("upload: ticket for object %q does not sign its content length", prepared.ObjectID)
+	case ticket.ObjectID != id:
+		return fmt.Errorf("upload: ticket names object %q, prepared object is %q", ticket.ObjectID, id)
+	case ticket.Method != "PUT":
+		return fmt.Errorf("upload: ticket for object %q authorizes method %q", id, ticket.Method)
+	case ticket.ContentLength != int64(len(prepared.Body)):
+		return fmt.Errorf("upload: ticket for object %q authorizes %d bytes, prepared object is %d", id, ticket.ContentLength, len(prepared.Body))
+	case !ticket.ContentLengthSigned:
+		return fmt.Errorf("upload: ticket for object %q does not sign its content length", id)
 	}
 	if err := validatePath(target, prepared, u.EscapedPath()); err != nil {
 		return err
@@ -106,146 +93,122 @@ func ValidateTicket(targets UploadTargetList, prepared PreparedUpload, ticket Ti
 
 // validatePath is the exact-key check: the right origin still permits another install's key.
 func validatePath(target UploadTarget, prepared PreparedUpload, escaped string) error {
+	id := prepared.ObjectID
 	if err := validateKey(prepared.Key); err != nil {
-		return fmt.Errorf("upload: prepared object %q: %w", prepared.ObjectID, err)
+		return fmt.Errorf("upload: prepared object %q: %w", id, err)
 	}
 	// Named refusals first: the byte comparison catches these too, but says only "not the key".
+	segments := strings.Split(escaped, "/")
 	lower := strings.ToLower(escaped)
 	switch {
 	case strings.Contains(escaped, "//"):
-		return fmt.Errorf("upload: ticket path for object %q has an empty segment", prepared.ObjectID)
-	case hasDotSegment(escaped):
-		return fmt.Errorf("upload: ticket path for object %q has a dot segment", prepared.ObjectID)
+		return fmt.Errorf("upload: ticket path for object %q has an empty segment", id)
+	case slices.Contains(segments, "."), slices.Contains(segments, ".."):
+		return fmt.Errorf("upload: ticket path for object %q has a dot segment", id)
 	case strings.Contains(lower, "%2f"):
-		return fmt.Errorf("upload: ticket path for object %q encodes a slash", prepared.ObjectID)
+		return fmt.Errorf("upload: ticket path for object %q encodes a slash", id)
 	case strings.Contains(lower, "%5c"):
-		return fmt.Errorf("upload: ticket path for object %q encodes a backslash", prepared.ObjectID)
+		return fmt.Errorf("upload: ticket path for object %q encodes a backslash", id)
 	}
 
 	// Compared as bytes, never normalized first: normalizing turns a hostile path plausible.
 	want := target.pathPrefix + "/" + canonicalPath(prepared.Key)
 	switch target.addressing {
 	case VirtualHosted, PathStyle:
-		if escaped != want {
-			return fmt.Errorf("upload: ticket path does not name the prepared key for object %q", prepared.ObjectID)
+		if escaped == want {
+			return nil
 		}
 	case addressingUnpinned:
-		// No declared layout, so accept the one spelling either form produces: the key at the
-		// root, or below exactly one bucket segment. The refusals above leave only counting.
-		bucket, ok := strings.CutSuffix(escaped, want)
-		if !ok || strings.Count(bucket, "/") > 1 {
-			return fmt.Errorf("upload: ticket path does not name the prepared key for object %q", prepared.ObjectID)
+		// No declared layout, so accept the key at the root or below exactly one bucket segment.
+		if bucket, ok := strings.CutSuffix(escaped, want); ok && strings.Count(bucket, "/") <= 1 {
+			return nil
 		}
 	default:
 		return fmt.Errorf("upload: target %s declares unknown addressing %q", target.Origin(), string(target.addressing))
 	}
-	return nil
+	return fmt.Errorf("upload: ticket path does not name the prepared key for object %q", id)
 }
 
 // validateHeaders enforces the closed header set; a header the server invented is a refusal.
 func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
-	h := ticket.RequiredHeaders
+	h, id := ticket.RequiredHeaders, prepared.ObjectID
 	dialect, err := ticketHeaderDialect(h)
-	if err != nil {
-		return fmt.Errorf("upload: ticket for object %q: %w", prepared.ObjectID, err)
-	}
-	if prepared.SourceHash == "" {
-		return fmt.Errorf("upload: prepared object %q carries no source hash", prepared.ObjectID)
-	}
-	if ticket.TicketID == "" {
-		return fmt.Errorf("upload: ticket for object %q carries no ticket id", prepared.ObjectID)
-	}
-	switch got, ok := h[dialect.sourceHash]; {
-	case !ok:
-		return fmt.Errorf("upload: ticket for object %q requires no %s header", prepared.ObjectID, dialect.sourceHash)
-	case got != prepared.SourceHash:
-		return fmt.Errorf("upload: ticket for object %q requires source hash %q, prepared object hashed %q",
-			prepared.ObjectID, got, prepared.SourceHash)
+	switch {
+	case err != nil:
+		return fmt.Errorf("upload: ticket for object %q: %w", id, err)
+	case prepared.SourceHash == "":
+		return fmt.Errorf("upload: prepared object %q carries no source hash", id)
+	case ticket.TicketID == "":
+		return fmt.Errorf("upload: ticket for object %q carries no ticket id", id)
+	case h[dialect.sourceHash] != prepared.SourceHash:
+		return fmt.Errorf("upload: ticket for object %q requires source hash %q, prepared object hashed %q", id, h[dialect.sourceHash], prepared.SourceHash)
 	}
 	switch got, ok := h[dialect.ticketID]; {
 	case !ok:
-		return fmt.Errorf("upload: ticket for object %q requires no %s header", prepared.ObjectID, dialect.ticketID)
+		return fmt.Errorf("upload: ticket for object %q requires no %s header", id, dialect.ticketID)
 	case got != ticket.TicketID:
-		return fmt.Errorf("upload: ticket %q for object %q requires ticket-id header %q",
-			ticket.TicketID, prepared.ObjectID, got)
+		return fmt.Errorf("upload: ticket %q for object %q requires ticket-id header %q", ticket.TicketID, id, got)
 	}
 
 	for name, want := range prepared.Metadata {
 		if !slices.Contains(MetadataNames, name) {
-			return fmt.Errorf("upload: prepared object %q declares metadata %q outside the closed set",
-				prepared.ObjectID, name)
+			return fmt.Errorf("upload: prepared object %q declares metadata %q outside the closed set", id, name)
 		}
-		header := dialect.metadataHeader(name)
+		header := dialect.metadataPrefix + name
+		if dialect.azure {
+			header = dialect.metadataPrefix + strings.ReplaceAll(name, "-", "_")
+		}
 		switch got, ok := h[header]; {
 		case !ok:
-			return fmt.Errorf("upload: ticket for object %q requires no %s header, which the prepared object declared",
-				prepared.ObjectID, header)
+			return fmt.Errorf("upload: ticket for object %q requires no %s header, which the prepared object declared", id, header)
 		case got != want:
-			return fmt.Errorf("upload: ticket for object %q requires %s=%q, prepared object declared %q",
-				prepared.ObjectID, header, got, want)
+			return fmt.Errorf("upload: ticket for object %q requires %s=%q, prepared object declared %q", id, header, got, want)
 		}
 	}
 	if dialect.azure && h["x-ms-blob-type"] != "BlockBlob" {
-		return fmt.Errorf("upload: ticket for object %q does not require x-ms-blob-type=BlockBlob", prepared.ObjectID)
+		return fmt.Errorf("upload: ticket for object %q does not require x-ms-blob-type=BlockBlob", id)
 	}
 
 	for name, got := range h {
-		if got == "" {
-			return fmt.Errorf("upload: ticket for object %q requires header %q with an empty value",
-				prepared.ObjectID, name)
+		metadata, isMetadata := strings.CutPrefix(name, dialect.metadataPrefix)
+		if dialect.azure {
+			metadata = strings.ReplaceAll(metadata, "_", "-")
 		}
 		switch {
-		case name == dialect.sourceHash, name == dialect.ticketID:
+		case got == "":
+			return fmt.Errorf("upload: ticket for object %q requires header %q with an empty value", id, name)
+		case name == dialect.sourceHash, name == dialect.ticketID, dialect.azure && name == "x-ms-blob-type":
 		case name == dialect.tagging && dialect.tagging != "":
 			if !slices.Contains(taggingValues, got) {
-				return fmt.Errorf("upload: ticket for object %q requires tag %q", prepared.ObjectID, got)
+				return fmt.Errorf("upload: ticket for object %q requires tag %q", id, got)
 			}
-		case dialect.azure && name == "x-ms-blob-type":
-		case strings.HasPrefix(name, dialect.metadataPrefix) &&
-			slices.Contains(MetadataNames, dialect.metadataName(name)):
+		case isMetadata && slices.Contains(MetadataNames, metadata):
 			// Present here but absent above: the server derived it from nothing we sent.
-			if prepared.Metadata[dialect.metadataName(name)] != got {
-				return fmt.Errorf("upload: ticket for object %q requires %s=%q, which the prepared object did not declare",
-					prepared.ObjectID, name, got)
+			if prepared.Metadata[metadata] != got {
+				return fmt.Errorf("upload: ticket for object %q requires %s=%q, which the prepared object did not declare", id, name, got)
 			}
 		default:
-			return fmt.Errorf("upload: ticket for object %q requires header %q outside the closed provider set",
-				prepared.ObjectID, name)
+			return fmt.Errorf("upload: ticket for object %q requires header %q outside the closed provider set", id, name)
 		}
 	}
 	return nil
 }
 
+// ticketHeaderDialect picks the provider by its source-hash header; exactly one must be present.
 func ticketHeaderDialect(headers map[string]string) (headerDialect, error) {
-	var found *headerDialect
-	for i := range headerDialects {
-		if _, ok := headers[headerDialects[i].sourceHash]; !ok {
-			continue
+	var found []headerDialect
+	for _, d := range headerDialects {
+		if _, ok := headers[d.sourceHash]; ok {
+			found = append(found, d)
 		}
-		if found != nil {
-			return headerDialect{}, errors.New("mixes provider header dialects")
-		}
-		found = &headerDialects[i]
 	}
-	if found == nil {
+	switch len(found) {
+	case 0:
 		return headerDialect{}, errors.New("carries no recognized source-hash header")
+	case 1:
+		return found[0], nil
 	}
-	return *found, nil
-}
-
-func (d headerDialect) metadataHeader(name string) string {
-	if d.azure {
-		name = strings.ReplaceAll(name, "-", "_")
-	}
-	return d.metadataPrefix + name
-}
-
-func (d headerDialect) metadataName(header string) string {
-	name := strings.TrimPrefix(header, d.metadataPrefix)
-	if d.azure {
-		name = strings.ReplaceAll(name, "_", "-")
-	}
-	return name
+	return headerDialect{}, errors.New("mixes provider header dialects")
 }
 
 func validateKey(key string) error {
@@ -275,11 +238,6 @@ func validateSegments(path string) error {
 		}
 	}
 	return nil
-}
-
-func hasDotSegment(escaped string) bool {
-	segments := strings.Split(escaped, "/")
-	return slices.Contains(segments, ".") || slices.Contains(segments, "..")
 }
 
 // Query escaping supplies uppercase percent-hex; paths keep slashes and spell spaces as %20.

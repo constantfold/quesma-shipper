@@ -10,50 +10,40 @@ import (
 )
 
 func TestValidateTicketAcceptsGolden(t *testing.T) {
-	for _, pair := range []struct{ request, response string }{
-		{"request.json", "response.json"},
-		{"request-heartbeat.json", "response-heartbeat.json"},
-	} {
-		t.Run(pair.request, func(t *testing.T) {
-			prepared, ticket := goldenPair(t, pair.request, pair.response)
-			require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket))
-		})
+	for _, pair := range [][2]string{{"request.json", "response.json"}, {"request-heartbeat.json", "response-heartbeat.json"}} {
+		prepared, ticket := goldenPair(t, pair[0], pair[1])
+		require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket), pair[0])
 	}
 }
 
+// The golden AWS headers respelled for each other provider must validate too.
 func TestValidateTicketAcceptsEveryProviderDialect(t *testing.T) {
 	prepared, base := goldenPair(t, "request.json", "response.json")
-	for _, tc := range []struct {
-		name      string
-		mapHeader func(string) (string, bool)
-		extra     map[string]string
-	}{
-		{name: "aws", mapHeader: func(name string) (string, bool) { return name, true }},
-		{name: "gcs", mapHeader: func(name string) (string, bool) {
-			if name == taggingHeader {
-				return "", false
+	for name, respell := range map[string]func(header string) string{
+		"gcs": func(h string) string {
+			if h == taggingHeader {
+				return "" // gcs has no tagging header
 			}
-			return strings.Replace(name, metadataPrefix, "x-goog-meta-", 1), true
-		}},
-		{name: "azure", mapHeader: func(name string) (string, bool) {
-			if name == taggingHeader {
-				return "x-ms-tags", true
+			return strings.Replace(h, metadataPrefix, "x-goog-meta-", 1)
+		},
+		"azure": func(h string) string {
+			if h == taggingHeader {
+				return "x-ms-tags"
 			}
-			name = strings.TrimPrefix(name, metadataPrefix)
-			return "x-ms-meta-" + strings.ReplaceAll(name, "-", "_"), true
-		}, extra: map[string]string{"x-ms-blob-type": "BlockBlob"}},
+			return "x-ms-meta-" + strings.ReplaceAll(strings.TrimPrefix(h, metadataPrefix), "-", "_")
+		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ticket := base
-			ticket.RequiredHeaders = make(map[string]string, len(base.RequiredHeaders)+len(tc.extra))
-			for name, value := range base.RequiredHeaders {
-				if mapped, ok := tc.mapHeader(name); ok {
-					ticket.RequiredHeaders[mapped] = value
-				}
+		ticket := base
+		ticket.RequiredHeaders = map[string]string{}
+		for h, value := range base.RequiredHeaders {
+			if respelled := respell(h); respelled != "" {
+				ticket.RequiredHeaders[respelled] = value
 			}
-			maps.Copy(ticket.RequiredHeaders, tc.extra)
-			require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket))
-		})
+		}
+		if name == "azure" {
+			ticket.RequiredHeaders["x-ms-blob-type"] = "BlockBlob"
+		}
+		require.NoError(t, ValidateTicket(UploadTargetList{goldenTarget(t)}, prepared, ticket), name)
 	}
 }
 
@@ -94,72 +84,52 @@ func TestValidateTicketRejectsURL(t *testing.T) {
 func TestValidateTicketRejects(t *testing.T) {
 	base, baseTicket := goldenPair(t, "request.json", "response.json")
 	targets := UploadTargetList{goldenTarget(t)}
-	pathOf := func(key string) string {
-		return "https://archive.example.invalid/" + canonicalPath(key) + "?X-Amz-Signature=FIXTURE"
+	type mutation func(*PreparedUpload, *Ticket)
+	set := func(name, value string) mutation {
+		return func(_ *PreparedUpload, tk *Ticket) { tk.RequiredHeaders[name] = value }
+	}
+	drop := func(name string) mutation {
+		return func(_ *PreparedUpload, tk *Ticket) { delete(tk.RequiredHeaders, name) }
 	}
 
-	cases := []struct {
+	for _, c := range []struct {
 		name   string
-		mutate func(prepared *PreparedUpload, ticket *Ticket)
+		mutate mutation
 	}{
 		{"object id mismatch", func(_ *PreparedUpload, tk *Ticket) { tk.ObjectID = "trajectory-2" }},
 		{"method is not PUT", func(_ *PreparedUpload, tk *Ticket) { tk.Method = "POST" }},
 		{"content length mismatch", func(_ *PreparedUpload, tk *Ticket) { tk.ContentLength++ }},
+		{"content length unsigned", func(_ *PreparedUpload, tk *Ticket) { tk.ContentLengthSigned = false }},
 		{"prepared key not canonical", func(p *PreparedUpload, tk *Ticket) {
 			p.Key = "/" + p.Key
-			tk.URL = pathOf(p.Key)
+			tk.URL = "https://archive.example.invalid/" + canonicalPath(p.Key) + "?X-Amz-Signature=FIXTURE"
 		}},
-		{"unknown provider header", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders["x-amz-acl"] = "public-read"
-		}},
-		{"unknown metadata header", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders["x-amz-meta-operator"] = "someone"
-		}},
-		{"missing source hash header", func(_ *PreparedUpload, tk *Ticket) {
-			delete(tk.RequiredHeaders, sourceHashHeader)
-		}},
-		{"missing ticket id header", func(_ *PreparedUpload, tk *Ticket) {
-			delete(tk.RequiredHeaders, ticketIDHeader)
-		}},
-		{"source hash disagrees with the prepared object", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders[sourceHashHeader] = strings.Repeat("a", 64)
-		}},
-		{"ticket id header disagrees with the ticket", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders[ticketIDHeader] = "00000000-0000-0000-0000-000000000000"
-		}},
-		{"metadata value disagrees", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders["x-amz-meta-source-id"] = "another-source"
-		}},
-		{"metadata the prepared object never declared", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders["x-amz-meta-agent-version"] = "9.9.9"
-		}},
-		{"metadata dropped from the ticket", func(_ *PreparedUpload, tk *Ticket) {
-			delete(tk.RequiredHeaders, "x-amz-meta-source-id")
-		}},
-		{"tag outside the closed set", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders[taggingHeader] = "class=anything"
-		}},
-		{"empty tag value", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders[taggingHeader] = ""
-		}},
-		{"emptied metadata value", func(_ *PreparedUpload, tk *Ticket) {
-			tk.RequiredHeaders["x-amz-meta-artifact-class"] = ""
-		}},
+		{"unknown provider header", set("x-amz-acl", "public-read")},
+		{"unknown metadata header", set("x-amz-meta-operator", "someone")},
+		{"missing source hash header", drop(sourceHashHeader)},
+		{"missing ticket id header", drop(ticketIDHeader)},
+		{"source hash disagrees with the prepared object", set(sourceHashHeader, strings.Repeat("a", 64))},
+		{"ticket id header disagrees with the ticket", set(ticketIDHeader, "00000000-0000-0000-0000-000000000000")},
+		{"metadata value disagrees", set("x-amz-meta-source-id", "another-source")},
+		{"metadata the prepared object never declared", set("x-amz-meta-agent-version", "9.9.9")},
+		{"metadata dropped from the ticket", drop("x-amz-meta-source-id")},
+		{"tag outside the closed set", set(taggingHeader, "class=anything")},
+		{"empty tag value", set(taggingHeader, "")},
+		{"emptied metadata value", set("x-amz-meta-artifact-class", "")},
+		{"mixed provider dialects", set("x-goog-meta-source-hash", base.SourceHash)},
 		{"prepared metadata outside the closed set", func(p *PreparedUpload, tk *Ticket) {
 			p.Metadata["operator"] = "someone"
 			tk.RequiredHeaders["x-amz-meta-operator"] = "someone"
 		}},
 		{"prepared object carries no source hash", func(p *PreparedUpload, _ *Ticket) { p.SourceHash = "" }},
+		{"prepared object carries no object id", func(p *PreparedUpload, tk *Ticket) { p.ObjectID, tk.ObjectID = "", "" }},
 		{"ticket carries no ticket id", func(_ *PreparedUpload, tk *Ticket) { tk.TicketID = "" }},
-	}
-
-	for _, c := range cases {
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			prepared, ticket := base, baseTicket
 			prepared.Metadata = maps.Clone(base.Metadata)
 			ticket.RequiredHeaders = maps.Clone(baseTicket.RequiredHeaders)
 			c.mutate(&prepared, &ticket)
-
 			err := ValidateTicket(targets, prepared, ticket)
 			require.Error(t, err)
 			assertNoURLLeak(t, err, ticket.URL)
@@ -192,27 +162,19 @@ func TestValidateTicketAddressing(t *testing.T) {
 			"3f2504e0-4f89-41d3-9a0c-0305e82c3301", "11111111-2222-3333-4444-555555555555", 1)), false, false},
 		{"key suffix confusion", origin + "/" + key + ".evil", false, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ticket.URL = tc.url
-			for _, mode := range []struct {
-				name    string
-				targets UploadTargetList
-				accept  bool
-			}{
-				{"pinned", UploadTargetList{target}, tc.pinned},
-				{"unpinned", UploadTargetList{}, tc.unpinned},
-			} {
-				t.Run(mode.name, func(t *testing.T) {
-					err := ValidateTicket(mode.targets, prepared, ticket)
-					if mode.accept {
-						require.NoError(t, err)
-					} else {
-						require.Error(t, err)
-						assertNoURLLeak(t, err, ticket.URL)
-					}
-				})
+		ticket.URL = tc.url
+		for _, mode := range []struct {
+			targets UploadTargetList
+			accept  bool
+		}{{UploadTargetList{target}, tc.pinned}, {UploadTargetList{}, tc.unpinned}} {
+			err := ValidateTicket(mode.targets, prepared, ticket)
+			if mode.accept {
+				require.NoError(t, err, "%s, %d pinned targets", tc.name, len(mode.targets))
+			} else {
+				require.Error(t, err, "%s, %d pinned targets", tc.name, len(mode.targets))
+				assertNoURLLeak(t, err, ticket.URL)
 			}
-		})
+		}
 	}
 }
 
