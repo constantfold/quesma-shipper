@@ -32,23 +32,18 @@ type Enricher struct{}
 
 func New() *Enricher { return &Enricher{} }
 
-func (*Enricher) ID() string   { return id }
-func (*Enricher) Version() int { return version }
+func (*Enricher) ID() string    { return id }
+func (*Enricher) Version() int  { return version }
+func (*Enricher) Table() string { return table }
 
 // The join derives from the transcript lines, so with no staged units there is nothing to do.
 func (*Enricher) NeedsUnits() bool { return true }
-func (*Enricher) Table() string {
-	return table
-}
 
 // Prefixes rather than the whole table: state.vscdb also holds checkpoints, diffs and tokens.
-func (*Enricher) Keyspaces() []string {
-	return []string{composerPrefix, bubblePrefix}
-}
+func (*Enricher) Keyspaces() []string { return []string{composerPrefix, bubblePrefix} }
 
-// DBCandidates is where Cursor's global state.vscdb lives, per platform. Compiled in rather than
-// configurable: a config path would let a config layer point this enricher at an arbitrary SQLite
-// file, past a scope ceiling the compiled catalog never approved. The workspace store is absent.
+// Compiled in rather than configurable: a config path would let a config layer point this
+// enricher at an arbitrary SQLite file. The workspace store is absent.
 const cursorStateDB = "Cursor/User/globalStorage/state.vscdb"
 
 func (*Enricher) DBCandidates() []string {
@@ -56,18 +51,13 @@ func (*Enricher) DBCandidates() []string {
 	case "darwin":
 		return []string{"~/Library/Application Support/" + cursorStateDB}
 	case "linux":
-		return []string{
-			"~/.config/" + cursorStateDB,
-			"~/.config/cursor/User/globalStorage/state.vscdb",
-		}
+		return []string{"~/.config/" + cursorStateDB, "~/.config/cursor/User/globalStorage/state.vscdb"}
 	case "windows":
 		return []string{"$APPDATA/" + cursorStateDB}
-	default:
-		return nil
 	}
+	return nil
 }
 
-// Enrich derives one object per transcript unit.
 func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	res := transforms.EnrichResult{EnricherID: id, Version: version}
 
@@ -101,31 +91,30 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 				"sorts after the last key read", len(read.Rows)))
 	}
 
-	store := indexRows(read.Rows)
-	if store.decodeErrors > 0 {
+	ix := indexRows(read.Rows)
+	if ix.decodeErrors > 0 {
 		res.Notes = append(res.Notes, fmt.Sprintf(
 			"%d store rows in the declared keyspaces did not decode (the store schema is vendor behaviour and drifts)",
-			store.decodeErrors))
+			ix.decodeErrors))
 	}
 
 	for _, u := range in.Units {
-		conv := conversationID(u.NativePath)
-		if conv == "" {
+		// The join key: the transcript's basename is the UUID in composerData:<UUID>.
+		conv, ok := strings.CutSuffix(filepath.Base(u.NativePath), ".jsonl")
+		if !ok || conv == "" {
 			res.Skipped++
 			continue
 		}
-		d, note := e.joinOne(u, conv, store, read)
+		d, note := e.joinOne(u, conv, ix, read)
 		if note != "" {
-			// Routed by outcome: a note on a shipped object would otherwise be reported as
-			// lost data.
+			// Routed by outcome: a note on a shipped object would be reported as lost data.
 			if d.Status == transforms.StatusOK {
 				res.Infos = append(res.Infos, note)
 			} else {
 				res.Notes = append(res.Notes, note)
 			}
 		}
-		// The transcript-side twin of the store decode note above, and like it an alarm: those
-		// blocks never reached the join, so their enrichment is lost even when the object ships.
+		// An alarm like the store decode note: those blocks lose enrichment even when the object ships.
 		if d.LineDecodeErrors > 0 {
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: %d mid-file transcript lines did not decode (the line shape is vendor "+
@@ -148,17 +137,6 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	return res
 }
 
-// conversationID is the join key: the transcript's basename, which is the same UUID as
-// composerData:<composerUUID>.
-func conversationID(nativePath string) string {
-	base := filepath.Base(nativePath)
-	if !strings.HasSuffix(base, ".jsonl") {
-		return ""
-	}
-	return strings.TrimSuffix(base, ".jsonl")
-}
-
-// joinOne derives a single conversation.
 func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read sqliteread.Result) (transforms.Derived, string) {
 	d := transforms.Derived{
 		NativePath:   u.NativePath + ".enriched.jsonl",
@@ -178,22 +156,19 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	events := slices.DeleteFunc(ordered, isScaffolding)
 
 	a, err := alignAndRender(u.Content, events)
-	if err == nil {
-		// Set before the status branches: Enrich reports this loss whether or not an object ships.
-		d.LineDecodeErrors = a.lineDecodeErrors
-	}
-	switch {
-	case err != nil:
+	if err != nil {
 		d.Status = transforms.StatusError
 		return d, fmt.Sprintf("%s: %v", conv, err)
-	case a.mismatches > 0:
+	}
+	// Set before the status check: Enrich reports this loss whether or not an object ships.
+	d.LineDecodeErrors = a.lineDecodeErrors
+	if a.mismatches > 0 {
 		d.Status = transforms.StatusMismatch
 		d.Mismatches = a.mismatches
 		return d, fmt.Sprintf("%s: %d transcript events did not align with the store; "+
 			"no derived object, raw transcript ships (the join rules are vendor behaviour and drift)",
 			conv, a.mismatches)
 	}
-
 	d.Payload = a.out
 	d.OutputHash = transforms.Hash(a.out)
 	d.Status = transforms.StatusOK
@@ -202,12 +177,10 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	d.Tail = a.tail
 	d.Ambiguous = a.ambiguous
 
-	// Informational, not alarms: the store accounting for less than the transcript in ways that
-	// are observed vendor behaviour, not rule drift.
+	// Informational, not alarms: observed vendor behaviour, not rule drift.
 	var infos []string
 	if a.tail > 0 {
-		infos = append(infos, fmt.Sprintf("%d transcript events extend past the store's "+
-			"last bubble", a.tail))
+		infos = append(infos, fmt.Sprintf("%d transcript events extend past the store's last bubble", a.tail))
 	}
 	if a.repeats > 0 {
 		infos = append(infos, fmt.Sprintf("%d transcript events repeat calls whose bubble "+

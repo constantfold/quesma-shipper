@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 )
 
-// line is one JSONL record, decoded only as far as the join needs. Scalars are flexString for
-// the same reason as on the store side: a drifted field shape would reject the whole line, which
-// then ships as native_invalid with its bubbles skipped and mismatches at zero — silent loss.
+// line is one JSONL record, decoded only as far as the join needs. Scalars are flexString: a
+// drifted field shape would otherwise ship the line as native_invalid, silently unenriched.
 type line struct {
 	Role    flexString `json:"role"`
 	Message *message   `json:"message"`
@@ -25,17 +24,13 @@ type block struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// outLine is one line of the derived JSONL. Native holds the original line's bytes verbatim, so
-// no part of the native record depends on this code. Enrich is an array index-aligned to the
-// native content blocks, never a map: a map's key order is lexicographic, so block 10 would sort
-// before block 2 and the output bytes would stop being a stable function of the input.
+// outLine is one line of the derived JSONL. Native holds the original line's bytes verbatim.
+// Enrich is index-aligned to the native content blocks; a map would sort block 10 before block 2.
 type outLine struct {
 	Native json.RawMessage `json:"native,omitempty"`
 
-	// A line that is not valid JSON, carried as a string rather than dropped: a torn tail is
-	// expected, and an invalid raw value would make the whole derived document unmarshalable.
-	// Not byte-exact for a mid-rune tear, whose dangling bytes become U+FFFD — the byte-exact
-	// record is the raw transcript, which ships anyway.
+	// Invalid JSON carried as a string: a torn tail is expected, and an invalid raw value would make
+	// the document unmarshalable. A mid-rune tear becomes U+FFFD; the raw transcript ships anyway.
 	NativeInvalid string `json:"native_invalid,omitempty"`
 
 	Enrich []*blockEnrich `json:"_enrich,omitempty"`
@@ -43,17 +38,11 @@ type outLine struct {
 
 // blockEnrich is what the store knew and the transcript did not.
 type blockEnrich struct {
-	BubbleID string `json:"bubbleId,omitempty"`
-
-	// The correlation key the transcript is missing entirely.
+	BubbleID   string `json:"bubbleId,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
-
-	// ToolName is the INTERNAL name, which can differ from the transcript's display name.
-	ToolName string `json:"tool_name,omitempty"`
-	Status   string `json:"status,omitempty"`
-
-	// The full tool output, which the transcript has none of.
-	Result string `json:"result,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"` // the internal name, not the display name
+	Status     string `json:"status,omitempty"`
+	Result     string `json:"result,omitempty"`
 
 	CreatedAt      string `json:"createdAt,omitempty"`
 	RequestID      string `json:"requestId,omitempty"`
@@ -72,12 +61,10 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
 	encoder.SetEscapeHTML(false) // Punctuation must not change the derived output hash.
-	cursor := 0
-
-	// A consuming match turns all preceding unmatched blocks into gaps; only the remainder can be tail.
-	unmatched := 0
-	a := alignment{}
+	var a alignment
 	state := make([]bubbleState, len(events))
+	// A consuming match turns all preceding unmatched blocks into gaps; only the remainder can be tail.
+	cursor, unmatched := 0, 0
 	lastLineInvalid := false
 
 	for raw := range bytes.SplitSeq(content, []byte{'\n'}) {
@@ -106,8 +93,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 					unmatched++
 					continue
 				case matchRepeat:
-					// Explained, but nothing to attach: the consumed bubble's result
-					// belongs to the run that consumed it.
+					// Nothing to attach: the consumed bubble's result belongs to the other run.
 					a.repeats++
 					continue
 				case matchAmbiguous:
@@ -136,35 +122,27 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	if lastLineInvalid {
 		a.lineDecodeErrors--
 	}
+	// A transcript that matched nothing is all mismatch, not all tail.
 	if cursor > 0 {
 		a.tail = unmatched
 	} else {
-		// A transcript that matched nothing is all mismatch, not all tail.
 		a.mismatches = unmatched
 	}
 	return a, nil
 }
 
-// alignment is one conversation's alignment outcome: the rendered lines, the events nothing
-// accounts for, and the explained shortfalls that ship native-only.
+// alignment is one conversation's outcome: the rendered lines, the events nothing accounts for,
+// and the explained shortfalls that ship native-only.
 type alignment struct {
-	out        []byte
-	mismatches int
-	tail       int
-	repeats    int
-
-	// Tool blocks the evidence could not decide; nothing is attached to them.
-	ambiguous int
-
-	// Transcript lines that did not decode, excluding the final line's vendor-confirmed torn
-	// tail. Surfaced by the caller the way indexed.decodeErrors is.
-	lineDecodeErrors int
+	out                                  []byte
+	mismatches, tail, repeats, ambiguous int
+	lineDecodeErrors                     int // excluding the final line's expected torn tail
 }
 
 func fromBubble(b *bubble) *blockEnrich {
 	model := b.ModelName
-	if model == "" && b.ModelInfo != nil {
-		model = b.ModelInfo.ModelName
+	if b.ModelInfo != nil {
+		model = cmp.Or(model, b.ModelInfo.ModelName)
 	}
 	e := &blockEnrich{
 		BubbleID:       b.BubbleID,
