@@ -1,46 +1,42 @@
 # Homebrew distribution
 
 `scripts/homebrew-cask.py VERSION ARTIFACT_DIRECTORY` renders the cask from this template and the
-signed macOS binaries. The release announcement job runs it only after TUF publication succeeds,
-then attaches `quesma-shipper.rb` to the GitHub release. The download URLs are immutable TUF target
-paths; Homebrew checks their SHA-256. Homebrew itself does not verify TUF metadata.
+signed macOS binaries. The release job runs it only after TUF publication succeeds and attaches
+`quesma-shipper.rb` to the GitHub release. The download URLs are immutable TUF target paths whose
+SHA-256 Homebrew checks; Homebrew itself does not verify TUF metadata.
 
 The cask installs the raw signed and notarized binary in its Caskroom, links it on `PATH`, and runs
-`postinstall` without sudo. The shipper registers its usual per-user LaunchAgent. There is one
-supervisor per machine user, so switching from `.pkg` requires uninstalling it first, keeping state.
+`postinstall` without sudo, which registers the usual per-user LaunchAgent. There is one supervisor
+per machine user, so switching from `.pkg` requires uninstalling it first, keeping state.
 
-The cask declares `auto_updates true`. Caskroom installations use the same signed TUF self-updater
-as native installs: it replaces the binary in place and re-executes it, preserving the Brew symlink
-and launchd executable path. The Caskroom directory retains the initially installed version name;
-`quesma-shipper --version` reports the running version. Normal `brew upgrade` skips auto-updating casks;
-`brew upgrade --cask --greedy quesmaorg/tap/quesma-shipper` explicitly upgrades through Brew.
-Brew upgrades stop the old service and register the new version; uninstall stops it and preserves all
-local state. `quesma-shipper uninstall` removes the service but keeps the Homebrew command installed;
-add `--purge` to delete local state too, and `--yes` to skip confirmation. Neither command invokes Brew
-or removes its managed payload. `brew uninstall --cask --zap quesmaorg/tap/quesma-shipper` invokes
-`uninstall --purge --yes` before removing the binary, using the shipper's configured state directory.
-The path check follows symlinks and supports nonstandard Homebrew prefixes, but expects Homebrew's
-normal `Caskroom/quesma-shipper/VERSION/quesma-shipper` layout.
+- **Updates.** The cask declares `auto_updates true`: the TUF self-updater replaces the binary in
+  place and re-executes it, keeping the Brew symlink and launchd executable path. The Caskroom
+  directory keeps the initially installed version name; `quesma-shipper --version` reports the
+  running one. `brew upgrade` skips auto-updating casks unless run with `--cask --greedy`; a Brew
+  upgrade stops the old service and registers the new version.
+- **Removal.** `brew uninstall` stops the service and preserves local state; `--zap` first runs
+  `quesma-shipper uninstall --purge --yes`, using the shipper's configured state directory.
+  `quesma-shipper uninstall [--purge] [--yes]` removes the service but never invokes Brew or removes
+  its payload.
+- **Detection** follows symlinks and supports nonstandard prefixes, but expects Homebrew's normal
+  `Caskroom/quesma-shipper/VERSION/quesma-shipper` layout.
 
 ## First release
 
-1. Push the `homebrew-tap` main changes containing its updater workflow. Enable Actions and permit
-   the workflow's `GITHUB_TOKEN` to write contents on `main`.
+1. Push the `homebrew-tap` updater workflow to its `main`, enable Actions, and let its
+   `GITHUB_TOKEN` write contents on `main`.
 2. Merge and publish the shipper release containing the lifecycle changes and cask asset.
-3. Run the tap's **Update Quesma Shipper** workflow, or wait for its hourly check. It copies the
-   release cask to `Casks/quesma-shipper.rb` and commits on `main`.
+3. Run the tap's **Update Quesma Shipper** workflow, or wait for its hourly check; it commits the
+   release cask to `Casks/quesma-shipper.rb`.
 4. Validate the public install command on a clean Mac before advertising it in onboarding.
 
-Do not publish a cask pointing at an older shipper: those binaries reject the Caskroom install path
-and lack the Brew uninstall protection. No new signing credentials or cross-repository token is required.
+Do not publish a cask pointing at an older shipper: those binaries reject the Caskroom path and
+lack the Brew uninstall protection. No new signing credentials or cross-repository token is needed.
 
 ## Validation
 
-The Darwin tests cover package ownership and run the CLI from a simulated Caskroom through a symlink,
-checking that automatic and manual updates reach TUF while uninstall preserves the Brew payload and
-honors `--purge`. A separate subprocess test replaces a staged binary through the real raw updater, re-executes it, and verifies
-that its command symlink and service entry still address the replacement.
-`scripts/test-homebrew.sh` installs, upgrades, and removes a local cask on a disposable macOS CI runner,
-checks launchd and state preservation, and removes quarantine from the staged unsigned CI binary
-using a preflight step injected only into the temporary test cask.
-Production casks keep Homebrew's normal Gatekeeper checks enabled.
+The Darwin tests cover service ownership and replace a Caskroom binary through the real raw updater
+behind a symlink, then check that the command link and service entry still address it.
+`scripts/test-homebrew.sh` installs, upgrades, and removes a local cask on a disposable macOS CI
+runner and checks launchd and state preservation. Only that temporary test cask gets a preflight
+step removing quarantine from the unsigned CI binary; production casks keep Gatekeeper enabled.

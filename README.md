@@ -1,6 +1,6 @@
 # Quesma Shipper
 
-[![version](https://img.shields.io/badge/version-0.0.3-blue)](#download)
+[![version](https://img.shields.io/badge/version-0.0.3-blue)](#install)
 
 Quesma Shipper collects the session files and related artifacts that AI coding agents write on a
 developer machine. See [What is collected](#what-is-collected). It removes secrets and personal
@@ -14,10 +14,12 @@ Supported agents: Claude Code, Codex, Cursor.
 Supported platforms: macOS 13 or newer (app bundle, launchd service), Linux (systemd user
 service), Windows 10 1809 or newer (per-user installer, scheduled task).
 
-## Download
+## Install
 
-Every download below installs for the current user and needs no administrator rights. Released
-builds keep themselves current from the signed update channel.
+Every installer below is per-user and needs no administrator rights. Released builds, Homebrew
+included, keep themselves current from the signed [TUF](https://theupdateframework.io/) update
+channel; run `quesma-shipper update` to update immediately. The endpoints and their trust boundary
+are described in [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md).
 
 | Platform | Download |
 |---|---|
@@ -25,9 +27,30 @@ builds keep themselves current from the signed update channel.
 | Windows 10 1809+ | [QuesmaShipperSetup-amd64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-amd64.exe) for x64, [QuesmaShipperSetup-arm64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-arm64.exe) for Arm |
 | Linux | `curl -fsSLO https://raw.githubusercontent.com/QuesmaOrg/quesma-shipper/main/src/packaging/linux/install.sh && sh install.sh` |
 
-Collection, scrubbing, and preview work straight away. Uploading needs enrollment against a
-control plane. See [Install](#install) for the full instructions, [Enroll](#enroll) for enrollment,
-and [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md) for the trust boundary these links sit behind.
+Collection, scrubbing, and preview work straight away. Uploading needs [enrollment](#enroll).
+
+**macOS.** The signed `.pkg` installs `Quesma Shipper.app` for the current user and registers a
+launchd agent. The Homebrew cask puts the command on your Homebrew `PATH` and starts the same
+per-user service, on Apple Silicon and Intel. Remove the cask with
+`brew uninstall --cask quesmaorg/tap/quesma-shipper`, which keeps enrollment and upload history;
+add `--zap` to delete local state too, using the shipper's configured state directory. Before
+switching between Homebrew and the `.pkg`, uninstall the previous installation without purging
+local state.
+
+**Linux.** The script downloads a hash-pinned bootstrap binary and installs a systemd user
+service. Run it again to upgrade; existing enrollment is kept. Use `--no-service` to skip the
+service. Plain binaries are also available for
+[AMD64](https://updates.quesma.dev/download/quesma-shipper-linux-amd64) and
+[ARM64](https://updates.quesma.dev/download/quesma-shipper-linux-arm64).
+
+**Windows.** Run the setup as your normal user. It installs the command under `%LOCALAPPDATA%`,
+adds it to your user `PATH`, and registers a scheduled task that starts immediately and at login.
+Re-running setup repairs that integration without changing enrollment. Release signing is
+temporarily disabled while the publisher identity is validated, so Microsoft Defender SmartScreen
+may warn about the download, and managed devices whose application-control policy requires a
+trusted publisher may block it. The raw `quesma-shipper-windows-<arch>.exe` files remain available
+for portable use and are the payloads the self-updater installs; a portable copy has no scheduled
+task or uninstaller.
 
 ## Status
 
@@ -38,10 +61,6 @@ versioned and pinned by tests. They can still change between minor releases.
 The shipper needs a control plane to send data. The control plane is not part of this repository
 and is not published yet. Without a control plane the shipper runs in local development mode.
 Collection, scrubbing, and preview work. Upload is disabled.
-
-The public update channel is the supported way to install and stay current. Released builds
-update themselves from its signed TUF repository. See
-[Versions and releases](#versions-and-releases).
 
 `trajectory-shipper` remains the wire identifier and on-disk configuration/state namespace.
 Those protocol-facing names are separate from the user-facing Quesma Shipper package and command.
@@ -67,8 +86,8 @@ agent session files ──► discover ──► detect change ──► read �
   is linked. The upload path is `net/http` only.
 - **Commit.** A local record of shipped files is updated after the sink confirms the write. That
   record is the authority for resume.
-- **Update.** Release builds check a [TUF](https://theupdateframework.io/) repository. They replace
-  themselves when a newer signed release exists. Development builds do not self-update.
+- **Update.** Release builds replace themselves when the TUF repository has a newer signed
+  release. Development builds do not self-update.
 
 The design rules are in [CONSTITUTION.md](CONSTITUTION.md). The code layout is in
 [ARCHITECTURE.md](ARCHITECTURE.md). The wire contract is the public
@@ -113,96 +132,7 @@ Everything derived this way passes through the scrub stage like any other file.
 `quesma-shipper tracking` shows what is collected on this machine, per agent and repository.
 `quesma-shipper preview` shows what the next run would send, after scrubbing, without sending it.
 
-## Install
-
-### From a release
-
-Release builds, including Homebrew installations, use the signed TUF repository to update themselves. The public
-repository and stable download endpoints are described in
-[RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md).
-
-**macOS**
-
-With Homebrew already installed:
-
-```sh
-brew install --cask quesmaorg/tap/quesma-shipper
-```
-
-The cask installs the command on your Homebrew `PATH` and starts a per-user background service,
-which waits for enrollment. It supports macOS 13 or newer on Apple Silicon and Intel, without
-administrator rights. Run the login command below after installing.
-
-The shipper updates itself automatically; run `quesma-shipper update` to update immediately.
-Use `brew uninstall --cask quesmaorg/tap/quesma-shipper` to remove it. Uninstall keeps enrollment and
-upload history. Add `--zap` to delete local state too, using the shipper's configured state directory.
-Before switching between Homebrew and the `.pkg`, uninstall the previous installation
-without purging local state.
-
-Without Homebrew:
-
-Download and install the signed
-[`quesma-shipper-macos-universal.pkg`](https://updates.quesma.dev/download/quesma-shipper-macos-universal.pkg).
-It installs `Quesma Shipper.app` for the current user and registers a launchd agent. It does not
-need administrator rights.
-
-**Linux**
-
-```sh
-curl -fsSLO https://raw.githubusercontent.com/QuesmaOrg/quesma-shipper/main/src/packaging/linux/install.sh
-sh install.sh
-```
-
-The script downloads a hash-pinned bootstrap binary and installs a systemd user service. Run it
-again to upgrade. Existing enrollment is kept. Use `--no-service` to skip the service.
-
-The released binaries are also available directly for
-[AMD64](https://updates.quesma.dev/targets/3ae805e2d630af5cb52fff51a5c8ae77aeb7b12f2d73a56fd7723698e9bfe48e.shipper-linux-amd64)
-and
-[ARM64](https://updates.quesma.dev/targets/78f0c89019d8a2f86fe3723359c00082ba9ec6ddedfc5fde1709f7516c33a3b0.shipper-linux-arm64).
-
-**Windows**
-
-Download [QuesmaShipperSetup-amd64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-amd64.exe)
-on an x64 PC or [QuesmaShipperSetup-arm64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-arm64.exe)
-on an Arm PC and run it as your normal user. The setup installs the command under `%LOCALAPPDATA%`, adds it to
-your user `PATH`, and registers a scheduled task that starts immediately and at login without
-administrator rights. Re-running setup repairs that integration without changing enrollment.
-
-Windows release signing is temporarily disabled while the publisher identity is validated. Until
-it is restored, Microsoft Defender SmartScreen may warn about the download, and managed devices
-whose application-control policy requires a trusted publisher may block it.
-
-The raw `quesma-shipper-windows-<arch>.exe` files remain available for portable use and are the
-payloads installed by the TUF self-updater. A portable copy has no scheduled task or uninstaller.
-
-### From source
-
-You need Go 1.27 or newer. No other tool is required. `make doctor` lists the optional ones.
-
-```sh
-make build                                     # bin/quesma-shipper
-make install                                   # into GOBIN, or GOPATH/bin
-```
-
-To test the Linux installer and the background service with a local build:
-
-```sh
-make build
-sh src/packaging/linux/install.sh --from bin/quesma-shipper
-```
-
-To build the macOS package: `make macos-pkg RELEASE_VERSION=<version>`. This works on macOS only.
-On Windows with Inno Setup installed, build an installer with:
-
-```powershell
-src/packaging/windows/build-setup.ps1 -ReleaseVersion <version> -Architecture amd64 `
-  -BinaryPath <binary> -SupervisorPath <supervisor-binary> -OutputDir bin/dist
-```
-
-`make dist RELEASE_VERSION=<version>` cross-compiles both Windows binaries.
-
-### Enroll
+## Enroll
 
 Every new shipper must be enrolled with the control plane selected by your administrator. The
 command is the same on every platform:
@@ -273,36 +203,20 @@ Environment variables:
 
 ## Security model
 
-- Trajectory files contain prompts, source code, shell output, and often credentials. Treat local
-  state, logs, and encrypted bundles as confidential.
-- Scrub and encrypt are mandatory pipeline stages in every build. No configuration layer can
-  remove them.
-- The control plane distributes configuration and authorises uploads. It does not proxy, receive,
-  or store trajectory content.
-- Uploads use per-object presigned URLs. The client holds no long-lived storage credential.
-- One install cannot overwrite another install's objects. The object-key grammar and the per-upload
-  authorisation enforce this.
-- Updates are verified against an offline-signed TUF root that is embedded in the binary.
-
-Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
-
-## Repository layout
-
-```
-src/           Go module root
-  cmd/quesma-shipper/   main
-  app/           composes a run
-  internal/      pipeline stages, config, control-plane client, platform floor
-  packaging/     install, service, and update mechanics per OS
-  internal/legal embedded LICENSE, NOTICE, and third-party license texts
-  e2e/           hermetic end-to-end and golden tests
-Makefile       repository-level build and test entry points
-```
+Trajectory files contain prompts, source code, shell output, and often credentials: treat local
+state, logs, and encrypted bundles as confidential. Scrub and encrypt are mandatory in every
+build, the client holds no long-lived storage credential, one install cannot overwrite another
+install's objects, and updates are verified against an offline-signed TUF root embedded in the
+binary. Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## Build and test
 
+You need Go 1.27 or newer. No other tool is required; `make doctor` lists the optional ones. The
+code layout is described in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ```sh
 make build       # bin/quesma-shipper
+make install     # into GOBIN, or GOPATH/bin
 make test        # unit suite and local end-to-end tests
 make race        # the same under the race detector
 make check       # the commit gate: fmt, vet, version, dead code, licenses, race
@@ -313,8 +227,16 @@ make help        # every target
 
 <!-- TODO(control-plane-oss): link the control-plane repository here. https://github.com/QuesmaOrg/quesma-shipper/issues/1 -->
 CI runs `make check` and `make perf-smoke`. `make perf` runs the full performance tier against a
-local MinIO and Toxiproxy. Both perf targets need Docker and are skipped without it. Cross-service
-tests that need the control plane are not part of this repository.
+local MinIO and Toxiproxy. Both perf targets are skipped without Docker. Cross-service tests that
+need the control plane are not part of this repository.
+
+Packaging a local build:
+
+- Linux installer and service: `make build && sh src/packaging/linux/install.sh --from bin/quesma-shipper`.
+- macOS package (macOS only): `make macos-pkg RELEASE_VERSION=<version>`.
+- Windows binaries: `make dist RELEASE_VERSION=<version>` cross-compiles them. With Inno Setup
+  installed, build the installer with `src/packaging/windows/build-setup.ps1 -ReleaseVersion <version>
+  -Architecture amd64 -BinaryPath <binary> -SupervisorPath <supervisor-binary> -OutputDir bin/dist`.
 
 ## Versions and releases
 
@@ -327,8 +249,7 @@ self-update.
 A push to `main` that touches the shipper builds six platform binaries and the macOS package, signs
 TUF metadata, and publishes to `https://updates.quesma.dev`. It then creates a
 [GitHub release](https://github.com/QuesmaOrg/quesma-shipper/releases) linking the stable downloads.
-The first release through this workflow was published on 2026-09-04. A maintainer approves each
-publication.
+A maintainer approves each publication.
 
 Each GitHub release also carries a `quesma-shipper.rb` cask pinned to the published macOS binaries.
 The [Homebrew tap](https://github.com/QuesmaOrg/homebrew-tap) imports it hourly or on a manual workflow
