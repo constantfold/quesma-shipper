@@ -1,7 +1,6 @@
-// Package scrub removes secrets and PII before anything is packaged or encrypted. It is
-// the one pipeline step that fails CLOSED: a scrub-engine error means the file does not
-// upload. Detectors are tuned for recall, a false negative being the expensive error. The
-// contract is to match the DECODED value and replace exactly the matching source span.
+// The scrubber removes secrets and PII before packaging, and fails CLOSED: an engine error means
+// the file does not upload. Detectors favour recall; they match the DECODED value and replace
+// exactly the matching source span.
 package transforms
 
 import (
@@ -19,17 +18,14 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// Hint is advisory: a payload that does not parse falls back to raw-text scanning
-// either way.
+// Hint is advisory: a payload that does not parse falls back to raw-text scanning either way.
 type Hint struct {
-	// Family is the source family, used to select structural exemptions.
+	// Family selects structural exemptions.
 	Family string
-
-	// JSONL means one JSON value per line; anything else is scanned as raw text.
-	JSONL bool
+	JSONL  bool
 }
 
-// ScanMode records how a payload was actually handled, for the manifest.
+// ScanMode values record how a payload was actually handled, for the manifest.
 const (
 	ScanModeDecodedJSON = "decoded_json_values"
 	ScanModeRawText     = "raw_text"
@@ -44,14 +40,12 @@ type Result struct {
 	RuleHits      map[string]int
 	ScanMode      string
 
-	// A torn tail is expected (it ships byte-exact and the next flush supersedes it),
-	// so these separate it from an error rather than reporting one.
+	// A torn tail is expected (it ships byte-exact and the next flush supersedes it), so it counts here, not as an error.
 	LinesParsed     int
 	LinesRawScanned int
 }
 
-// Density is bytes redacted over bytes total. Recorded per object so downstream can
-// drop shredded objects, and so a density jump names the rule that went haywire.
+// Density is bytes redacted over bytes total, so downstream can drop shredded objects and a jump names the rule at fault.
 func (r Result) Density() float64 {
 	if r.BytesTotal == 0 {
 		return 0
@@ -86,44 +80,36 @@ func DefaultConfig() Config {
 	}
 }
 
-// base64MinLength is the floor below which a speculative decode is not worth it. A
-// constant, not a setting: a setting that reads as tunable invites tuning it below the floor.
+// A constant, not a setting: a tunable floor invites tuning it too low for a speculative decode.
 const base64MinLength = 32
 
 // Scrubber is a compiled, reusable redaction engine.
 type Scrubber struct {
 	patterns []gatedPattern
 
-	// The one heuristic detector, nil when generic-entropy is not configured. It
-	// mistakes structure for secrets, so the engine consults exemptions BEFORE it.
+	// The only heuristic, nil when not configured; it mistakes structure for secrets, so exemptions are checked before it.
 	entropy *entropyMatcher
 
-	// The username the path-user rewriter replaces, empty when none is configured. Not a
-	// detector, so it runs everywhere including on exempt fields.
+	// Not a detector, so the path-user rewrite runs on exempt fields too.
 	pathUser string
 
 	keyNames *keyNameMatcher
 	exempt   *ExemptionSet
 
-	// Answers every pattern matcher's keyword question in one pass; read-only once
-	// built, so a Scrubber stays safe to share.
+	// Read-only once built, so a Scrubber stays safe to share.
 	prefilter *packs.Prefilter
 
-	// The slowest single Scrub this Scrubber has served, and the payload that caused it. Atomic
-	// because one Scrubber serves every worker. A pathological input can make a pattern backtrack
-	// for seconds without erroring, which looks like a stalled install and nothing else reports it.
+	// A backtracking pattern can stall for seconds without erroring; nothing else reports it.
 	slowestNanos atomic.Int64
 	slowestBytes atomic.Int64
 }
 
-// Slowest reports the worst Scrub seen so far and the payload size behind it. Duration alone says
-// little -- a large file is legitimately slow -- so the size travels with it.
+// Slowest reports the worst Scrub so far with its payload size, since a large file is legitimately slow.
 func (s *Scrubber) Slowest() (time.Duration, int64) {
 	return time.Duration(s.slowestNanos.Load()), s.slowestBytes.Load()
 }
 
-// noteCost keeps the maximum. A lost race costs one sample of a figure that is already only a
-// worst-case hint, so the loop does not retry.
+// noteCost does not retry the size store: a lost race costs one sample of a worst-case hint.
 func (s *Scrubber) noteCost(d time.Duration, size int) {
 	n := int64(d)
 	for {
@@ -138,32 +124,25 @@ func (s *Scrubber) noteCost(d time.Duration, size int) {
 	}
 }
 
-// gatedMatcher is a high-confidence pattern detector whose keyword prefilter the engine
-// hoists out: MatchScannedIn runs only when the shared automaton fired its gate. Its
-// missing field argument is the mechanism, not an oversight: exemptions are
-// detector-scoped, and with nowhere to pass a field path an exemption has nothing to hook
-// onto, so pattern matchers provably scan exempt fields too.
+// gatedMatcher runs only when the shared keyword automaton fired for it. It takes no field path on
+// purpose, so exemptions cannot reach it and pattern matchers provably scan exempt fields too.
 type gatedMatcher interface {
 	MatchScannedIn(value string, scan *packs.ValueScan) []Span
 }
 
-// gatedPattern pairs a matcher with its gate in the shared prefilter.
 type gatedPattern struct {
 	m    gatedMatcher
 	gate packs.Gate
 }
 
-// New compiles a Scrubber. A pack named in config but absent from the corpus is an
-// error: running with fewer rules than configured must not be reachable by omission.
+// New compiles a Scrubber. An unknown pack is an error, so fewer rules than configured never run.
 func New(cfg Config) (*Scrubber, error) {
 	s := &Scrubber{exempt: NewExemptionSet(cfg.Exemptions)}
-	// Rejected rather than clamped: the scanner would read a negative floor as "every
-	// run", the opposite of what lowering a threshold means.
+	// Rejected, not clamped: the scanner would read a negative floor as "every run".
 	if cfg.Entropy.MinLength < 0 {
 		return nil, fmt.Errorf("scrub: entropy min_length %d is negative", cfg.Entropy.MinLength)
 	}
 
-	// One automaton over every rule's keywords; only here knows the whole ladder.
 	prefilter := packs.NewPrefilterBuilder()
 
 	for _, name := range cfg.RulePacks {
@@ -186,8 +165,7 @@ func New(cfg Config) (*Scrubber, error) {
 	}
 
 	s.keyNames = newKeyNameMatcher(cfg.SecretKeyNames)
-	// nil stems yield AlwaysGate, so a non-ASCII configured name is still redacted, just
-	// not prefiltered on bytes that cannot represent it.
+	// nil stems always match, so a non-ASCII configured name is still redacted, just not prefiltered.
 	keyGate, err := prefilter.AddKeywords(s.keyNames.stems)
 	if err != nil {
 		return nil, fmt.Errorf("scrub: secret key names: %w", err)
@@ -208,9 +186,8 @@ func isASCII(s string) bool {
 	return true
 }
 
-// Scrub redacts a payload. Errors returned here are engine errors and fail closed; a
-// line that does not parse is NOT an error but raw-text scanned and counted in
-// LinesRawScanned, which is what lets a torn tail still ship.
+// Scrub redacts a payload; errors fail closed. A line that does not parse is raw-text scanned, not
+// an error, which lets a torn tail still ship.
 func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	started := time.Now()
 	defer func() { s.noteCost(time.Since(started), len(payload)) }()
@@ -266,7 +243,6 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 				out = append(out, body...)
 			}
 		} else {
-			// Syntax errors, torn tails and over-deep records belong to the raw scanner.
 			res.LinesRawScanned++
 			text := string(body)
 			scrubbed := s.scrubRawText(text, &res, &scan)
@@ -296,10 +272,8 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	return res, nil
 }
 
-// scrubRawText scans a payload that is not JSON, or failed to parse, with the pattern
-// packs and structural rewriters only. Heuristics are deliberately absent: with no field
-// path there is no exemption to consult, and the entropy backstop would shred any hex
-// digest or base64 blob in a terminal capture.
+// scrubRawText skips heuristics: with no field path there is no exemption, and the entropy
+// backstop would shred any hex digest or base64 blob in a terminal capture.
 func (s *Scrubber) scrubRawText(text string, res *Result, scan *packs.ValueScan) string {
 	plan := s.planValueWith(text, nil, "", "", scan)
 	res.record(plan.redacted, plan.hits)
@@ -333,12 +307,11 @@ func (p valuePlan) apply(value string) string {
 	return b.String()
 }
 
-// planValue applies the full ladder to one decoded JSON string without building the
-// rewritten value; the walker maps the decoded spans back to the original token.
+// planValue plans one decoded JSON string; the walker maps the spans back to the original token.
 func (s *Scrubber) planValue(value, key string, field FieldPath, family string, scan *packs.ValueScan) valuePlan {
 	entropy := s.entropy
 	if s.exempt.Exempt(family, field) {
-		// Detector-scoped: the field stands down the heuristics and nothing else.
+		// Exemptions turn off the heuristics and nothing else.
 		entropy = nil
 	}
 	return s.planValueWith(value, entropy, key, field, scan)
@@ -360,9 +333,8 @@ func (s *Scrubber) planValueWith(
 		}
 	}
 
-	// A gate that did not fire means the matcher behind it cannot match.
 	seen := s.prefilter.Scan(value)
-	// The shared pass for rules with no keyword to gate on; lazy until one asks.
+	// The shared pass for keyword-less rules; lazy until one asks.
 	scan.Reset(value)
 
 	var patternSpans, heuristicSpans []Span
@@ -376,9 +348,7 @@ func (s *Scrubber) planValueWith(
 		heuristicSpans = entropy.Match(value)
 	}
 
-	// One level of base64, never recursion: work stays bounded per byte. The whole
-	// encoded value goes rather than a patched re-encoding, which would rewrite bytes
-	// the shipper is supposed to preserve.
+	// One level of base64, bounding work; the whole value goes, since re-encoding rewrites bytes.
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 && len(value) >= base64MinLength {
 		if id, hit := s.base64Hit(value, scan); hit {
 			return valuePlan{
@@ -415,9 +385,8 @@ func (s *Scrubber) planValueWith(
 	return plan
 }
 
-// pathUserReplacementSpans finds username occurrences in the detector-rewritten value
-// without constructing it: a detector touching a neighbour contributes the sentinel's
-// boundary byte, and an occurrence a detector swallowed no longer exists.
+// pathUserReplacementSpans matches against the detector-rewritten value without building it: a
+// neighbouring sentinel supplies the boundary byte, and a swallowed occurrence no longer exists.
 func pathUserReplacementSpans(value, username string, blocked []replacementSpan) ([]replacementSpan, int) {
 	if len(username) < 2 || value == "" || !strings.Contains(value, username) {
 		return nil, 0
@@ -463,8 +432,7 @@ func pathUserReplacementSpans(value, username string, blocked []replacementSpan)
 // base64Hit decodes one level and reports the first pattern rule that fires inside.
 func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool) {
 	trimmed := strings.TrimSpace(value)
-	// A byte outside every base64 alphabet means all four decoders would fail, so this
-	// is the same answer without their buffers.
+	// The same answer as all four decoders failing, without their buffers.
 	if !base64Shaped(trimmed) {
 		return "", false
 	}
@@ -478,8 +446,7 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 		}
 		text := string(decoded)
 		seen := s.prefilter.Scan(text)
-		// Safe to reuse the caller's scratch: this answer short-circuits the rest of
-		// the ladder for the value.
+		// Reusing the caller's scratch is safe: this answer ends the ladder for the value.
 		scan.Reset(text)
 		for _, p := range s.patterns {
 			if !seen.Has(p.gate) {
@@ -494,9 +461,7 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 	return "", false
 }
 
-// base64Shaped covers the standard and URL alphabets, padding, and the carriage return
-// the decoders skip. Deliberately permissive: only the rejection has to be sound, since
-// what passes still goes through the real decoder.
+// base64Shaped is deliberately permissive: only rejection must be sound, as the real decoder follows.
 func base64Shaped(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]

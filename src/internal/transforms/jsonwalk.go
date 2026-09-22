@@ -11,8 +11,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// maxDepth bounds recursion in the JSON walk. Lines beyond it fall back to the raw
-// scanner; 256 is 25 times deeper than the deepest observed transcript record.
+// Deeper lines fall back to the raw scanner; 256 is 25x the deepest observed transcript record.
 const maxDepth = 256
 
 var (
@@ -27,9 +26,8 @@ var decoderOptions = []jsontext.Options{
 	jsontext.AllowInvalidUTF8(true),
 }
 
-// jsonWalker validates, decodes, and records source edits in one token pass. The
-// bytes.Buffer lets jsontext borrow directly from the original line rather than copy
-// it into the decoder's streaming buffer.
+// jsonWalker validates, decodes, and records source edits in one token pass. The bytes.Buffer
+// lets jsontext borrow from the original line instead of copying it.
 type jsonWalker struct {
 	s      *Scrubber
 	family string
