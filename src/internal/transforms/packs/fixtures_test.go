@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +41,17 @@ func (r *Rule) MatchScanned(value string) []Span {
 }
 
 type probe struct{ in, want string }
+
+// rep repeats alphabet out to exactly n bytes.
+func rep(alphabet string, n int) string { return strings.Repeat(alphabet, n/len(alphabet)+1)[:n] }
+
+func alnum(n int) string {
+	return rep("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n)
+}
+
+// In tool output, tok must be redacted as one exact span and not must survive.
+func tok(s string) probe { return probe{in: "out: " + s + " done", want: s} }
+func not(s string) probe { return probe{in: "out: " + s + " done"} }
 
 func checkProbes(t *testing.T, r *Rule, probes []probe) {
 	t.Helper()

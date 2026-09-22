@@ -10,8 +10,7 @@ const (
 	purgeArgs = `{"pattern":"PurgePrefix|opts\\.Prefix","path":"/work/api/internal/backends/s3"}`
 )
 
-// A repeat is a call the store recorded once: it attaches and consumes nothing, so it must neither
-// hide a hole nor take another call's bubble.
+// A call the store recorded once attaches and consumes nothing: it hides no hole, takes no bubble.
 func TestRepeatedCalls(t *testing.T) {
 	var farBack []string
 	var farBackRows []storeRow

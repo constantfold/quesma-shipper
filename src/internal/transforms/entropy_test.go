@@ -16,9 +16,6 @@ func refIsHexRun(s string) bool {
 }
 
 func refShannonBits(s string) float64 {
-	if s == "" {
-		return 0
-	}
 	var counts [256]int
 	for i := 0; i < len(s); i++ {
 		counts[s[i]]++
@@ -81,9 +78,7 @@ func TestEntropyScoreIsBitIdenticalToTheWideHistogram(t *testing.T) {
 			counts[uint(entropyClass[s[j]]&^entropyHexBit)]++
 		}
 		require.Equal(t, refShannonBits(s), exactEntropyBits(&counts, float64(len(s))), "candidate %q", s)
-		if got, want := m.clears(s), refClears(m.cfg, s); got != want {
-			t.Fatalf("clears(%q) = %v, want %v (bits %v)", s, got, want, refShannonBits(s))
-		}
+		require.Equal(t, refClears(m.cfg, s), m.clears(s), "clears(%q), bits %v", s, refShannonBits(s))
 	}
 }
 
@@ -113,10 +108,7 @@ func TestEntropyDecisionsHoldAtBoundaryThresholds(t *testing.T) {
 			for j := 0; j < n; j++ {
 				buf = append(buf, pool[j%d])
 			}
-			s := string(buf)
-			if got, want := m.clears(s), refClears(cfg, s); got != want {
-				t.Fatalf("threshold %v: clears(%q) = %v, want %v", th, s, got, want)
-			}
+			require.Equal(t, refClears(cfg, string(buf)), m.clears(string(buf)), "threshold %v: clears(%q)", th, buf)
 		}
 	}
 }
@@ -148,9 +140,7 @@ func TestContainsDelimitedMatchesTheNaiveScan(t *testing.T) {
 			s += bits[rng.Intn(len(bits))]
 		}
 		sub := subs[rng.Intn(len(subs))]
-		if got, want := containsDelimited(s, sub), naive(s, sub); got != want {
-			t.Fatalf("containsDelimited(%q, %q) = %v, want %v", s, sub, got, want)
-		}
+		require.Equal(t, naive(s, sub), containsDelimited(s, sub), "containsDelimited(%q, %q)", s, sub)
 	}
 }
 
@@ -185,14 +175,9 @@ func refMatch(m *entropyMatcher, value string) []Span {
 		if i-start < m.minRun {
 			continue
 		}
-		candidate := value[start:i]
-		if m.skipsCandidate(candidate) {
-			continue
+		if candidate := value[start:i]; !m.skipsCandidate(candidate) && m.clears(candidate) {
+			out = append(out, Span{Start: start, End: i, RuleID: m.RuleID()})
 		}
-		if !m.clears(candidate) {
-			continue
-		}
-		out = append(out, Span{Start: start, End: i, RuleID: m.RuleID()})
 	}
 	return out
 }
@@ -223,13 +208,7 @@ func TestEntropyGridScanFindsTheSameRunsAsTheByteWalk(t *testing.T) {
 				b.WriteString(frag[rng.Intn(len(frag))])
 			}
 			v := b.String()
-			got, want := m.Match(v), refMatch(m, v)
-			require.Len(t, got, len(want))
-			for k := range got {
-				if got[k] != want[k] {
-					t.Fatalf("MinLength %d, %q: span %d = %v, want %v", cfg.MinLength, v, k, got[k], want[k])
-				}
-			}
+			require.Equal(t, refMatch(m, v), m.Match(v), "MinLength %d, %q", cfg.MinLength, v)
 		}
 	}
 }

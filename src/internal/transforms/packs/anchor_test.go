@@ -3,11 +3,11 @@ package packs
 import (
 	"fmt"
 	"math/rand"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,8 +90,7 @@ func TestAnchorLiterals(t *testing.T) {
 
 	seen := map[string]bool{}
 	for _, r := range loadedRules(t, PatternPacks...) {
-		got := describeAnchor(r)
-		assert.Equal(t, want[r.id], got)
+		assert.Equal(t, want[r.id], describeAnchor(r), r.id)
 		seen[r.id] = true
 	}
 	for id := range want {
@@ -148,8 +147,7 @@ func TestAnchorRefusals(t *testing.T) {
 	for _, tc := range cases {
 		scan, err := newAnchorScan(tc.pattern, tc.keywords, tc.sweep)
 		require.NoError(t, err)
-		got := describeAnchor(&Rule{anchor: scan})
-		assert.Equalf(t, tc.want, got, "%s: anchor is %s, want %s", tc.pattern, got, tc.want)
+		assert.Equal(t, tc.want, describeAnchor(&Rule{anchor: scan}), tc.pattern)
 	}
 }
 
@@ -184,8 +182,7 @@ var anchorTraps = []string{
 	"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
 }
 
-// For every anchored rule, the literal scan and the plain sweep return the same spans, over an
-// alphabet of near-matches, where the two paths could differ.
+// For every anchored rule, literal scan and plain sweep agree over an alphabet of near-matches.
 func TestAnchorMatchesSweep(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260817))
 	rounds := 20000
@@ -202,9 +199,7 @@ func TestAnchorMatchesSweep(t *testing.T) {
 			values = append(values, buildFuzzValue(rng, alphabet))
 		}
 		for _, value := range values {
-			if got, want := r.matchAnchored(value), r.matchSweep(value); !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
-			}
+			require.Equal(t, r.matchSweep(value), r.matchAnchored(value), "%s: %q", r.id, value)
 		}
 	}
 }
@@ -228,17 +223,14 @@ func fuzzAlphabet(r *Rule) []string {
 	return pool
 }
 
+// swapCase flips ASCII case; the literals are ASCII.
 func swapCase(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		switch {
-		case 'a' <= c && c <= 'z':
-			b[i] = c - ('a' - 'A')
-		case 'A' <= c && c <= 'Z':
-			b[i] = c + ('a' - 'A')
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLower(r) {
+			return unicode.ToUpper(r)
 		}
-	}
-	return string(b)
+		return unicode.ToLower(r)
+	}, s)
 }
 
 func buildFuzzValue(rng *rand.Rand, pool []string) string {
@@ -250,26 +242,18 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 	return b.String()
 }
 
-// The shape that made anchoring quadratic: every line a PEM header, none a footer. The bound is
-// loose on purpose: a shape test, not a throughput budget.
+// Every line a PEM header, none a footer, made anchoring quadratic; the bound tests shape, not throughput.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	pem := ruleByID(t, CloudKeys, "private-key-block")
-	if pem.anchor != nil {
-		t.Fatal("private-key-block is anchored: its unbounded body makes a failed " +
-			"candidate cost the whole value, which is why the corpus declares \"sweep\"")
-	}
+	require.Nil(t, pem.anchor, "an unbounded body makes a failed anchored candidate cost the whole value, hence \"sweep\"")
 
-	flood := func(headers int) string {
+	timeFlood := func(headers int) time.Duration {
 		var b strings.Builder
 		for i := 0; i < headers; i++ {
 			fmt.Fprintf(&b, "src/testdata/key%d.pem:1:-----BEGIN PRIVATE KEY-----\n", i)
 		}
-		return b.String()
-	}
-	timeFlood := func(headers int) time.Duration {
-		v := flood(headers)
 		start := time.Now()
-		require.Len(t, pem.MatchScanned(v), 0)
+		require.Empty(t, pem.MatchScanned(b.String()))
 		return time.Since(start)
 	}
 

@@ -19,20 +19,20 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 	benchmarkSynthetic(b, syntheticTranscript(1<<20), syntheticBigValue(8<<20, 20260817, randCommandOutput))
 }
 
-func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
+func benchScrubber(b *testing.B) *Scrubber {
 	cfg := DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := New(cfg)
 	require.NoError(b, err)
+	return s
+}
 
+func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
+	s := benchScrubber(b)
 	cases := []struct {
 		name    string
 		payload []byte
-	}{
-		{"transcript-1MiB", transcript},
-		{"bigvalue-8MiB", bigValue},
-	}
-
+	}{{"transcript-1MiB", transcript}, {"bigvalue-8MiB", bigValue}}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			b.SetBytes(int64(len(tc.payload)))
@@ -47,19 +47,31 @@ func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
 	}
 }
 
-// syntheticTranscript builds JSONL lines shaped like a Claude Code transcript, with planted
-// secrets at roughly the density real transcripts show.
-func syntheticTranscript(size int) []byte {
-	rng := rand.New(rand.NewSource(20260816))
+// syntheticJSONL encodes line(rng, i) until size bytes, from a fixed seed.
+func syntheticJSONL(size int, seed int64, line func(rng *rand.Rand, i int) map[string]any) []byte {
+	rng := rand.New(rand.NewSource(seed))
 	var b strings.Builder
 	b.Grow(size + 4096)
 	encoder := json.NewEncoder(&b)
-
 	for i := 0; b.Len() < size; i++ {
-		var line map[string]any
+		if err := encoder.Encode(line(rng, i)); err != nil {
+			panic(err)
+		}
+	}
+	return []byte(b.String())
+}
+
+// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
+func plantAWSSecret(rng *rand.Rand, line map[string]any) {
+	line["message"].(map[string]any)["content"] = "export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
+}
+
+// syntheticTranscript is shaped like a Claude Code transcript, with planted secrets at roughly real density.
+func syntheticTranscript(size int) []byte {
+	return syntheticJSONL(size, 20260816, func(rng *rand.Rand, i int) map[string]any {
 		switch i % 5 {
 		case 0, 2:
-			line = map[string]any{
+			return map[string]any{
 				"parentUuid":  randUUID(rng),
 				"isSidechain": false,
 				"userType":    "external",
@@ -78,9 +90,9 @@ func syntheticTranscript(size int) []byte {
 				"timestamp": "2026-08-16T09:12:44.117Z",
 			}
 		case 1, 3:
-			line = syntheticToolResult(rng, randCommandOutput)
+			return syntheticToolResult(rng, randCommandOutput)
 		default:
-			line = map[string]any{
+			line := map[string]any{
 				"parentUuid": randUUID(rng),
 				"cwd":        "/Users/devuser/git/trajectory-shipper",
 				"sessionId":  randUUID(rng),
@@ -90,20 +102,14 @@ func syntheticTranscript(size int) []byte {
 				"timestamp":  "2026-08-16T09:12:46.551Z",
 			}
 			if i%37 == 0 {
-				// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
-				line["message"].(map[string]any)["content"] =
-					"export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
+				plantAWSSecret(rng, line)
 			}
+			return line
 		}
-		if err := encoder.Encode(line); err != nil {
-			panic(err)
-		}
-	}
-	return []byte(b.String())
+	})
 }
 
-// syntheticBigValue is one record whose tool result holds the whole payload: the shape a
-// spilled build log or a big file read takes.
+// syntheticBigValue is one record whose tool result holds the payload, as a spilled build log does.
 func syntheticBigValue(size int, seed int64, output func(*rand.Rand, int) string) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	body := output(rng, size)
@@ -148,14 +154,12 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 	}
 }
 
-// BenchmarkScrubSyntheticAt adds '@', which the tracked series lacks, so the email rule, the most
-// expensive pattern on real data, fires.
+// BenchmarkScrubSyntheticAt adds '@', which the tracked series lacks, so the costly email rule fires.
 func BenchmarkScrubSyntheticAt(b *testing.B) {
 	benchmarkSynthetic(b, syntheticTranscriptAt(1<<20), syntheticBigValue(8<<20, 20260819, randCommandOutputAt))
 }
 
-// randCommandOutputAt carries the '@' shapes tool output has, mostly NOT emails: the rule's cost is
-// paid on every '@' and recovered only on the few that complete a match.
+// randCommandOutputAt carries tool output's '@' shapes, mostly NOT emails, which cost the rule the most.
 func randCommandOutputAt(rng *rand.Rand, n int) string {
 	var sb strings.Builder
 	sb.Grow(n + 128)
@@ -184,22 +188,13 @@ func randCommandOutputAt(rng *rand.Rand, n int) string {
 }
 
 func syntheticTranscriptAt(size int) []byte {
-	rng := rand.New(rand.NewSource(20260818))
-	var b strings.Builder
-	b.Grow(size + 4096)
-	encoder := json.NewEncoder(&b)
-
-	for i := 0; b.Len() < size; i++ {
+	return syntheticJSONL(size, 20260818, func(rng *rand.Rand, i int) map[string]any {
 		line := syntheticToolResult(rng, randCommandOutputAt)
 		if i%37 == 0 {
-			line["message"].(map[string]any)["content"] =
-				"export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
+			plantAWSSecret(rng, line)
 		}
-		if err := encoder.Encode(line); err != nil {
-			panic(err)
-		}
-	}
-	return []byte(b.String())
+		return line
+	})
 }
 
 const hexDigits = "0123456789abcdef"
@@ -236,8 +231,7 @@ func randProse(rng *rand.Rand, n int) string {
 	return sb.String()
 }
 
-// randCommandOutput imitates tool output: paths, hex digests, quoted fragments and the
-// occasional long token, which is what the candidate scanner actually meets.
+// randCommandOutput imitates tool output: paths, hex digests, quoted fragments, the odd long token.
 func randCommandOutput(rng *rand.Rand, n int) string {
 	var sb strings.Builder
 	sb.Grow(n + 128)
@@ -307,10 +301,7 @@ func BenchmarkScrubRealData(b *testing.B) {
 	require.NotEqualf(b, 0, total, "no .jsonl files under %s", root)
 	b.Logf("real corpus: %d files, %.1f MiB", len(files), float64(total)/(1<<20))
 
-	cfg := DefaultConfig()
-	cfg.Username = "devuser"
-	s, err := New(cfg)
-	require.NoError(b, err)
+	s := benchScrubber(b)
 	hint := Hint{Family: "claude-code", JSONL: true}
 	b.SetBytes(int64(total))
 	b.ReportAllocs()

@@ -65,11 +65,8 @@ const lsTool = `"toolFormerData":{"toolCallId":"call_abc123","name":"run_termina
 func lsBubble(fields string) storeRow { return bubbleRow("b3", `{"type":2,`+fields+`}`) }
 
 func unit(body string) transforms.RawUnit {
-	return transforms.RawUnit{
-		NativePath: "/Users/jane/.cursor/projects/api/agent-transcripts/" + conv + ".jsonl",
-		Content:    []byte(body),
-		SourceHash: transforms.Hash([]byte(body)),
-	}
+	path := "/Users/jane/.cursor/projects/api/agent-transcripts/" + conv + ".jsonl"
+	return transforms.RawUnit{NativePath: path, Content: []byte(body), SourceHash: transforms.Hash([]byte(body))}
 }
 
 func run(t *testing.T, rows []storeRow, body string) transforms.EnrichResult {
@@ -78,11 +75,8 @@ func run(t *testing.T, rows []storeRow, body string) transforms.EnrichResult {
 }
 
 func enrichAt(t *testing.T, dbPath, body string) transforms.EnrichResult {
-	return cursorjoin.New().Enrich(transforms.Input{
-		Units:      []transforms.RawUnit{unit(body)},
-		DBPath:     dbPath,
-		ScratchDir: filepath.Join(t.TempDir(), "scratch"),
-	})
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	return cursorjoin.New().Enrich(transforms.Input{Units: []transforms.RawUnit{unit(body)}, DBPath: dbPath, ScratchDir: scratch})
 }
 
 // decode reads the derived JSONL back.
@@ -122,13 +116,10 @@ func prose(id string, typ int, text string) storeRow {
 type tool struct{ id, name, rawArgs, params, status, result string }
 
 func (tl tool) row() storeRow {
-	body, _ := json.Marshal(map[string]any{
-		"type": 2, "capabilityType": 15,
-		"toolFormerData": map[string]string{
-			"toolCallId": "call_" + tl.id, "name": tl.name, "status": cmp.Or(tl.status, "completed"),
-			"rawArgs": tl.rawArgs, "params": tl.params, "result": tl.result,
-		},
-	})
+	body, _ := json.Marshal(map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": map[string]string{
+		"toolCallId": "call_" + tl.id, "name": tl.name, "status": cmp.Or(tl.status, "completed"),
+		"rawArgs": tl.rawArgs, "params": tl.params, "result": tl.result,
+	}})
 	return bubbleRow(tl.id, string(body))
 }
 
@@ -161,8 +152,7 @@ func successfulObject(t *testing.T, res transforms.EnrichResult) transforms.Deri
 	return res.Objects[0]
 }
 
-// joinCase is one conversation. A query prepends that user turn and its bubble b1; rows replace
-// conversation(bubbles) when set.
+// joinCase is one conversation; a query prepends that turn and bubble b1, and rows replace the bubbles.
 type joinCase struct {
 	name       string
 	query      string
@@ -194,9 +184,7 @@ func runJoinCases(t *testing.T, cases []joinCase) {
 				assert.Contains(t, strings.Join(res.Notes, " "), "raw transcript ships", "the alarm must say the raw file is unaffected")
 				return
 			}
-			for _, n := range res.Notes {
-				require.NotContains(t, n, "did not decode")
-			}
+			require.NotContains(t, strings.Join(res.Notes, " "), "did not decode")
 			d := successfulObject(t, res)
 			lines := decode(t, d.Payload)
 			for i, ids := range tc.want {

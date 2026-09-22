@@ -6,8 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The key-name rule is the only backstop for a shapeless credential. The dangerous half is the
-// lookalikes: firing on "token", "id" or "key" anywhere would take usage figures and session ids.
+// The key-name rule backstops shapeless credentials; its lookalikes would take usage figures and session ids.
 func TestFieldNamesThatOnlyLookLikeCredentials(t *testing.T) {
 	m := newKeyNameMatcher(DefaultSecretKeyNames())
 	for _, key := range []string{

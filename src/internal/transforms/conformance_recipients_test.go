@@ -1,7 +1,6 @@
 package transforms
 
 import (
-	"slices"
 	"testing"
 
 	"filippo.io/age"
@@ -37,28 +36,27 @@ func TestConformanceRecipients(t *testing.T) {
 	// key_id_order: the manifest records the set in seal argument order.
 	m, _, err := Open(obj, install)
 	require.NoError(t, err)
-	if v.Scheme != "age" || m.Encryption == nil || m.Encryption.Scheme != v.Scheme {
-		t.Fatalf("scheme: vector says %q, manifest says %+v", v.Scheme, m.Encryption)
-	}
+	require.Equal(t, "age", v.Scheme)
+	require.NotNil(t, m.Encryption)
+	require.Equal(t, v.Scheme, m.Encryption.Scheme)
 	wantIDs := []string{install.Recipient().String(), org.Recipient().String(), escrow.Recipient().String()}
-	assert.Truef(t, slices.Equal(m.Encryption.RecipientKeyIDs, wantIDs), "recipient_key_ids:\n got %v\nwant %v (seal argument order)", m.Encryption.RecipientKeyIDs, wantIDs)
+	assert.Equal(t, wantIDs, m.Encryption.RecipientKeyIDs, "recipient_key_ids in seal argument order")
 
 	// any_single_identity_suffices: the org reader and the escrow key each open the object alone.
 	require.True(t, v.AnySingleIdentitySuffices, "the vector must claim any-single-identity: age's envelope construction guarantees it")
 	for name, id := range map[string]*age.X25519Identity{"org": org, "escrow": escrow} {
-		if _, got, err := Open(obj, id); err != nil {
-			t.Errorf("the %s identity alone must open the object: %v", name, err)
-		} else if string(got) != string(payload) {
-			t.Errorf("the %s identity read a different payload", name)
+		_, got, err := Open(obj, id)
+		if assert.NoError(t, err, "the %s identity alone must open the object", name) {
+			assert.Equal(t, string(payload), string(got), "the %s identity read a different payload", name)
 		}
 	}
 
 	// And an identity outside the set must not.
-	_, _, openErr := Open(obj, identity(t))
-	assert.Error(t, openErr, "an identity that is not a recipient opened the object")
+	_, _, err = Open(obj, identity(t))
+	assert.Error(t, err, "an identity that is not a recipient opened the object")
 
 	// min_recipients: encryption is not optional, so zero recipients is a refusal.
-	require.Equalf(t, 1, v.MinRecipients, "min_recipients drifted: %d", v.MinRecipients)
-	_, _, sealErr := Seal(manifest(), payload, nil)
-	assert.Error(t, sealErr, "sealing to no recipients must be refused")
+	require.Equal(t, 1, v.MinRecipients, "min_recipients drifted")
+	_, _, err = Seal(manifest(), payload, nil)
+	assert.Error(t, err, "sealing to no recipients must be refused")
 }

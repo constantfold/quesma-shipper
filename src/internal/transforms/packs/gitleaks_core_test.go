@@ -1,18 +1,9 @@
 package packs
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-// github-pat follows GitHub's published format: a documented prefix, then at least 36 alphanumerics
-// and no fixed upper length, since GitHub states token lengths change.
+// github-pat follows GitHub's format: a documented prefix, 36+ alphanumerics, no upper bound (lengths change).
 func TestGitHubPATFollowsDocumentedFormat(t *testing.T) {
-	alnum := func(n int) string {
-		return strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n/62+1)[:n]
-	}
-	tok := func(s string) probe { return probe{"out: " + s + " done", s} }
-	not := func(s string) probe { return probe{in: "out: " + s + " done"} }
 	probes := []probe{
 		tok("ghp_" + alnum(36)), tok("gho_" + alnum(36)), tok("ghu_" + alnum(36)),
 		tok("ghs_" + alnum(36)), tok("ghr_" + alnum(36)),

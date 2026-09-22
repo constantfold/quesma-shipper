@@ -2,34 +2,29 @@ package transforms
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// The seeded corpus DefaultEntropyConfig promises: benign paths draw ZERO entropy hits (an eaten path
-// is a repository name lost downstream), git SHAs a small budget (uniform 40-hex averages ~3.73
-// bits/char against 3.8), and planted secrets 100% recall. The fixed seed makes a retune a diff.
+// DefaultEntropyConfig's promise on a seeded corpus: benign paths draw ZERO entropy hits, git SHAs a small
+// budget (40-hex averages ~3.73 bits/char against 3.8), planted secrets 100% recall. A retune is a diff.
 func TestSeededCorpusCalibration(t *testing.T) {
 	s := newScrubber(t)
 	rng := &xorshift{state: 0x9E3779B97F4A7C15}
 
-	var corpus []string
-
-	// --- population 1: benign, strict zero -----------------------------------
+	// Population 1: benign, strict zero.
 	benign := generateBenignLines(rng, 400)
-	corpus = append(corpus, benign...)
+	corpus := slices.Clone(benign)
 	for i, line := range benign {
 		res := scrubJSONL(t, s, "claude-code", line+"\n")
 		assert.Equal(t, 0, res.RuleHits["generic-entropy"])
 		assert.NotContainsf(t, string(res.Out), "__REDACTED:", "benign line %d was redacted by %v:\n in %s\nout %s", i, res.RuleHits, line, res.Out)
 	}
 
-	// --- population 2: git SHAs, budgeted ------------------------------------
-	// With this seed exactly 7 of 50 fire, a property of the hex threshold alone, so a retune
-	// announces itself as a count change rather than a surprise in fleet density.
+	// Population 2: git SHAs. With this seed exactly 7 of 50 fire, so a hex retune shows as a count change.
 	const shaLines = 50
 	const shaFireWithThisSeed = 7
 	fired := 0
@@ -44,13 +39,9 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	}
 	assert.Equalf(t, shaFireWithThisSeed, fired, "%d of %d random SHAs drew entropy hits, calibrated count is %d — the hex threshold moved; re-measure and update this note", fired, shaLines, shaFireWithThisSeed)
 
-	// --- population 3: planted secrets, 100%% recall --------------------------
-	planted := []struct {
-		name   string
-		text   string
-		secret string
-		rule   string // empty when overlapping rules make attribution ambiguous
-	}{
+	// Population 3: planted secrets, 100% recall.
+	// rule is empty when overlapping rules make attribution ambiguous.
+	planted := []struct{ name, text, secret, rule string }{
 		{"aws access key id", "run with AKIAIOSFODNN7EXAMPLE as the principal", "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"},
 		{"github pat", "push using ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"},
 		{"anthropic key", "export it: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"},
@@ -70,23 +61,18 @@ func TestSeededCorpusCalibration(t *testing.T) {
 			corpus = append(corpus, line)
 			res := scrubJSONL(t, s, "claude-code", line+"\n")
 			assert.NotContainsf(t, string(res.Out), secret, "planted secret survived:\n in %s\nout %s", line, res.Out)
-			if p.rule != "" && res.RuleHits[p.rule] == 0 {
-				t.Errorf("expected %q to claim the hit, ledger was %v", p.rule, res.RuleHits)
+			if p.rule != "" {
+				assert.NotZero(t, res.RuleHits[p.rule], "expected %q to claim the hit, ledger was %v", p.rule, res.RuleHits)
 			}
 		})
 	}
 
-	// --- the alarm ------------------------------------------------------------
-	// Whole-corpus density is the fleet signal; the ceiling catches a rule that starts eating content.
-	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
-	if d := res.Density(); d >= 0.05 {
-		t.Errorf("whole-corpus redaction density %.4f crossed the 0.05 alarm — a rule is eating content", d)
-	}
+	// The alarm: whole-corpus density is the fleet signal, and the ceiling catches a rule eating content.
+	res := scrubJSONL(t, s, "claude-code", strings.Join(corpus, "\n")+"\n")
+	assert.Less(t, res.Density(), 0.05, "whole-corpus redaction density crossed the alarm — a rule is eating content")
 }
 
-// generateBenignLines builds path-heavy records in the shapes that fired while "/" was in the
-// entropy alphabet, rotating between an exempt carrier (cwd) and unexempt ones.
+// generateBenignLines builds path records shaped like the "/"-era false positives, in exempt and unexempt fields.
 func generateBenignLines(rng *xorshift, n int) []string {
 	segs := []string{
 		"Work2026", "SampleOrg", "blink-UI", "webFrontend", "GolandProjects",

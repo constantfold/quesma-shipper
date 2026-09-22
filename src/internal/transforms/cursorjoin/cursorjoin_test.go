@@ -48,14 +48,11 @@ func TestTheJoinCarriesTheFieldsTheTranscriptLacks(t *testing.T) {
 	again := successfulObject(t, run(t, fullRows(), transcript))
 	assert.Equal(t, string(d.Payload), string(again.Payload))
 	assert.Equal(t, d.OutputHash, again.OutputHash)
-}
 
-// A DB-side-only update: the transcript is byte-identical, so only the output hash can signal it.
-func TestAChangedStoreChangesTheOutputHash(t *testing.T) {
-	before := successfulObject(t, run(t, fullRows(), transcript))
+	// A DB-side-only update: the transcript is byte-identical, so only the output hash can signal it.
 	after := successfulObject(t, run(t, lsRows(`"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
 		"status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"total 24\nA LATE RESULT ARRIVED"}`), transcript))
-	assert.NotEqual(t, after.OutputHash, before.OutputHash, "a DB-side-only change would never ship")
+	assert.NotEqual(t, d.OutputHash, after.OutputHash, "a DB-side-only change would never ship")
 	assert.Contains(t, string(after.Payload), "A LATE RESULT ARRIVED")
 }
 
