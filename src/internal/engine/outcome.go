@@ -7,7 +7,7 @@ import (
 
 // fold is the only place a result touches the report, store, audit log and progress stream.
 func (p *sourcePass) fold(r fileResult) {
-	p.applyIntent(&r)
+	p.store.applyIntent(&r)
 	// Only the first refusal or unavailable verdict is counted, or rep.Failed becomes a function
 	// of GOMAXPROCS. The duplicates' intents still apply: one may have shipped before the refusal.
 	if (r.outcome.Fatal && p.fatal) || (r.unavailable && p.uploadHalted) {
@@ -73,28 +73,6 @@ func (p *sourcePass) fold(r fileResult) {
 		ConfigVersion:    p.o.Plan.ConfigVersion,
 		Reason:           r.outcome.Reason,
 	})
-}
-
-// applyIntent makes a result durable. A failed commit rewrites the outcome BEFORE fold counts it,
-// so "shipped but the record was lost" reads as failed.
-func (p *sourcePass) applyIntent(r *fileResult) {
-	if r.intent.kind == intentNone {
-		return
-	}
-	err := p.store.Commit(r.intent.key, r.intent.fp)
-	if err == nil {
-		return
-	}
-	switch r.intent.kind {
-	case intentRefresh:
-		r.outcome.Decision = auditlog.DecisionFailed
-		r.outcome.Reason = err.Error()
-	case intentShipped:
-		r.outcome.Decision = auditlog.DecisionFailed
-		r.outcome.Reason = "upload succeeded but commit failed: " + err.Error()
-	case intentBackoff:
-		r.outcome.Reason += " (and the backoff could not be recorded: " + err.Error() + ")"
-	}
 }
 
 // stageUpload puts one sealed object into the authorization accumulator, which sends the group when

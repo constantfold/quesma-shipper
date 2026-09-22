@@ -103,7 +103,7 @@ var (
 func (o Options) sendBatch(ctx context.Context, items []fileResult) []fileResult {
 	outcomes := o.authorizeAndUpload(ctx, items)
 	for i, it := range items {
-		items[i] = o.applyUploadOutcome(it, outcomes[i])
+		items[i] = applyUploadOutcome(it, outcomes[i])
 	}
 	return items
 }
@@ -181,7 +181,7 @@ const alreadyPresentReason = "no bytes sent: the control plane answered that the
 
 // applyUploadOutcome is the verdict-to-decision map. No park branch: a failed upload persists
 // nothing, so the next run re-prepares the same key and a backoff would only delay recovery.
-func (o Options) applyUploadOutcome(it fileResult, oc error) (r fileResult) {
+func applyUploadOutcome(it fileResult, oc error) (r fileResult) {
 	r = it
 	r.pending = nil
 	out := &r.outcome
@@ -191,7 +191,10 @@ func (o Options) applyUploadOutcome(it fileResult, oc error) (r fileResult) {
 	if oc != nil && !present {
 		out.Decision = auditlog.DecisionFailed
 		out.Reason = oc.Error()
-		out.Fatal = errors.Is(oc, formats.ErrCredentialsRefused)
+		// Derived refusals stop the enricher group without setting the raw pass’s per-file latch.
+		if !out.Derived {
+			out.Fatal = errors.Is(oc, formats.ErrCredentialsRefused)
+		}
 		r.unavailable = errors.Is(oc, ErrUploadUnavailable)
 		return r
 	}

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package app
 
@@ -9,7 +9,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
-// PostInstallPackage registers the program the Linux installer has just installed.
+// PostInstallPackage registers the installed program with the per-user supervisor.
 func PostInstallPackage() (string, error) {
 	eff, paths, err := ResolveEffective()
 	if err != nil {

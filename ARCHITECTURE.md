@@ -68,7 +68,7 @@ The main files name the decisions they own:
 | Configuration order, merge, validation, roots | `internal/config/{resolve,merge,validate,roots}.go` |
 | Discovery, traversal, lazy reads, format probes | `internal/sources/{gather,walk,candidate,sniff_file}.go` |
 | Admission and concurrency | `internal/engine/pool.go` |
-| Ordered outcomes and durable write intents | `internal/engine/outcome.go` |
+| Ordered outcomes and durable write intents | `internal/engine/{outcome,commitbuffer}.go` |
 | State ownership and disk representation | `internal/engine/{state,state_wire}.go` |
 | Scrub orchestration and replacement plans | `internal/transforms/{scrub,redaction}.go` |
 | Cursor alignment, evidence ranking, argument comparison | `internal/transforms/cursorjoin/{align,match,args}.go` |

@@ -159,10 +159,10 @@ func TestBackoffCommitFailurePreservesReadError(t *testing.T) {
 	defer store.Close()
 	// A directory at the document path makes replacement fail even for a privileged test user.
 	require.NoError(t, os.Mkdir(filepath.Join(dir, FileName), 0o700))
-	p := &sourcePass{store: newCommitBuffer(store, 1)}
+	buffer := newCommitBuffer(store, 1)
 	var result fileResult
 	failAndBackOff(Options{Now: time.Now}, &result, Key{SourceID: "s", NativePath: "/session"}, Fingerprint{}, "read denied")
-	p.applyIntent(&result)
+	buffer.applyIntent(&result)
 	assert.Equal(t, "parked", string(result.outcome.Decision))
 	assert.Contains(t, result.outcome.Reason, "read denied (and the backoff could not be recorded: ")
 }

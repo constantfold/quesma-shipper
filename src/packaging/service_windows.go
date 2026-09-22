@@ -5,21 +5,9 @@ package packaging
 import (
 	"context"
 	"errors"
-	"time"
 
-	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 	windowspkg "github.com/QuesmaOrg/quesma-shipper/packaging/windows"
 )
-
-type ServiceSpec = common.Spec
-
-func NewServiceSpec(stateDir string, stopTimeout, tick time.Duration) (ServiceSpec, error) {
-	exe, err := common.CurrentExecutable()
-	if err != nil {
-		return ServiceSpec{}, err
-	}
-	return common.ServiceSpecFor(exe, stateDir, stopTimeout, tick)
-}
 
 func InstallService(spec ServiceSpec) (ServiceStatus, error) { return windowspkg.InstallService(spec) }
 func UninstallService() (ServiceKind, error) {

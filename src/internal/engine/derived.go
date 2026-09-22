@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -123,7 +122,9 @@ func (o Options) shipDerivedGroups(
 			outcomes := o.authorizeAndUpload(ctx, items)
 			for i, g := range items {
 				idx := g.idx
-				fos[idx] = o.commitDerived(store, g.outcome, g.pending, outcomes[i])
+				result := applyUploadOutcome(g, outcomes[i])
+				store.applyIntent(&result)
+				fos[idx] = result.outcome
 				if fos[idx].Decision == auditlog.DecisionShipped {
 					shipped++
 				}
@@ -154,28 +155,6 @@ func (o Options) shipDerivedGroups(
 
 	out.Files = append(out.Files, fos...)
 	return shipped, halted
-}
-
-// commitDerived turns one object's verdict into its outcome, committing only after the PUT.
-func (o Options) commitDerived(
-	store *commitBuffer, fo FileOutcome, pending *pendingPut, oc error,
-) FileOutcome {
-	present := errors.Is(oc, ErrAlreadyPresent)
-	if oc != nil && !present {
-		fo.Decision = auditlog.DecisionFailed
-		fo.Reason = oc.Error()
-		return fo
-	}
-	if err := store.Commit(pending.key, pending.next); err != nil {
-		fo.Decision = auditlog.DecisionFailed
-		fo.Reason = "derived upload succeeded but commit failed: " + err.Error()
-		return fo
-	}
-	fo.Decision = auditlog.DecisionShipped
-	if present {
-		fo.Reason = alreadyPresentReason
-	}
-	return fo
 }
 
 // prepareDerived is the derived object's compute leg: change detection, scrub, key, manifest, seal.

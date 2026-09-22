@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
+
 // commitBuffer batches fingerprint commits: every Commit re-encodes, validates and fsyncs every
 // entry, so committing per file costs O(files x entries). An unflushed commit re-ships that file
 // onto the same key, which bounds a crash to the flush limit rather than to one file.
@@ -87,4 +89,29 @@ func (b *commitBuffer) DropVanished(sourceID string, live map[string]bool) (int,
 		return 0, err
 	}
 	return b.store.DropVanished(sourceID, live)
+}
+
+// applyIntent makes a result durable. A failed commit rewrites the outcome BEFORE fold counts it,
+// so "shipped but the record was lost" reads as failed.
+func (b *commitBuffer) applyIntent(r *fileResult) {
+	if r.intent.kind == intentNone {
+		return
+	}
+	err := b.Commit(r.intent.key, r.intent.fp)
+	if err == nil {
+		return
+	}
+	switch r.intent.kind {
+	case intentRefresh:
+		r.outcome.Decision = auditlog.DecisionFailed
+		r.outcome.Reason = err.Error()
+	case intentShipped:
+		r.outcome.Decision = auditlog.DecisionFailed
+		r.outcome.Reason = "upload succeeded but commit failed: " + err.Error()
+		if r.outcome.Derived {
+			r.outcome.Reason = "derived " + r.outcome.Reason
+		}
+	case intentBackoff:
+		r.outcome.Reason += " (and the backoff could not be recorded: " + err.Error() + ")"
+	}
 }
