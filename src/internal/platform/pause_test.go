@@ -15,9 +15,7 @@ import (
 )
 
 func TestPauseFlagLifecycle(t *testing.T) {
-	for _, tc := range []struct {
-		name, subdir, reason string
-	}{
+	for _, tc := range []struct{ name, subdir, reason string }{
 		{"round trip", "", "laptop going to a client site"},
 		{"before init", "not/created/yet", ""},
 	} {
@@ -76,8 +74,6 @@ func TestPauseCannotSeeConfigOrBackend(t *testing.T) {
 		"net/http",
 	}
 	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		for _, f := range forbidden {
-			assert.NotEqual(t, dep, f)
-		}
+		assert.NotContains(t, forbidden, dep)
 	}
 }

@@ -21,13 +21,9 @@ func TestTheLogRotatesInsteadOfGrowingForever(t *testing.T) {
 
 	// Enough entries to pass the threshold; sanitize truncates Reason, so padding reaches disk far smaller.
 	pad := strings.Repeat("x", 512)
-	for i := 0; i < 40000; i++ {
-		require.NoError(t, l.Append(auditlog.Entry{
-			Decision: auditlog.DecisionUnchanged,
-			SourceID: "claude-code-transcripts",
-			File:     fmt.Sprintf("projects/p/%04d.jsonl", i),
-			Reason:   pad,
-		}))
+	for i := range 40000 {
+		require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionUnchanged, SourceID: "claude-code-transcripts",
+			File: fmt.Sprintf("projects/p/%04d.jsonl", i), Reason: pad}))
 	}
 
 	current := size(t, filepath.Join(dir, auditlog.FileName))

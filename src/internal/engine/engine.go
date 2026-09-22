@@ -107,7 +107,6 @@ func summarize(rep *Report) {
 			}
 		}
 	}
-	rep.MedianFileBytes = 0
 	if len(shippedIn) > 0 {
 		slices.Sort(shippedIn)
 		rep.MedianFileBytes = shippedIn[len(shippedIn)/2]

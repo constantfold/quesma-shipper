@@ -81,10 +81,7 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 	f.writeTranscripts("p/c%02d.jsonl", 8)
 	slow := &slowRecipient{inner: f.unit.Recipient()}
 
-	rep := f.run(func(o *engine.Options) {
-		o.Workers = 4
-		o.Recipients = []age.Recipient{slow}
-	})
+	rep := f.run(workers(4, 0), func(o *engine.Options) { o.Recipients = []age.Recipient{slow} })
 
 	require.Equalf(t, 8, rep.Shipped, "want 8 shipped, got %+v", rep)
 	assert.Truef(t, slow.max() >= 2, "peak concurrent seals %d; the pass ran sequentially", slow.max())
@@ -98,11 +95,7 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	f.plan.MaxFilesPerRun = files
 	port := &slowPort{fakePort: f.port, barrier: make(chan struct{})}
 
-	rep := f.run(func(o *engine.Options) {
-		o.Workers = 2
-		o.UploadWorkers = 64
-		o.Upload = port
-	})
+	rep := f.run(workers(2, 64), func(o *engine.Options) { o.Upload = port })
 
 	require.Equalf(t, files, rep.Shipped, "want %d shipped, got %+v", files, rep)
 	assert.Truef(t, port.max() >= 2, "peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.max())

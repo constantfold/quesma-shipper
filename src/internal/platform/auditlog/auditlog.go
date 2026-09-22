@@ -17,7 +17,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// FileName is the log's name inside the state directory.
 const FileName = "audit.log"
 
 // Decision is aliased from the contract layer: one spelling for the engine, the CLI and this log.
@@ -31,7 +30,6 @@ const (
 	DecisionFailed    = formats.DecisionFailed
 )
 
-// Entry is one log line.
 type Entry struct {
 	At       time.Time `json:"at"`
 	RunID    string    `json:"run_id,omitempty"`
@@ -54,7 +52,6 @@ type Entry struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// Log appends entries to a file.
 type Log struct {
 	mu    sync.Mutex
 	path  string
@@ -125,34 +122,28 @@ func sanitize(e Entry) Entry {
 	return e
 }
 
-// Tail returns the last n entries, newest last.
+// Tail returns the last n entries, newest last, reading from the end (see rotate.go).
 func Tail(path string, n int) ([]Entry, error) {
-	// From the END. See rotate.go.
 	raw, err := readTail(path, n)
-	if err != nil {
-		// errors.Is rather than os.IsNotExist: safeio wraps, and os.IsNotExist does not unwrap.
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
 		return nil, fmt.Errorf("auditlog: read: %w", err)
 	}
 
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
-	}
 	if n > 0 && len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
 
 	out := make([]Entry, 0, len(lines))
 	for _, line := range lines {
+		// A malformed line is skipped: a torn last line from a crash must not make the whole log unreadable.
 		var e Entry
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			// A malformed line is skipped: a torn last line from a crash must not make the whole log unreadable.
-			continue
+		if json.Unmarshal([]byte(line), &e) == nil {
+			out = append(out, e)
 		}
-		out = append(out, e)
 	}
 	return out, nil
 }

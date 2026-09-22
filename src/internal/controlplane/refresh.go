@@ -72,10 +72,7 @@ func fetch(ctx context.Context, o RefreshOptions) (Remote, error) {
 	if err != nil {
 		return Remote{}, err
 	}
-	doc, resp, err := c.FetchConfig(ctx, ConfigRequest{
-		AgentVersion:   platform.Current().String(),
-		ConfigVersions: config.AcceptedConfigVersions,
-	})
+	doc, resp, err := c.FetchConfig(ctx, ConfigRequest{AgentVersion: platform.Current().String(), ConfigVersions: config.AcceptedConfigVersions})
 	if err != nil {
 		return Remote{}, err
 	}

@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -43,11 +42,8 @@ func TestDisabledSourceIsNotCollected(t *testing.T) {
 }
 
 func TestRunRefusesWithoutRecipients(t *testing.T) {
-	f := newFixture(t)
-	o := f.opts()
-	o.Recipients = nil
-	_, runErr := engine.Run(context.Background(), f.store, o)
-	require.Error(t, runErr, "a run with no recipients must be refused: encryption is not optional")
+	_, err := newFixture(t).try(func(o *engine.Options) { o.Recipients = nil })
+	require.Error(t, err, "a run with no recipients must be refused: encryption is not optional")
 }
 
 // Expiry is recorded per object because the archive outlives the collection run.

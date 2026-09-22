@@ -14,7 +14,6 @@ import (
 	"strings"
 )
 
-// Sample is one reading.
 type Sample struct {
 	HeapInuse uint64 // bytes in in-use spans
 	Sys       uint64 // total obtained from the OS: roughly what RSS will follow
@@ -73,7 +72,6 @@ const EnvMaxInFlightBytes = "SHIPPER_MAX_IN_FLIGHT_BYTES"
 // Written once before any verb runs, then read by admission for the rest of the process.
 var maxInFlightBytes int64 = DefaultMaxInFlightBytes
 
-// MaxInFlightBytes is the cap in force for this process.
 func MaxInFlightBytes() int64 { return maxInFlightBytes }
 
 // ApplyMaxInFlightBytesFromEnv is the only thing that moves the cap; unset restores the default, a bad value is refused.

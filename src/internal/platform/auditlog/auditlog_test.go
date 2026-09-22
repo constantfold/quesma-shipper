@@ -1,6 +1,7 @@
 package auditlog_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,15 +24,15 @@ func open(t *testing.T) (*auditlog.Log, string) {
 func TestAppendAndTail(t *testing.T) {
 	l, path := open(t)
 
+	// Append-only: an entry already on disk is never rewritten, which is what makes it an audit log.
+	var before []byte
 	for _, d := range []auditlog.Decision{auditlog.DecisionShipped, auditlog.DecisionUnchanged, auditlog.DecisionParked} {
-		require.NoError(t, l.Append(auditlog.Entry{
-			Decision: d,
-			SourceID: "claude-code-transcripts",
-			File:     "/Users/__USER__/.claude/projects/p/a.jsonl",
-			BytesIn:  4096,
-			BytesOut: 1200,
-			RuleHits: map[string]int{"github-pat": 1},
-		}))
+		require.NoError(t, l.Append(auditlog.Entry{Decision: d, SourceID: "claude-code-transcripts",
+			File: "/Users/__USER__/.claude/projects/p/a.jsonl", BytesIn: 4096, BytesOut: 1200, RuleHits: map[string]int{"github-pat": 1}}))
+		after, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.True(t, bytes.HasPrefix(after, before), "an existing entry was rewritten; the log must only grow")
+		before = after
 	}
 
 	entries, err := auditlog.Tail(path, 0)
@@ -45,19 +46,6 @@ func TestAppendAndTail(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, auditlog.DecisionUnchanged, entries[0].Decision, "a limited tail keeps the newest entries")
-}
-
-// The log is append-only: an entry already on disk is never rewritten, which is what makes it an audit log.
-func TestLogIsAppendOnly(t *testing.T) {
-	l, path := open(t)
-
-	require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionShipped, File: "first"}))
-	first, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionShipped, File: "second"}))
-	second, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(string(second), string(first)), "an existing entry was rewritten; the log must only grow")
 }
 
 // Reasons stay on one bounded line and never quote a redacted payload.
@@ -109,13 +97,8 @@ func TestTailOnMissingLogIsEmptyNotAnError(t *testing.T) {
 // Entry has no field for a redacted value or for payload content: the discipline is structural.
 func TestEntryHasNoContentFields(t *testing.T) {
 	l, path := open(t)
-	require.NoError(t, l.Append(auditlog.Entry{
-		Decision:         auditlog.DecisionShipped,
-		File:             "/Users/__USER__/.claude/projects/p/a.jsonl",
-		RedactionDensity: 0.012,
-		RuleHits:         map[string]int{"aws-secret-key": 4},
-		ObjectKey:        "v1/organization=default/install=x/mirror/source=s/abc.age",
-	}))
+	require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionShipped, File: "/Users/__USER__/.claude/projects/p/a.jsonl",
+		RedactionDensity: 0.012, RuleHits: map[string]int{"aws-secret-key": 4}, ObjectKey: "v1/organization=default/install=x/mirror/source=s/abc.age"}))
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	// The rule id is recorded; the value it matched cannot be, because there is nowhere to put it.

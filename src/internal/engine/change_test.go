@@ -59,12 +59,11 @@ func TestUnchangedFileAudit(t *testing.T) {
 			require.NoError(t, err)
 			var perFile, aggregate []auditlog.Entry
 			for _, e := range entries {
-				if e.Decision != auditlog.DecisionUnchanged {
-					continue
-				}
-				if e.File == "" {
+				switch {
+				case e.Decision != auditlog.DecisionUnchanged:
+				case e.File == "":
 					aggregate = append(aggregate, e)
-				} else {
+				default:
 					perFile = append(perFile, e)
 				}
 			}

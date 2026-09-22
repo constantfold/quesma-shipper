@@ -93,15 +93,6 @@ func (p *sourcePass) abandon(r fileResult) fileResult {
 	return r
 }
 
-// assemble moves the slots into the source outcome in candidate order; unfilled ones never decided.
-func (p *sourcePass) assemble() {
-	for _, outcome := range p.slots {
-		if outcome.Decision != "" {
-			p.out.Files = append(p.out.Files, outcome)
-		}
-	}
-}
-
 // stagedUnits is the enricher's input, in candidate order like everything else.
 func (p *sourcePass) stagedUnits() []transforms.RawUnit {
 	var staged []transforms.RawUnit

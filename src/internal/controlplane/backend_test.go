@@ -67,7 +67,7 @@ func TestFetchConfigRefusals(t *testing.T) {
 			require.Error(t, err)
 			if tc.want != nil {
 				assert.ErrorIs(t, err, tc.want)
-				assert.Contains(t, err.Error(), tc.detail)
+				assert.ErrorContains(t, err, tc.detail)
 			}
 		})
 	}

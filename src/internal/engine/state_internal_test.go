@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,9 +17,8 @@ import (
 func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 	const install = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 	valid := `{"state_schema": 1, "install_id": "` + install + `", "entries": []}`
-	cases := []struct {
-		name       string
-		body       string
+	for _, c := range []struct {
+		name, body string
 		maxBytes   int64
 		unreadable bool
 	}{
@@ -31,8 +31,7 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 		{name: "negative attempts", body: `{"state_schema": 1, "entries": [{"source_id": "s", "native_path": "/x/a.jsonl", "attempts": -5}]}`},
 		{name: "oversize", body: valid, maxBytes: 8},
 		{name: "unreadable", body: valid, unreadable: true},
-	}
-	for _, c := range cases {
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.unreadable && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
 				t.Skip("file modes do not deny the owner here")
@@ -43,12 +42,8 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 			if c.unreadable {
 				require.NoError(t, os.Chmod(path, 0o000))
 			}
-			maxBytes := c.maxBytes
-			if maxBytes == 0 {
-				maxBytes = maxDocumentBytes
-			}
 
-			s, err := open(dir, install, maxBytes)
+			s, err := open(dir, install, cmp.Or(c.maxBytes, maxDocumentBytes))
 			require.NoErrorf(t, err, "open must succeed over a document it cannot load: %v", err)
 			require.Truef(t, s.Len() == 0 && s.Corrupt(), "len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
 			k := Key{SourceID: "s", NativePath: "/x/b.jsonl"}

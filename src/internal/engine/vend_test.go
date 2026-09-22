@@ -209,8 +209,7 @@ func (e *countingEnricher) Version() int           { return 1 }
 func (e *countingEnricher) Table() string          { return "" }
 func (e *countingEnricher) Keyspaces() []string    { return nil }
 func (e *countingEnricher) DBCandidates() []string { return nil }
-func (e *countingEnricher) NeedsUnits() bool       { return true }
 func (e *countingEnricher) Enrich(transforms.Input) transforms.EnrichResult {
 	e.calls++
-	return transforms.EnrichResult{EnricherID: e.id, Version: 1}
+	return transforms.EnrichResult{}
 }
