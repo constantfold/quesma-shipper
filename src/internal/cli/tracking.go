@@ -17,7 +17,7 @@ import (
 )
 
 func trackingCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "tracking",
 		Short: "What is collected, per agent and repository",
 		Long: "What is collected, per agent and repository: size, what is still to be sent, when\n" +
@@ -26,7 +26,6 @@ func trackingCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return browseTracking(cmd) },
 	}
-	return cmd
 }
 
 type key int

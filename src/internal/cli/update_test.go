@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,26 +13,29 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
-func TestServiceStateTimeoutSaysNoRestartWasRequested(t *testing.T) {
-	err := serviceStateTimeoutError(context.DeadlineExceeded)
-	require.ErrorIsf(t, err, context.DeadlineExceeded, "service-state timeout = %v, want deadline exceeded", err)
-	for _, want := range []string{"5s", "update is installed", "restart was not requested"} {
-		assert.Containsf(t, err.Error(), want, "service-state timeout %q does not contain %q", err, want)
-	}
-	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(err.Error(), cmd) {
-		t.Errorf("service-state timeout %q does not offer %q", err, cmd)
-	}
-}
-
-// A restart that outlives the wait is still a successful update: the text has to say so, name
-// the window it waited, and hand over the manual restart.
-func TestRestartTimeoutKeepsTheSuccessfulUpdateClear(t *testing.T) {
-	got := restartTimeoutWarning(5*time.Minute + 30*time.Second)
-	for _, want := range []string{"5m30s", "update is installed", "new version"} {
-		assert.Containsf(t, got, want, "restart timeout warning %q does not contain %q", got, want)
-	}
-	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(got, cmd) {
-		t.Errorf("restart timeout warning %q does not offer %q", got, cmd)
+// An installed update and its pending restart must remain distinguishable in every warning.
+func TestUpdateRestartWarnings(t *testing.T) {
+	timeout := serviceStateTimeoutError(context.DeadlineExceeded)
+	require.ErrorIs(t, timeout, context.DeadlineExceeded)
+	for _, tc := range []struct {
+		name, message string
+		want          []string
+	}{
+		{"service state timeout", timeout.Error(),
+			[]string{"5s", "update is installed", "restart was not requested"}},
+		{"restart timeout", restartTimeoutWarning(5*time.Minute + 30*time.Second),
+			[]string{"5m30s", "update is installed", "new version"}},
+		{"unreadable config", configUnreadableWarning(errors.New("state_dir is not absolute")),
+			[]string{"state_dir is not absolute", "not restarted", "previous version"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, want := range tc.want {
+				assert.Contains(t, tc.message, want)
+			}
+			if cmd := packaging.RestartCommand(); cmd != "" {
+				assert.Contains(t, tc.message, cmd)
+			}
+		})
 	}
 }
 
@@ -55,18 +57,6 @@ func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, restartWanted(tc.st), tc.want)
 		})
-	}
-}
-
-// The update is installed either way, so the text has to separate that from the daemon still
-// running the old binary, and hand over the manual restart.
-func TestConfigUnreadableWarningKeepsTheStaleDaemonVisible(t *testing.T) {
-	got := configUnreadableWarning(errors.New("state_dir is not absolute"))
-	for _, want := range []string{"state_dir is not absolute", "not restarted", "previous version"} {
-		assert.Containsf(t, got, want, "config-unreadable warning %q does not contain %q", got, want)
-	}
-	if cmd := packaging.RestartCommand(); cmd != "" && !strings.Contains(got, cmd) {
-		t.Errorf("config-unreadable warning %q does not offer %q", got, cmd)
 	}
 }
 

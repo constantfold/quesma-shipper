@@ -23,7 +23,7 @@ func clearSelfUpdateHop() {
 }
 
 func updateCmd(build app.Build) *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "update",
 		Short: "Install the newest version",
 		Args:  cobra.NoArgs,
@@ -46,7 +46,6 @@ func updateCmd(build app.Build) *cobra.Command {
 			return restartService(cmd.Context(), w)
 		},
 	}
-	return cmd
 }
 
 func restartService(ctx context.Context, w io.Writer) error {
@@ -169,14 +168,12 @@ func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errO
 		return
 	}
 	fmt.Fprintf(errOut, "self-update: %s -> %s, restarting\n", res.From, res.To)
+	if stateErr == nil {
+		stateErr = packaging.WriteSelfUpdateHop(stateDir, res.To)
+	}
 	if stateErr != nil {
 		fmt.Fprintf(errOut, "self-update: cannot persist the restart guard (%v); the new version runs from the next supervised restart\n", stateErr)
 		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but could not persist the restart guard: %v", res.To, stateErr))
-		return
-	}
-	if err := packaging.WriteSelfUpdateHop(stateDir, res.To); err != nil {
-		fmt.Fprintf(errOut, "self-update: cannot persist the restart guard (%v); the new version runs from the next supervised restart\n", err)
-		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but could not persist the restart guard: %v", res.To, err))
 		return
 	}
 	os.Setenv(app.ReexecGuardEnv, res.To) // keeps compatibility with an older Unix binary on the hop
