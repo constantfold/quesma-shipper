@@ -186,7 +186,7 @@ func failAndBackOff(o Options, res *fileResult, key Key, fp Fingerprint, reason 
 	next.LastError = reason
 	// Spread by the file's own key so correlated failures do not all wake in the same second.
 	next.BackoffUntil = o.Now().Add(backoffFor(attempts, keySpread(key)))
-	res.intent = intent{kind: intentBackoff, key: key, fp: next, reason: reason}
+	res.intent = intent{kind: intentBackoff, key: key, fp: next}
 }
 
 func scrubSource(src sources.Resolved, raw []byte, jsonl bool, scrubber *transforms.Scrubber, scrubErr error) (transforms.Result, error) {

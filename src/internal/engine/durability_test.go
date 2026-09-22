@@ -14,47 +14,30 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// A crash between the upload and the commit re-runs the file onto the same key. Zero new keys.
-func TestCrashBeforeCommitReRunsOntoTheSameKey(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-
-	// The lost commit is simulated by wiping state after a successful upload.
-	f.run()
-	keys := f.port.keys()
-	require.Lenf(t, keys, 1, "expected 1 key, got %v", keys)
-
-	f.wipeState()
-	f.port.reset()
-
-	rep := f.run()
-	require.Equalf(t, 1, rep.Shipped, "the file should be re-run: %+v", rep)
-	if got := f.port.keys(); len(got) != 1 || got[0] != keys[0] {
-		t.Errorf("re-run created a new key: %v, want %v", got, keys)
-	}
-	obj, _ := f.port.get(keys[0])
-	assert.Equalf(t, 2, obj.Versions, "expected the re-run to add a version, got %d", obj.Versions)
-}
-
-// Wiping the fingerprint document while keeping the identity converges: ZERO new keys.
-func TestWipedStateConvergesWithZeroNewKeys(t *testing.T) {
-	f := newFixture(t)
-	for _, p := range []string{"p/a.jsonl", "p/b.jsonl", "p/c.jsonl"} {
-		f.writeTranscript(p, line1)
-	}
-
-	f.run()
-	before := f.port.keys()
-	require.Lenf(t, before, 3, "expected 3 keys, got %v", before)
-
-	f.wipeState()
-
-	rep := f.run()
-	assert.Equalf(t, 3, rep.Shipped, "everything should re-upload once: %+v", rep)
-	after := f.port.keys()
-	require.Lenf(t, after, len(before), "the bucket gained keys: %v, want %v", after, before)
-	for i := range before {
-		assert.Equalf(t, after[i], before[i], "key %d changed: %s -> %s", i, before[i], after[i])
+// State loss re-uploads onto the same keys, preserving the store's existing versions.
+func TestStateLossReusesObjectKeys(t *testing.T) {
+	for _, paths := range [][]string{{"p/s1.jsonl"}, {"p/a.jsonl", "p/b.jsonl", "p/c.jsonl"}} {
+		t.Run(fmt.Sprintf("files=%d", len(paths)), func(t *testing.T) {
+			f := newFixture(t)
+			for _, path := range paths {
+				f.writeTranscript(path, line1)
+			}
+			f.run()
+			before := f.port.keys()
+			require.Len(t, before, len(paths))
+			f.wipeState()
+			if len(paths) == 1 {
+				f.port.reset()
+			}
+			rep := f.run()
+			require.Equal(t, len(paths), rep.Shipped)
+			require.Len(t, f.port.keys(), len(before))
+			assert.Equal(t, before, f.port.keys())
+			for _, key := range before {
+				obj, _, _ := f.openObject(t, key)
+				assert.Equal(t, 2, obj.Versions, "re-upload must add a version")
+			}
+		})
 	}
 }
 
@@ -84,21 +67,7 @@ func TestNeverMutatesTheAgentStore(t *testing.T) {
 	f.run()
 	f.run() // twice, so an idempotent second pass is covered too
 
-	after := snapshot(t, agentDir)
-	assert.Len(t, before, len(after))
-	for path, hash := range before {
-		got, ok := after[path]
-		if !ok {
-			t.Errorf("%s disappeared", path)
-			continue
-		}
-		assert.Equalf(t, hash, got, "%s was modified", path)
-	}
-	for path := range after {
-		if _, ok := before[path]; !ok {
-			t.Errorf("%s was created inside the agent store", path)
-		}
-	}
+	assert.Equal(t, before, snapshot(t, agentDir), "a sync must neither create, remove nor modify agent files")
 }
 
 // What batching must show is how often the state document is replaced. The count is asserted
@@ -106,9 +75,7 @@ func TestNeverMutatesTheAgentStore(t *testing.T) {
 func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 	f := newFixture(t)
 	const files = 25
-	for i := 0; i < files; i++ {
-		f.writeTranscript(fmt.Sprintf("p/a%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/a%02d.jsonl", files)
 
 	writes := f.countStateWrites(func() {
 		require.Equal(t, files, f.runWith(func(o *engine.Options) { o.CommitBatch = 10 }).Shipped)
@@ -123,9 +90,7 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 func TestEverythingShippedIsDurableWhenTheRunReturns(t *testing.T) {
 	f := newFixture(t)
 	const files = 12
-	for i := 0; i < files; i++ {
-		f.writeTranscript(fmt.Sprintf("p/b%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/b%02d.jsonl", files)
 	require.Equal(t, files, f.runWith(func(o *engine.Options) { o.CommitBatch = 1000 }).Shipped)
 
 	f.reopen()

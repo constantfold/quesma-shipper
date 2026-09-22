@@ -43,10 +43,9 @@ type fileResult struct {
 
 // intent is the durable write a file's outcome asks for; only the loop thread applies it.
 type intent struct {
-	kind   intentKind
-	key    Key
-	fp     Fingerprint
-	reason string // backoff reason
+	kind intentKind
+	key  Key
+	fp   Fingerprint
 }
 
 type intentKind int
@@ -72,9 +71,8 @@ type sourcePass struct {
 	staging bool
 
 	// Index-addressed, so the report and enricher input keep candidate order however work finishes.
-	slots  []FileOutcome
-	filled []bool
-	units  []*transforms.RawUnit
+	slots []FileOutcome
+	units []*transforms.RawUnit
 
 	decided       int // what Progress reports as done
 	inFlightBytes int64
@@ -118,7 +116,6 @@ func (p *sourcePass) run(ctx context.Context) error {
 	// A file in flight holds exactly one slot at a time, so this many can exist at once.
 	limit := computeLimit + uploadLimit
 	p.slots = make([]FileOutcome, n)
-	p.filled = make([]bool, n)
 	p.units = make([]*transforms.RawUnit, n)
 
 	// Buffered to the in-flight limit, so a goroutine never blocks handing a result back.

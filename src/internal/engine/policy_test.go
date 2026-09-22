@@ -135,9 +135,7 @@ func TestPreviewStillWorksWhilePaused(t *testing.T) {
 func TestDrainIgnoresTheMaxFilesPerRunBound(t *testing.T) {
 	f := newFixture(t)
 	f.eff.MaxFilesPerRun = 2
-	for i := 0; i < 7; i++ {
-		f.writeTranscript(fmt.Sprintf("p/s%d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/s%d.jsonl", 7)
 
 	bounded := f.run()
 	require.Truef(t, bounded.Truncated, "a bound of 2 did not truncate 7 files: %+v", bounded)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,4 +247,11 @@ func (f *fixture) openObject(t *testing.T, key string) (*fakeObject, transforms.
 	manifest, payload, err := transforms.Open(obj.Body, f.unit.Identity)
 	require.NoError(t, err, "open stored object %s", key)
 	return obj, manifest, payload
+}
+
+func (f *fixture) writeTranscripts(pattern string, count int) {
+	f.t.Helper()
+	for i := range count {
+		f.writeTranscript(fmt.Sprintf(pattern, i), line1)
+	}
 }

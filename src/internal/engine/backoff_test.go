@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,11 +16,10 @@ import (
 )
 
 // An unreadable file must stop consuming the run budget.
-func TestAnUnreadableFileBacksOffInsteadOfBurningTheBudgetForever(t *testing.T) {
+func TestUnreadableFileBackoffAndRecovery(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/good.jsonl", line1)
-	bad := filepath.Join(f.home, ".claude", "projects", "p", "bad.jsonl")
-	f.writeTranscript("p/bad.jsonl", line1)
+	bad := f.writeTranscript("p/bad.jsonl", line1)
 	require.NoError(t, os.Chmod(bad, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
 	if _, err := os.ReadFile(bad); err == nil {
@@ -37,22 +35,7 @@ func TestAnUnreadableFileBacksOffInsteadOfBurningTheBudgetForever(t *testing.T) 
 	second := f.run()
 	assert.Equalf(t, 0, second.Parked, "the unreadable file was read again inside its backoff: %+v", second)
 	assert.Equalf(t, 1, second.Skipped, "expected it to be skipped while parked, got %+v", second)
-}
 
-// The backoff must expire: there is no attempt limit, because giving up silently loses data.
-func TestABackedOffFileIsRetriedOnceTheDelayPasses(t *testing.T) {
-	f := newFixture(t)
-	// A readable file beside it, or the shape sniff condemns the whole source instead.
-	f.writeTranscript("p/good.jsonl", line1)
-	bad := filepath.Join(f.home, ".claude", "projects", "p", "bad.jsonl")
-	f.writeTranscript("p/bad.jsonl", line1)
-	require.NoError(t, os.Chmod(bad, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
-	if _, err := os.ReadFile(bad); err == nil {
-		t.Skip("this user can read a mode-000 file")
-	}
-
-	require.Equal(t, 1, f.run().Parked)
 	if err := os.Chmod(bad, 0o600); err != nil { // whatever was wrong is now fixed
 		t.Fatal(err)
 	}
@@ -71,8 +54,7 @@ func TestABackedOffFileIsRetriedOnceTheDelayPasses(t *testing.T) {
 func TestAParkedFileStopsBeingParkedOnceItReadsCleanAgain(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/good.jsonl", line1)
-	bad := filepath.Join(f.home, ".claude", "projects", "p", "bad.jsonl")
-	f.writeTranscript("p/bad.jsonl", line1)
+	bad := f.writeTranscript("p/bad.jsonl", line1)
 
 	// Ship it first, so the entry carries the source hash only a completed ship can write.
 	require.Equal(t, 2, f.run().Shipped)
@@ -112,9 +94,7 @@ func TestAParkedFileStopsBeingParkedOnceItReadsCleanAgain(t *testing.T) {
 // refusal and writes a park record, burying the one line that says access was revoked.
 func TestARefusedInstallStopsTheRunAtTheFirstFile(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 20; i++ {
-		f.writeTranscript(fmt.Sprintf("p/a%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/a%02d.jsonl", 20)
 	f.port.FailAll = fmt.Errorf("creds: vend failed: %w", formats.ErrCredentialsRefused)
 
 	rep, err := engine.Run(context.Background(), f.store, f.opts())
@@ -127,9 +107,7 @@ func TestARefusedInstallStopsTheRunAtTheFirstFile(t *testing.T) {
 // An ordinary upload error is NOT fatal: those are per-object and the run continues.
 func TestAnOrdinaryUploadErrorDoesNotStopTheRun(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 5; i++ {
-		f.writeTranscript(fmt.Sprintf("p/b%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/b%02d.jsonl", 5)
 	f.port.FailAll = errors.New("connection reset by peer")
 
 	rep, err := engine.Run(context.Background(), f.store, f.opts())

@@ -28,59 +28,53 @@ func vendRun(f *fixture, port *fakePort, adjust func(*engine.Options)) (engine.R
 	return engine.Run(context.Background(), f.store, o)
 }
 
-// One authorization for a small run, one PUT per object, one fingerprint per PUT.
-func TestTheUploadPathShipsOneGroupForASmallRun(t *testing.T) {
-	f := newFixture(t)
-	for i := 0; i < 5; i++ {
-		f.writeTranscript(fmt.Sprintf("p/v%02d.jsonl", i), line1)
+// Every batch is bounded; each key uploads once and receives a durable fingerprint.
+func TestUploadBatchContract(t *testing.T) {
+	for _, tc := range []struct {
+		files, workers, uploadWorkers int
+		pattern                       string
+	}{
+		{5, 4, 0, "p/v%02d.jsonl"},
+		{40, 8, 0, "p/g%02d.jsonl"},
+		{96, 8, 3, "p/x%03d.jsonl"},
+	} {
+		t.Run(fmt.Sprintf("files=%d", tc.files), func(t *testing.T) {
+			f := newFixture(t)
+			f.writeTranscripts(tc.pattern, tc.files)
+			f.eff.MaxFilesPerRun = max(64, tc.files)
+			port := newPort()
+			rep, err := vendRun(f, port, func(o *engine.Options) {
+				o.Workers, o.UploadWorkers = tc.workers, tc.uploadWorkers
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.files, rep.Shipped)
+			sizes, total := port.sizes(), 0
+			if tc.files == 5 {
+				assert.Equal(t, []int{5}, sizes, "a small run fits in one authorization")
+			} else {
+				require.GreaterOrEqual(t, len(sizes), 2)
+			}
+			for _, n := range sizes {
+				assert.LessOrEqual(t, n, 32, "authorization object bound")
+				total += n
+			}
+			assert.Equal(t, tc.files, total, sizes)
+			port.storedOnce(t)
+			assert.Len(t, port.keys(), tc.files)
+			assert.Equal(t, tc.files, f.store.Len())
+			for _, fo := range rep.Sources[0].Files {
+				_, ok := f.store.Get(engine.Key{SourceID: fo.SourceID, NativePath: fo.NativePath})
+				require.True(t, ok, "%s committed no fingerprint", fo.RelPath)
+			}
+		})
 	}
-	port := newPort()
-
-	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 4 })
-	require.NoErrorf(t, err, "run: %v", err)
-
-	assert.Equalf(t, 5, rep.Shipped, "shipped %d of 5: %+v", rep.Shipped, rep)
-	if got := port.sizes(); len(got) != 1 || got[0] != 5 {
-		t.Errorf("groups %v; five files fit in one authorization", got)
-	}
-	port.storedOnce(t)
-	for _, fo := range rep.Sources[0].Files {
-		if _, ok := f.store.Get(engine.Key{SourceID: fo.SourceID, NativePath: fo.NativePath}); !ok {
-			t.Fatalf("%s committed no fingerprint", fo.RelPath)
-		}
-	}
-}
-
-// The group is bounded by object count, and the remainder must not wait for a full group.
-func TestAnOversizedRunSplitsIntoBoundedGroups(t *testing.T) {
-	f := newFixture(t)
-	for i := 0; i < 40; i++ {
-		f.writeTranscript(fmt.Sprintf("p/g%02d.jsonl", i), line1)
-	}
-	port := newPort()
-
-	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 8 })
-	require.NoErrorf(t, err, "run: %v", err)
-
-	assert.Equalf(t, 40, rep.Shipped, "shipped %d of 40: %+v", rep.Shipped, rep)
-	sizes := port.sizes()
-	require.Truef(t, len(sizes) >= 2, "40 files were authorized in %d group(s); the bound is 32", len(sizes))
-	total := 0
-	for _, n := range sizes {
-		assert.Truef(t, n <= 32, "a group carried %d objects, over the 32 bound; groups were %v", n, sizes)
-		total += n
-	}
-	assert.Equalf(t, 40, total, "groups carried %d objects for 40 files: %v", total, sizes)
-	port.storedOnce(t)
 }
 
 // One object's failure is its own. Its siblings commit, and the next run re-prepares only it.
 func TestAFailedObjectDoesNotDiscardItsSiblings(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/bad.jsonl", line1)
-	for i := 0; i < 4; i++ {
-		f.writeTranscript(fmt.Sprintf("p/ok%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/ok%02d.jsonl", 4)
 	port := newPort()
 	// Whichever file the first group starts with: keys are keyed hashes, not pickable by name.
 	var failed string
@@ -110,9 +104,7 @@ func TestAFailedObjectDoesNotDiscardItsSiblings(t *testing.T) {
 // A refused install is the kill path: the run stops and the duplicates in flight are one fact.
 func TestARefusedAuthorizationStopsTheRun(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 20; i++ {
-		f.writeTranscript(fmt.Sprintf("p/r%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/r%02d.jsonl", 20)
 	port := newPort()
 	port.verdict = func(int, int, engine.PreparedObject) error {
 		return fmt.Errorf("backend: refused: %w", formats.ErrCredentialsRefused)
@@ -130,49 +122,36 @@ func TestARefusedAuthorizationStopsTheRun(t *testing.T) {
 	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped against a refused install", rep.Shipped)
 }
 
-// An unavailable control plane is NOT a kill: nothing new commits, and the next run ships it.
-func TestAnUnavailableControlPlaneStopsUploadsWithoutKillingTheInstall(t *testing.T) {
-	f := newFixture(t)
-	for i := 0; i < 12; i++ {
-		f.writeTranscript(fmt.Sprintf("p/u%02d.jsonl", i), line1)
+// Unavailability counts once, commits nothing, and leaves the install able to retry next run.
+func TestUnavailableUploadGroups(t *testing.T) {
+	for _, tc := range []struct {
+		files, workers, status int
+		pattern                string
+	}{
+		{12, 4, 409, "p/u%02d.jsonl"},
+		{40, 8, 503, "p/m%02d.jsonl"},
+	} {
+		t.Run(fmt.Sprintf("HTTP_%d", tc.status), func(t *testing.T) {
+			f := newFixture(t)
+			f.writeTranscripts(tc.pattern, tc.files)
+			port := newPort()
+			port.verdict = func(int, int, engine.PreparedObject) error {
+				return fmt.Errorf("backend: HTTP %d: %w", tc.status, engine.ErrUploadUnavailable)
+			}
+			workers := func(o *engine.Options) { o.Workers = tc.workers }
+			rep, err := vendRun(f, port, workers)
+			require.ErrorIs(t, err, engine.ErrUploadUnavailable)
+			require.NotErrorIs(t, err, formats.ErrCredentialsRefused)
+			assert.Equal(t, 1, rep.Failed, "one halted run is one fact")
+			assert.Zero(t, rep.Shipped)
+			assert.Zero(t, f.store.Len())
+			healthy := newPort()
+			rep, err = vendRun(f, healthy, workers)
+			require.NoError(t, err)
+			assert.Equal(t, tc.files, rep.Shipped)
+			healthy.storedOnce(t)
+		})
 	}
-	port := newPort()
-	port.verdict = func(int, int, engine.PreparedObject) error {
-		return fmt.Errorf("backend: HTTP 409: %w", engine.ErrUploadUnavailable)
-	}
-
-	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 4 })
-
-	require.ErrorIsf(t, err, engine.ErrUploadUnavailable, "want an unavailable-authorization error, got %v", err)
-	require.True(t, !errors.Is(err, formats.ErrCredentialsRefused), "an unavailable control plane wrapped ErrCredentialsRefused; that kills the install")
-	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped while authorization was unavailable", rep.Shipped)
-	assert.Equalf(t, 1, rep.Failed, "%d failures counted; one refused group is one fact about the control plane", rep.Failed)
-
-	healthy := newPort()
-	rep2, err := vendRun(f, healthy, func(o *engine.Options) { o.Workers = 4 })
-	require.NoErrorf(t, err, "second run: %v", err)
-	assert.Equalf(t, 12, rep2.Shipped, "second run shipped %d of the 12 held back: %+v", rep2.Shipped, rep2)
-	healthy.storedOnce(t)
-}
-
-// The same fact across several groups: objects sealed when the halt lands are drained, and
-// counting each would make the failure count a function of what was in flight.
-func TestAnUnavailableControlPlaneCountsOnceAcrossManyGroups(t *testing.T) {
-	f := newFixture(t)
-	for i := 0; i < 40; i++ {
-		f.writeTranscript(fmt.Sprintf("p/m%02d.jsonl", i), line1)
-	}
-	port := newPort()
-	port.verdict = func(int, int, engine.PreparedObject) error {
-		return fmt.Errorf("backend: HTTP 503: %w", engine.ErrUploadUnavailable)
-	}
-
-	rep, err := vendRun(f, port, func(o *engine.Options) { o.Workers = 8 })
-
-	require.ErrorIsf(t, err, engine.ErrUploadUnavailable, "want an unavailable-authorization error, got %v", err)
-	assert.Equalf(t, 1, rep.Failed, "%d failures counted over 40 files; one halted run is one fact", rep.Failed)
-	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped while authorization was unavailable", rep.Shipped)
-	assert.Equalf(t, 0, f.store.Len(), "%d fingerprints committed by a run that sent nothing", f.store.Len())
 }
 
 // An expired ticket earns exactly one more authorization, and the object ships on it.
@@ -216,9 +195,7 @@ func TestReauthorizationDoesNotLoop(t *testing.T) {
 // Preview computes everything that would leave the machine and authorizes nothing.
 func TestPreviewAuthorizesNothing(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 3; i++ {
-		f.writeTranscript(fmt.Sprintf("p/d%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/d%02d.jsonl", 3)
 	port := newPort()
 
 	rep, err := vendRun(f, port, func(o *engine.Options) { o.DryRun = true })
@@ -226,36 +203,6 @@ func TestPreviewAuthorizesNothing(t *testing.T) {
 	assert.Equalf(t, 3, rep.Shipped, "preview reported %d would-ship files of 3", rep.Shipped)
 	assert.Equal(t, 0, len(port.sizes()))
 	assert.Equalf(t, 0, f.store.Len(), "preview committed %d fingerprints", f.store.Len())
-}
-
-// What the race detector is here for: overlapping compute and groups, one PUT and one commit per
-// key, with the accumulator on the loop thread alone.
-func TestTheUploadPathShipsEachKeyExactlyOnceUnderRace(t *testing.T) {
-	f := newFixture(t)
-	const files = 96
-	for i := 0; i < files; i++ {
-		f.writeTranscript(fmt.Sprintf("p/x%03d.jsonl", i), line1)
-	}
-	f.eff.MaxFilesPerRun = files
-	port := newPort()
-
-	rep, err := vendRun(f, port, func(o *engine.Options) {
-		o.Plan = planOf(f.eff)
-		o.Workers = 8
-		o.UploadWorkers = 3
-	})
-	require.NoErrorf(t, err, "run: %v", err)
-	require.Equalf(t, files, rep.Shipped, "shipped %d of %d: %+v", rep.Shipped, files, rep)
-	port.storedOnce(t)
-
-	port.mu.Lock()
-	distinct := len(port.objects)
-	port.mu.Unlock()
-	assert.Equalf(t, files, distinct, "%d distinct keys stored for %d files", distinct, files)
-	for _, n := range port.sizes() {
-		assert.Truef(t, n <= 32, "a group carried %d objects, over the 32 bound", n)
-	}
-	assert.Equalf(t, files, f.store.Len(), "%d fingerprints committed for %d shipped files", f.store.Len(), files)
 }
 
 // Derived objects take the upload path too, after every raw unit of the source has shipped.

@@ -23,9 +23,7 @@ import (
 // Budget is reserved at admission, so no number of goroutines can overshoot max_files_per_run.
 func TestTheBudgetIsNotOvershotByFilesInFlight(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 20; i++ {
-		f.writeTranscript(fmt.Sprintf("p/a%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/a%02d.jsonl", 20)
 	f.eff.MaxFilesPerRun = 2
 
 	rep := f.runWith(func(o *engine.Options) { o.Workers = 8 })
@@ -57,9 +55,7 @@ func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
 // The refusal stops ADMISSION, not just the count, measured in authorization calls.
 func TestARefusedInstallDoesNotAttemptEveryFile(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 20; i++ {
-		f.writeTranscript(fmt.Sprintf("p/r%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/r%02d.jsonl", 20)
 	f.port.FailAll = fmt.Errorf("creds: vend failed: %w", formats.ErrCredentialsRefused)
 
 	o := f.opts()
@@ -154,9 +150,7 @@ func (p *slowPort) Peak() int {
 // The one test that would notice the pool silently reduced to a sequential loop.
 func TestFilesAreProcessedConcurrently(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 8; i++ {
-		f.writeTranscript(fmt.Sprintf("p/c%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/c%02d.jsonl", 8)
 	slow := &slowRecipient{inner: f.unit.Recipient()}
 
 	rep := f.runWith(func(o *engine.Options) {
@@ -173,9 +167,7 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	f := newFixture(t)
 	const files = 70
-	for i := 0; i < files; i++ {
-		f.writeTranscript(fmt.Sprintf("p/u%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/u%02d.jsonl", files)
 	f.eff.MaxFilesPerRun = files
 	port := &slowPort{fakePort: f.port}
 
@@ -194,9 +186,7 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 // second-run silence as a sequential loop.
 func TestOneWorkerBehavesExactlyLikeTheOldLoop(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 6; i++ {
-		f.writeTranscript(fmt.Sprintf("p/s%02d.jsonl", i), line1)
-	}
+	f.writeTranscripts("p/s%02d.jsonl", 6)
 
 	pin := func(o *engine.Options) { o.Workers, o.UploadWorkers = 1, 1 }
 	rep := f.runWith(pin)

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -133,4 +135,34 @@ func TestSpentBudgetDoesNotLoadCandidates(t *testing.T) {
 	if err := p.run(context.Background()); err != nil || !p.rep.Truncated || p.out.Remaining != 1 {
 		t.Fatalf("budget: %+v, %v", p.out, err)
 	}
+	assert.Nil(t, p.out.Files, "unadmitted candidates have no outcome")
+}
+
+func TestAssembleKeepsDecidedSlotsInCandidateOrder(t *testing.T) {
+	want := []FileOutcome{
+		{Decision: "shipped"}, {Decision: "unchanged"}, {Decision: "skipped"},
+		{Decision: "parked"}, {Decision: "failed", Fatal: true},
+	}
+	p := &sourcePass{out: &SourceOutcome{}}
+	for _, outcome := range want {
+		p.slots = append(p.slots, FileOutcome{}, outcome)
+	}
+	p.slots = append(p.slots, FileOutcome{})
+	p.assemble()
+	assert.Equal(t, want, p.out.Files)
+}
+
+func TestBackoffCommitFailurePreservesReadError(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, "3f2504e0-4f89-41d3-9a0c-0305e82c3301")
+	require.NoError(t, err)
+	defer store.Close()
+	// A directory at the document path makes replacement fail even for a privileged test user.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, FileName), 0o700))
+	p := &sourcePass{store: newCommitBuffer(store, 1)}
+	var result fileResult
+	failAndBackOff(Options{Now: time.Now}, &result, Key{SourceID: "s", NativePath: "/session"}, Fingerprint{}, "read denied")
+	p.applyIntent(&result)
+	assert.Equal(t, "parked", string(result.outcome.Decision))
+	assert.Contains(t, result.outcome.Reason, "read denied (and the backoff could not be recorded: ")
 }

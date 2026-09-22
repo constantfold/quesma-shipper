@@ -7,20 +7,19 @@ import (
 
 // fold is the only place a result touches the report, store, audit log and progress stream.
 func (p *sourcePass) fold(r fileResult) {
+	p.applyIntent(&r)
 	// Only the first refusal or unavailable verdict is counted, or rep.Failed becomes a function
 	// of GOMAXPROCS. The duplicates' intents still apply: one may have shipped before the refusal.
 	if (r.outcome.Fatal && p.fatal) || (r.unavailable && p.uploadHalted) {
-		p.applyIntent(&r)
 		return
 	}
 
-	p.applyIntent(&r)
 	if r.loadWarning != "" {
 		p.out.Unreadable++
 		p.out.UnreadableReason = r.loadWarning
 		p.out.Reason = r.loadWarning
 	}
-	p.slots[r.idx], p.filled[r.idx] = r.outcome, true
+	p.slots[r.idx] = r.outcome
 	p.units[r.idx] = r.unit
 	p.decided++
 
@@ -94,8 +93,7 @@ func (p *sourcePass) applyIntent(r *fileResult) {
 		r.outcome.Decision = auditlog.DecisionFailed
 		r.outcome.Reason = "upload succeeded but commit failed: " + err.Error()
 	case intentBackoff:
-		r.outcome.Reason = r.intent.reason +
-			" (and the backoff could not be recorded: " + err.Error() + ")"
+		r.outcome.Reason += " (and the backoff could not be recorded: " + err.Error() + ")"
 	}
 }
 
@@ -123,9 +121,9 @@ func (p *sourcePass) drainStaged() []fileResult {
 
 // assemble moves the slots into the source outcome in candidate order; unfilled ones never decided.
 func (p *sourcePass) assemble() {
-	for i, ok := range p.filled {
-		if ok {
-			p.out.Files = append(p.out.Files, p.slots[i])
+	for _, outcome := range p.slots {
+		if outcome.Decision != "" {
+			p.out.Files = append(p.out.Files, outcome)
 		}
 	}
 }
