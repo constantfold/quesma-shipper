@@ -14,30 +14,35 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-func TestSetReadClearRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-
-	require.True(t, !platform.Read(dir).Paused, "a fresh install reads as paused")
-	require.NoError(t, platform.Set(dir, "laptop going to a client site", time.Now(), time.Time{}))
-
-	got := platform.Read(dir)
-	require.True(t, got.Paused, "not paused after Set")
-	assert.Equalf(t, "laptop going to a client site", got.Reason, "reason = %q", got.Reason)
-	assert.NotEqual(t, "", got.At, "no timestamp: `status` could not say since when")
-
-	require.NoError(t, platform.Clear(dir))
-	require.True(t, !platform.Read(dir).Paused, "still paused after Clear")
-}
-
-func TestSetAndClearAreIdempotent(t *testing.T) {
-	dir := t.TempDir()
-
-	// Repeated pause and resume operations must remain script-safe.
-	for i := 0; i < 3; i++ {
-		require.NoError(t, platform.Set(dir, "", time.Now(), time.Time{}))
-	}
-	for i := 0; i < 3; i++ {
-		require.NoError(t, platform.Clear(dir))
+func TestPauseFlagLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name, subdir, reason string
+	}{
+		{"round trip", "", "laptop going to a client site"},
+		{"idempotent", "", ""},
+		{"before init", "not/created/yet", ""},
+		{"repeated reads", "", "why"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), tc.subdir)
+			require.False(t, platform.Read(dir).Paused, "fresh install")
+			for range 3 {
+				require.NoError(t, platform.Set(dir, tc.reason, time.Now(), time.Time{}))
+				// Every daemon tick must see the flag until an explicit resume.
+				for range 5 {
+					got := platform.Read(dir)
+					require.True(t, got.Paused)
+					assert.Equal(t, tc.reason, got.Reason)
+					assert.NotEmpty(t, got.At)
+				}
+				_, err := os.Stat(filepath.Join(dir, platform.File))
+				require.NoError(t, err)
+			}
+			for range 3 {
+				require.NoError(t, platform.Clear(dir))
+				require.False(t, platform.Read(dir).Paused)
+			}
+		})
 	}
 }
 
@@ -68,25 +73,6 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 			}
 			assert.True(t, tc.body == "" || got.Reason != "" || tc.name == "the flag says paused false", "no reason given, so `status` could not explain the state")
 		})
-	}
-}
-
-func TestSetCreatesTheStateDirectory(t *testing.T) {
-	// Pausing before `init` has to work: switching the tool off must not require initialising it first.
-	dir := filepath.Join(t.TempDir(), "not", "created", "yet")
-	require.NoError(t, platform.Set(dir, "", time.Now(), time.Time{}))
-	require.True(t, platform.Read(dir).Paused, "not paused")
-}
-
-func TestFlagSurvivesReadingItRepeatedly(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, platform.Set(dir, "why", time.Now(), time.Time{}))
-	// Read must not consume or rewrite the flag: the daemon reads it every tick.
-	for i := 0; i < 5; i++ {
-		require.Truef(t, platform.Read(dir).Paused, "read %d cleared the flag", i)
-	}
-	if _, err := os.Stat(filepath.Join(dir, platform.File)); err != nil {
-		t.Fatalf("the flag file is gone: %v", err)
 	}
 }
 
