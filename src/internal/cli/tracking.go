@@ -17,15 +17,11 @@ import (
 )
 
 func trackingCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "tracking",
-		Short: "What is collected, per agent and repository",
-		Long: "What is collected, per agent and repository: size, what is still to be sent, when\n" +
-			"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
-			"file is placed there, what was already sent stays sent) or to start again.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return browseTracking(cmd) },
-	}
+	cmd := verb("tracking", "What is collected, per agent and repository", browseTracking)
+	cmd.Long = "What is collected, per agent and repository: size, what is still to be sent, when\n" +
+		"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
+		"file is placed there, what was already sent stays sent) or to start again."
+	return cmd
 }
 
 type key int
@@ -40,38 +36,22 @@ const (
 	keyQuit
 )
 
+var keyBindings = map[string]key{
+	"\x1b[A": keyUp, "\x1b[B": keyDown, "\x1b[C": keyOpen, "\x1b[D": keyBack,
+	"k": keyUp, "j": keyDown, "\r": keyOpen, "\n": keyOpen, "l": keyOpen, "h": keyBack, "b": keyBack,
+	"t": keyToggle, " ": keyToggle,
+	"q": keyQuit, "\x03": keyQuit, "\x04": keyQuit, "\x1b": keyQuit, // q, Ctrl-C, Ctrl-D, Esc
+}
+
+// decodeKey reads an arrow from its escape sequence and any other key from its first byte.
 func decodeKey(b []byte) key {
 	if len(b) >= 3 && b[0] == 0x1b && b[1] == '[' {
-		switch b[2] {
-		case 'A':
-			return keyUp
-		case 'B':
-			return keyDown
-		case 'C':
-			return keyOpen
-		case 'D':
-			return keyBack
-		}
-		return keyNone
+		return keyBindings[string(b[:3])]
 	}
 	if len(b) == 0 {
 		return keyNone
 	}
-	switch b[0] {
-	case 'k':
-		return keyUp
-	case 'j':
-		return keyDown
-	case '\r', '\n', 'l':
-		return keyOpen
-	case 'h', 'b':
-		return keyBack
-	case 't', ' ':
-		return keyToggle
-	case 'q', 0x03, 0x04, 0x1b: // q, Ctrl-C, Ctrl-D, Esc
-		return keyQuit
-	}
-	return keyNone
+	return keyBindings[string(b[:1])]
 }
 
 func browseTracking(cmd *cobra.Command) error {
@@ -128,18 +108,17 @@ func (b *browser) refresh() error {
 }
 
 func (b *browser) level() []string {
+	var names []string
 	if a := b.agent(); a != nil {
-		out := make([]string, len(a.Repos))
-		for i, r := range a.Repos {
-			out[i] = r.Dir
+		for _, r := range a.Repos {
+			names = append(names, r.Dir)
 		}
-		return out
+		return names
 	}
-	out := make([]string, len(b.rows))
-	for i, a := range b.rows {
-		out[i] = a.Family
+	for _, a := range b.rows {
+		names = append(names, a.Family)
 	}
-	return out
+	return names
 }
 
 func (b *browser) agent() *app.AgentRow {
@@ -282,13 +261,12 @@ func (b *browser) endNote(before map[string]bool) string {
 	var lines []string
 	for _, dir := range slices.Sorted(maps.Keys(after)) {
 		was, now, name := before[dir], after[dir], sources.RepoName(dir)
-		switch {
-		case now && !was:
-			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+
-				styled(b.pal.yellow, ": no longer tracked", b.pal.reset))
-		case was && !now:
-			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+
-				styled(b.pal.green, ": tracked again, everything not yet sent goes on the next run", b.pal.reset))
+		colour, change := b.pal.yellow, ": no longer tracked"
+		if was {
+			colour, change = b.pal.green, ": tracked again, everything not yet sent goes on the next run"
+		}
+		if was != now {
+			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+styled(colour, change, b.pal.reset))
 		}
 	}
 	if len(lines) == 0 {

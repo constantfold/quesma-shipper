@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -57,12 +56,10 @@ func choose(cmd *cobra.Command, items []string) (int, error) {
 			}
 			b.WriteString("\r\n")
 		}
-		b.WriteString("\r\n" + styled(pal.cyan, "↑↓", pal.reset) + styled(pal.dim, " move", pal.reset) + "  " +
-			styled(pal.cyan, "enter", pal.reset) + styled(pal.dim, " choose", pal.reset) + "  " +
-			styled(pal.cyan, "q", pal.reset) + styled(pal.dim, " cancel", pal.reset) + "\r\n")
+		b.WriteString("\r\n" + keyHelp(pal, [][2]string{{"↑↓", "move"}, {"enter", "choose"}, {"q", "cancel"}}) + "\r\n")
 		fmt.Fprint(out, b.String())
 	}
-	height := len(items) + 2
+	up := fmt.Sprintf("\x1b[%dA", len(items)+2)
 	fmt.Fprint(out, "\x1b[?25l")
 	defer fmt.Fprint(out, "\x1b[?25h")
 	draw()
@@ -77,27 +74,19 @@ func choose(cmd *cobra.Command, items []string) (int, error) {
 			sel = (sel + len(items) - 1) % len(items)
 		case keyDown:
 			sel = (sel + 1) % len(items)
-		case keyOpen, keyToggle:
-			fmt.Fprintf(out, "\x1b[%dA", height)
-			clearLines(out, height)
+		case keyOpen, keyToggle, keyQuit:
+			// Blank the menu and leave the cursor where it started.
+			fmt.Fprint(out, up+strings.Repeat("\x1b[2K\r\n", len(items)+2)+up)
+			if k == keyQuit {
+				return 0, errCancelled
+			}
 			return sel, nil
-		case keyQuit:
-			fmt.Fprintf(out, "\x1b[%dA", height)
-			clearLines(out, height)
-			return 0, errCancelled
 		default:
 			continue
 		}
-		fmt.Fprintf(out, "\x1b[%dA", height)
+		fmt.Fprint(out, up)
 		draw()
 	}
-}
-
-func clearLines(out io.Writer, n int) {
-	for i := 0; i < n; i++ {
-		fmt.Fprint(out, "\x1b[2K\r\n")
-	}
-	fmt.Fprintf(out, "\x1b[%dA", n)
 }
 
 func confirm(cmd *cobra.Command, question string) (agreed bool, err error) {

@@ -37,6 +37,7 @@ func printPreview(out io.Writer, rep formats.Report, env *app.Runtime) {
 		fmt.Fprintf(w, "note\tmax_files_per_run reached; the rest would follow next tick\n")
 	}
 }
+
 func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	defer w.Flush()
@@ -106,6 +107,7 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 	}
 }
+
 func statsLine(rep formats.Report) string {
 	if rep.FinishedAt.IsZero() || rep.BytesRead == 0 {
 		return ""
@@ -126,6 +128,7 @@ func statsLine(rep formats.Report) string {
 	}
 	return line
 }
+
 func progressLine(sourceID string, done, total int, f formats.FileOutcome) string {
 	switch f.Decision {
 	case formats.DecisionUnchanged:
@@ -146,20 +149,17 @@ func ruleSummary(hits map[string]int) string {
 	if len(hits) == 0 {
 		return "no redactions"
 	}
-	out := ""
+	var parts []string
 	for _, id := range slices.Sorted(maps.Keys(hits)) {
-		if out != "" {
-			out += ", "
-		}
-		out += fmt.Sprintf("%s×%d", id, hits[id])
+		parts = append(parts, fmt.Sprintf("%s×%d", id, hits[id]))
 	}
-	return out
+	return strings.Join(parts, ", ")
 }
 
+// completeness is the percentage of this tick's work that shipped.
 func completeness(shipped, remaining int) float64 {
-	wanted := shipped + remaining
-	if wanted <= 0 {
+	if shipped+remaining <= 0 {
 		return 100
 	}
-	return 100 * float64(shipped) / float64(wanted)
+	return 100 * float64(shipped) / float64(shipped+remaining)
 }

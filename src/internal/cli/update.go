@@ -23,29 +23,23 @@ func clearSelfUpdateHop() {
 }
 
 func updateCmd(build app.Build) *cobra.Command {
-	return &cobra.Command{
-		Use:   "update",
-		Short: "Install the newest version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			w := cmd.OutOrStdout()
-			p := paletteFor(w)
-			opts := packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()}
-			if !build.Release {
-				return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
-			}
-			res, err := packaging.Update(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			if !res.Updated {
-				fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
-				return nil
-			}
-			fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
-			return restartService(cmd.Context(), w)
-		},
-	}
+	return verb("update", "Install the newest version", func(cmd *cobra.Command) error {
+		if !build.Release {
+			return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
+		}
+		res, err := packaging.Update(cmd.Context(), packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()})
+		if err != nil {
+			return err
+		}
+		w := cmd.OutOrStdout()
+		p := paletteFor(w)
+		if !res.Updated {
+			fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
+			return nil
+		}
+		fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
+		return restartService(cmd.Context(), w)
+	})
 }
 
 func restartService(ctx context.Context, w io.Writer) error {
@@ -87,35 +81,30 @@ func restartWanted(st packaging.ServiceStatus) bool {
 	return st.Installed
 }
 
-// configUnreadableWarning covers the update that lands with nowhere to look up the service: the
-// binary is replaced and the daemon keeps the old one. Silent, this is indistinguishable from a
-// restart that happened.
-func configUnreadableWarning(err error) string {
-	msg := fmt.Sprintf("the configuration does not resolve (%v), so the background service was not restarted;\n"+
-		"the update is installed and the daemon keeps the previous version until something restarts it", err)
+// withRestart appends the command that forces a restart, on platforms that have one.
+func withRestart(msg, lead string) string {
 	if cmd := packaging.RestartCommand(); cmd != "" {
-		msg += ";\nto force it now: " + cmd
+		return msg + lead + cmd
 	}
 	return msg
 }
 
+// configUnreadableWarning covers an update with nowhere to look up the service: silent, it would
+// be indistinguishable from a restart that happened.
+func configUnreadableWarning(err error) string {
+	return withRestart(fmt.Sprintf("the configuration does not resolve (%v), so the background service was not restarted;\n"+
+		"the update is installed and the daemon keeps the previous version until something restarts it", err), ";\nto force it now: ")
+}
+
 func serviceStateTimeoutError(err error) error {
-	detail := "the update is installed but its service restart was not requested"
-	if cmd := packaging.RestartCommand(); cmd != "" {
-		detail += "; restart it with: " + cmd
-	}
 	return fmt.Errorf("could not determine whether the background service is running within %s: %w; %s",
-		serviceStateTimeout, err, detail)
+		serviceStateTimeout, err, withRestart("the update is installed but its service restart was not requested", "; restart it with: "))
 }
 
 // restartTimeoutWarning is not an error: the binary is swapped and the supervisor restarts the
 // agent onto it as soon as the drain ends. Only the wait for confirmation gave up.
 func restartTimeoutWarning(budget time.Duration) string {
-	msg := fmt.Sprintf("the background service was still shutting down after %s; the update is installed and the service starts on the new version when its final slice is shipped", budget)
-	if cmd := packaging.RestartCommand(); cmd != "" {
-		msg += "; to force it now: " + cmd
-	}
-	return msg
+	return withRestart(fmt.Sprintf("the background service was still shutting down after %s; the update is installed and the service starts on the new version when its final slice is shipped", budget), "; to force it now: ")
 }
 
 // selfUpdateGate blocks the hop that did not land: we updated to persistedHop, restarted, and are
@@ -179,8 +168,7 @@ func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errO
 	os.Setenv(app.ReexecGuardEnv, res.To) // keeps compatibility with an older Unix binary on the hop
 	if err := packaging.ReExec(); err != nil {
 		fmt.Fprintf(errOut, "self-update: restart failed (%v); the new version runs from the next restart\n", err)
-		// The binary IS updated; only the restart failed. Recorded because a supervisor that never
-		// restarts leaves the install running the old code with nothing saying so.
+		// Recorded: a supervisor that never restarts leaves the old code running with nothing saying so.
 		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but the restart failed: %v", res.To, err))
 	}
 }
