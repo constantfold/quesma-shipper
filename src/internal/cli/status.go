@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -13,12 +12,8 @@ import (
 
 func statusCmd(b app.Build) *cobra.Command {
 	var asJSON bool
-	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Is it on, what is collected, what is waiting to be sent",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return showStatus(cmd, b, asJSON) },
-	}
+	cmd := verb("status", "Is it on, what is collected, what is waiting to be sent",
+		func(cmd *cobra.Command) error { return showStatus(cmd, b, asJSON) })
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON")
 	_ = cmd.Flags().MarkHidden("json")
 	return cmd
@@ -31,9 +26,7 @@ func showStatus(cmd *cobra.Command, b app.Build, asJSON bool) error {
 		return err
 	}
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(st)
+		return writeJSON(out, st)
 	}
 	p := paletteFor(out)
 	now := time.Now()
@@ -60,8 +53,7 @@ func showStatus(cmd *cobra.Command, b app.Build, asJSON bool) error {
 	for _, dir := range st.Off {
 		fmt.Fprintf(out, "  %s\n", styled(p.dim, "not tracked  "+dir, p.reset))
 	}
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s %s\n", styled(p.dim, "More:", p.reset), styled(p.cyan, app.Name+" --help", p.reset))
+	fmt.Fprintf(out, "\n%s\n", more(p, app.Name+" --help"))
 	return nil
 }
 

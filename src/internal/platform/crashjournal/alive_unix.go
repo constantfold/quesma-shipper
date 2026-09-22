@@ -7,8 +7,7 @@ import (
 	"syscall"
 )
 
-// What separates a run that is merely concurrent from one that died. Signal 0 is the portable
-// POSIX liveness probe: it runs the existence and permission checks and delivers nothing.
+// alive separates a concurrent run from a dead one; signal 0 checks existence and delivers nothing.
 func alive(pid int) bool {
 	if pid <= 0 {
 		return false

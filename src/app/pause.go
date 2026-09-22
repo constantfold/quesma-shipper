@@ -24,18 +24,14 @@ var PauseChoices = []PauseChoice{
 	{"6 h", "6h", after(6 * time.Hour)},
 	{"12 h", "12h", after(12 * time.Hour)},
 	{"24 h", "24h", after(24 * time.Hour)},
-	{"until tomorrow 9:00", "tomorrow", tomorrowAt(9, 0)},
+	{"until tomorrow 9:00", "tomorrow", func(now time.Time) time.Time {
+		t := now.AddDate(0, 0, 1)
+		return time.Date(t.Year(), t.Month(), t.Day(), 9, 0, 0, 0, now.Location())
+	}},
 }
 
 func after(d time.Duration) func(time.Time) time.Time {
 	return func(now time.Time) time.Time { return now.Add(d) }
-}
-
-func tomorrowAt(h, m int) func(time.Time) time.Time {
-	return func(now time.Time) time.Time {
-		t := now.AddDate(0, 0, 1)
-		return time.Date(t.Year(), t.Month(), t.Day(), h, m, 0, 0, now.Location())
-	}
 }
 
 func ParsePauseUntil(args []string, now time.Time) (time.Time, error) {
@@ -49,8 +45,7 @@ func ParsePauseUntil(args []string, now time.Time) (time.Time, error) {
 	return time.Time{}, errors.New(PauseUsage)
 }
 
-// pauseStateDir does not require valid config because pause and resume must remain usable
-// when configuration is broken.
+// pauseStateDir falls back to the default so pause and resume work with a broken configuration.
 func pauseStateDir() (dir, warning string, err error) {
 	_, paths, resolveErr := ResolveEffective()
 	if resolveErr == nil {
@@ -69,9 +64,7 @@ func pauseStateDir() (dir, warning string, err error) {
 		resolveErr, fallback), nil
 }
 
-// StateDirWithoutConfig resolves the state directory the way pause does. The diagnostics record
-// needs it for the same reason: a config too broken to load must not also hide the record of what
-// broke.
+// StateDirWithoutConfig resolves like pause, so a broken config cannot hide the record of what broke.
 func StateDirWithoutConfig() (string, error) {
 	dir, _, err := pauseStateDir()
 	return dir, err
@@ -90,8 +83,7 @@ func Resume() (wasPaused bool, warning string, err error) {
 	if err != nil {
 		return false, "", err
 	}
-	was := platform.Read(stateDir).Paused
-	return was, warning, platform.Clear(stateDir)
+	return platform.Read(stateDir).Paused, warning, platform.Clear(stateDir)
 }
 
 func FormatUntil(t, now time.Time) string {

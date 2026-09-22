@@ -1,17 +1,13 @@
 package cli
 
 import (
-	"cmp"
 	"fmt"
 	"io"
 	"maps"
 	"os"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -21,135 +17,11 @@ import (
 )
 
 func trackingCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "tracking",
-		Short: "What is collected, per agent and repository",
-		Long: "What is collected, per agent and repository: size, what is still to be sent, when\n" +
-			"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
-			"file is placed there, what was already sent stays sent) or to start again.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return browseTracking(cmd) },
-	}
+	cmd := verb("tracking", "What is collected, per agent and repository", browseTracking)
+	cmd.Long = "What is collected, per agent and repository: size, what is still to be sent, when\n" +
+		"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
+		"file is placed there, what was already sent stays sent) or to start again."
 	return cmd
-}
-
-func table(heads []string, right []bool, nameCol int, rows [][]string, rowStyle []string, pal palette) string {
-	width := make([]int, len(heads))
-	measure := func(cells []string) {
-		for i, cell := range cells {
-			width[i] = max(width[i], utf8.RuneCountInString(cell))
-		}
-	}
-	measure(heads)
-	for _, row := range rows {
-		measure(row)
-	}
-	line := func(cells []string, style string, paint bool) string {
-		var b strings.Builder
-		b.WriteString(style)
-		for i, cell := range cells {
-			if i > 0 {
-				b.WriteString("  ")
-			}
-			pad := strings.Repeat(" ", width[i]-utf8.RuneCountInString(cell))
-			text := cell + pad
-			if right[i] {
-				text = pad + cell
-			}
-			switch {
-			case !paint || strings.TrimSpace(cell) == "":
-			case i == 0 || i == nameCol:
-				text = styled(pal.bold, text, pal.reset+style)
-			default:
-				text = paintValue(text, pal, style)
-			}
-			b.WriteString(text)
-		}
-		out := strings.TrimRight(b.String(), " ")
-		if style != "" {
-			return strings.TrimSuffix(out, style) + pal.reset
-		}
-		return out
-	}
-	var b strings.Builder
-	b.WriteString(line(heads, pal.dim, false) + "\n")
-	for i, row := range rows {
-		b.WriteString(line(row, rowStyle[i], true) + "\n")
-	}
-	return b.String()
-}
-
-var leadingNumber = regexp.MustCompile(`^(\s*)(\d[\d,.]*)`)
-
-func paintValue(cell string, pal palette, restore string) string {
-	if strings.TrimSpace(cell) == "n/a" {
-		return styled(pal.dim, cell, pal.reset+restore)
-	}
-	return leadingNumber.ReplaceAllString(cell, "$1"+pal.cyan+"$2"+pal.reset+restore)
-}
-func rowStyle(pal palette, selected, off bool) string {
-	switch {
-	case off:
-		return pal.dim
-	case selected:
-		return pal.bold
-	}
-	return ""
-}
-
-func renderAgents(rows []app.AgentRow, sel int, now time.Time, pal palette) string {
-	cells := make([][]string, len(rows))
-	styles := make([]string, len(rows))
-	for i, a := range rows {
-		state, repos, size, pending, last := "", "", "", "", ""
-		if len(a.Repos) == 0 {
-			state = "not installed"
-		} else {
-			repos, size, last = strconv.Itoa(len(a.Repos)), bytesCell(a.Bytes), app.Ago(a.Last, now)
-			pending = toSync(a.Pending, a.PendingKnown)
-		}
-		cells[i] = []string{cursor(i == sel), a.Display, repos, size, pending, last, state}
-		styles[i] = rowStyle(pal, i == sel, len(a.Repos) == 0)
-	}
-	return table([]string{" ", "agent", "repos", "size", "to send", "last used", ""},
-		[]bool{false, false, true, true, true, false, false}, 1, cells, styles, pal)
-}
-
-func renderRepos(a app.AgentRow, sel int, now time.Time, pal palette) string {
-	cells := make([][]string, len(a.Repos))
-	styles := make([]string, len(a.Repos))
-	for i, r := range a.Repos {
-		state, pending := "", "n/a"
-		if r.Off {
-			state = "not tracked"
-		} else {
-			pending = toSync(r.Pending, a.PendingKnown)
-		}
-		cells[i] = []string{cursor(i == sel), cmp.Or(r.Name, "(no repository found)"),
-			bytesCell(r.Bytes), pending, app.Ago(r.Last, now), state}
-		styles[i] = rowStyle(pal, i == sel, r.Off)
-	}
-	return table([]string{" ", strings.ToLower(a.Display), "size", "to send", "last used", ""},
-		[]bool{false, false, true, true, false, false}, 1, cells, styles, pal)
-}
-
-func cursor(on bool) string {
-	if on {
-		return ">"
-	}
-	return " "
-}
-func toSync(n int64, known bool) string {
-	if !known {
-		return "n/a"
-	}
-	return bytesCell(n)
-}
-func bytesCell(n int64) string {
-	if n == 0 {
-		return "0 MB"
-	}
-	return app.HumanBytes(n)
 }
 
 type key int
@@ -164,62 +36,21 @@ const (
 	keyQuit
 )
 
+var keyBindings = map[string]key{
+	"\x1b[A": keyUp, "\x1b[B": keyDown, "\x1b[C": keyOpen, "\x1b[D": keyBack,
+	"k": keyUp, "j": keyDown, "\r": keyOpen, "\n": keyOpen, "l": keyOpen, "h": keyBack, "b": keyBack,
+	"t": keyToggle, " ": keyToggle,
+	"q": keyQuit, "\x03": keyQuit, "\x04": keyQuit, "\x1b": keyQuit, // q, Ctrl-C, Ctrl-D, Esc
+}
+
+// decodeKey reads an arrow from its escape sequence and any other key from its first byte.
 func decodeKey(b []byte) key {
 	if len(b) >= 3 && b[0] == 0x1b && b[1] == '[' {
-		switch b[2] {
-		case 'A':
-			return keyUp
-		case 'B':
-			return keyDown
-		case 'C':
-			return keyOpen
-		case 'D':
-			return keyBack
-		}
-		return keyNone
+		return keyBindings[string(b[:3])]
 	}
-	if len(b) == 0 {
-		return keyNone
-	}
-	switch b[0] {
-	case 'k':
-		return keyUp
-	case 'j':
-		return keyDown
-	case '\r', '\n', 'l':
-		return keyOpen
-	case 'h', 'b':
-		return keyBack
-	case 't', ' ':
-		return keyToggle
-	case 'q', 0x03, 0x04, 0x1b: // q, Ctrl-C, Ctrl-D, Esc
-		return keyQuit
-	}
-	return keyNone
+	return keyBindings[string(b[:min(len(b), 1)])]
 }
 
-func trackingHelp(pal palette, repoLevel, off bool) string {
-	toggle := "stop tracking  "
-	if off {
-		toggle = "resume tracking"
-	}
-	keys := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"t", toggle}, {"b", "back"}, {"q", "quit"}}
-	if !repoLevel {
-		keys = [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"q", "quit"}}
-	}
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, styled(pal.cyan, k[0], pal.reset)+styled(pal.dim, " "+k[1], pal.reset))
-	}
-	return strings.Join(parts, "  ")
-}
-
-func styled(style, s, reset string) string {
-	if style == "" {
-		return s
-	}
-	return style + s + reset
-}
 func browseTracking(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 	view := &browser{pal: paletteFor(out)}
@@ -245,12 +76,9 @@ type browser struct {
 	rows []app.AgentRow
 	pal  palette
 
-	open        string
-	sel         int
-	top         int
-	height      int
-	status      string
-	statusStyle string
+	open             string
+	sel, top, height int
+	status           string // shown dim under the table until the next move
 }
 
 func (b *browser) refresh() error {
@@ -272,26 +100,28 @@ func (b *browser) refresh() error {
 	b.sel = max(slices.Index(b.level(), was), 0)
 	return nil
 }
+
 func (b *browser) level() []string {
+	var names []string
 	if a := b.agent(); a != nil {
-		out := make([]string, len(a.Repos))
-		for i, r := range a.Repos {
-			out[i] = r.Dir
+		for _, r := range a.Repos {
+			names = append(names, r.Dir)
 		}
-		return out
+		return names
 	}
-	out := make([]string, len(b.rows))
-	for i, a := range b.rows {
-		out[i] = a.Family
+	for _, a := range b.rows {
+		names = append(names, a.Family)
 	}
-	return out
+	return names
 }
+
 func (b *browser) agent() *app.AgentRow {
 	if i := slices.IndexFunc(b.rows, func(a app.AgentRow) bool { return a.Family == b.open }); b.open != "" && i >= 0 {
 		return &b.rows[i]
 	}
 	return nil
 }
+
 func (b *browser) clip(tbl string) string {
 	lines := strings.Split(strings.TrimSuffix(tbl, "\n"), "\n")
 	rows := lines[1:]
@@ -316,22 +146,20 @@ func (b *browser) clip(tbl string) string {
 	}
 	return strings.Join(out, "\n") + "\n"
 }
+
 func (b *browser) screen(now time.Time, raw bool) string {
+	a := b.agent()
 	var body string
-	if a := b.agent(); a != nil {
-		body = renderRepos(*a, b.sel, now, b.pal)
+	if a != nil {
+		body = b.clip(renderRepos(*a, b.sel, now, b.pal))
 	} else {
-		body = renderAgents(b.rows, b.sel, now, b.pal)
+		body = b.clip(renderAgents(b.rows, b.sel, now, b.pal))
 	}
-	body = b.clip(body)
 	if b.status != "" {
-		body += "\n" + styled(b.statusStyle, b.status, b.pal.reset) + "\n"
+		body += "\n" + styled(b.pal.dim, b.status, b.pal.reset) + "\n"
 	}
-	off := false
-	if a := b.agent(); a != nil && b.sel < len(a.Repos) {
-		off = a.Repos[b.sel].Off
-	}
-	body += "\n" + trackingHelp(b.pal, b.agent() != nil, off) + "\n"
+	off := a != nil && b.sel < len(a.Repos) && a.Repos[b.sel].Off
+	body += "\n" + trackingHelp(b.pal, a != nil, off) + "\n"
 	if raw {
 		body = strings.ReplaceAll(body, "\n", "\r\n")
 	}
@@ -392,6 +220,7 @@ func (b *browser) move(by int) {
 		b.sel = (b.sel + by + n) % n
 	}
 }
+
 func (b *browser) toggle() error {
 	a := b.agent()
 	if a == nil || b.sel >= len(a.Repos) {
@@ -399,7 +228,7 @@ func (b *browser) toggle() error {
 	}
 	r := a.Repos[b.sel]
 	if r.Dir == "" {
-		b.status, b.statusStyle = "these sessions belong to no repository, so tracking cannot be switched off for them", b.pal.dim
+		b.status = "these sessions belong to no repository, so tracking cannot be switched off for them"
 		return nil
 	}
 	if !r.Off {
@@ -408,27 +237,27 @@ func (b *browser) toggle() error {
 	}
 	own := sources.MarkerPath(r.Dir)
 	if !slices.Contains(r.Markers, own) {
-		b.status, b.statusStyle = "not tracked because of "+strings.Join(r.Markers, ", ")+", remove that file to track everything under it", b.pal.dim
+		b.status = "not tracked because of " + strings.Join(r.Markers, ", ") + ", remove that file to track everything under it"
 		return nil
 	}
 	b.status = ""
 	if others := slices.DeleteFunc(slices.Clone(r.Markers), func(m string) bool { return m == own }); len(others) > 0 {
-		b.status, b.statusStyle = "some sessions stay untracked because of "+strings.Join(others, ", "), b.pal.dim
+		b.status = "some sessions stay untracked because of " + strings.Join(others, ", ")
 	}
 	return b.attr.Track(r.Dir)
 }
+
 func (b *browser) endNote(before map[string]bool) string {
 	after := b.marked()
 	var lines []string
 	for _, dir := range slices.Sorted(maps.Keys(after)) {
 		was, now, name := before[dir], after[dir], sources.RepoName(dir)
-		switch {
-		case now && !was:
-			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+
-				styled(b.pal.yellow, ": no longer tracked", b.pal.reset))
-		case was && !now:
-			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+
-				styled(b.pal.green, ": tracked again, everything not yet sent goes on the next run", b.pal.reset))
+		colour, change := b.pal.yellow, ": no longer tracked"
+		if was {
+			colour, change = b.pal.green, ": tracked again, everything not yet sent goes on the next run"
+		}
+		if was != now {
+			lines = append(lines, "  "+styled(b.pal.bold, name, b.pal.reset)+styled(colour, change, b.pal.reset))
 		}
 	}
 	if len(lines) == 0 {
@@ -436,6 +265,7 @@ func (b *browser) endNote(before map[string]bool) string {
 	}
 	return styled(b.pal.dim, "tracking changes:", b.pal.reset) + "\n" + strings.Join(lines, "\n") + "\n"
 }
+
 func (b *browser) marked() map[string]bool {
 	out := map[string]bool{}
 	for _, a := range b.rows {

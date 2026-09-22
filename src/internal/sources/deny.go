@@ -11,67 +11,32 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// CompiledDeny is the floor for paths, overridable by no layer: a config whose include globs reach one of these is
-// refused, not applied. Matched against expanded, symlink-resolved absolute paths, never against the glob template.
+// CompiledDeny is the path floor no layer overrides, matched against expanded, symlink-resolved paths, never glob templates.
 var CompiledDeny = []string{
 	// Cloud and SSH credential stores.
-	"~/.aws/**",
-	"~/.ssh/**",
-	"~/.gnupg/**",
-	"~/.kube/**",
-	"~/.azure/**",
-	"~/.docker/config.json",
-	"~/.config/gh/**",
-	"~/.config/gcloud/**",
-	"$APPDATA/gcloud/**",
-	"$APPDATA/GitHub CLI/**",
-
+	"~/.aws/**", "~/.ssh/**", "~/.gnupg/**", "~/.kube/**", "~/.azure/**", "~/.docker/config.json",
+	"~/.config/gh/**", "~/.config/gcloud/**", "$APPDATA/gcloud/**", "$APPDATA/GitHub CLI/**",
 	// Package-manager and VCS credential files.
-	"~/.netrc",
-	"~/.npmrc",
-	"~/.pypirc",
-	"~/.git-credentials",
-
+	"~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials",
 	// Key material and environment files, anywhere.
-	"**/.env",
-	"**/.env.*",
-	"**/id_rsa",
-	"**/id_ed25519",
-	"**/*.pem",
-	"**/*.p12",
-	"**/*.key",
-
-	// OS keychains.
+	"**/.env", "**/.env.*", "**/id_rsa", "**/id_ed25519", "**/*.pem", "**/*.p12", "**/*.key",
 	"~/Library/Keychains/**",
-
 	// Agent stores hold credentials that look like ordinary JSON, so collection targets projects/** and memory/**, never a whole root.
-	"~/.claude/.credentials.json",
-	"~/.claude.json",
-	"~/.codex/auth.json",
-	"~/.config/opencode/auth.json",
-	"~/.local/share/opencode/auth.json",
+	"~/.claude/.credentials.json", "~/.claude.json", "~/.codex/auth.json",
+	"~/.config/opencode/auth.json", "~/.local/share/opencode/auth.json",
 }
 
-type List struct {
-	patterns []string
-}
+type List struct{ patterns []string }
 
 // New expands ~ and $VAR. Entries whose variable is unset (e.g. $APPDATA outside Windows) are dropped.
 func New(home string) *List {
 	d := &List{}
 	env := Env{Home: home, Lookup: os.LookupEnv}
-	seen := map[string]bool{}
 	for _, p := range CompiledDeny {
 		expanded, err := env.expandVars(p)
-		if err != nil {
-			continue
+		if e := normalize(ExpandHome(expanded, home)); err == nil && !slices.Contains(d.patterns, e) {
+			d.patterns = append(d.patterns, e)
 		}
-		e := normalize(ExpandHome(expanded, home))
-		if seen[e] {
-			continue
-		}
-		seen[e] = true
-		d.patterns = append(d.patterns, e)
 	}
 	return d
 }
@@ -83,22 +48,16 @@ func (d *List) Patterns() []string {
 
 // Match reports whether an absolute path is denied, checking both the literal and the symlink-resolved form.
 func (d *List) Match(path string) (bool, string) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		// A path that does not exist has no resolved form, and cannot be read either.
-		resolved = ""
-	}
+	// A path that does not exist has no resolved form, and cannot be read either.
+	resolved, _ := filepath.EvalSymlinks(path)
 	return d.MatchPair(path, resolved)
 }
 
 // MatchPair is Match for a caller that already resolved; an empty or equal resolved form means the literal one is all there is to check.
 func (d *List) MatchPair(given, resolved string) (bool, string) {
 	c := normalize(given)
-	if denied, pat := d.matchCandidate(c); denied {
-		return true, pat
-	}
-	if resolved == "" {
-		return false, ""
+	if denied, pat := d.matchCandidate(c); denied || resolved == "" {
+		return denied, pat
 	}
 	if r := normalize(resolved); r != c {
 		return d.matchCandidate(r)
@@ -109,10 +68,8 @@ func (d *List) MatchPair(given, resolved string) (bool, string) {
 // MatchTree reports whether a directory is a denied tree, or sits inside one. Only a "<root>/**" pattern may prune a tree.
 func (d *List) MatchTree(dir string) (bool, string) {
 	c := normalize(dir)
-	for _, pat := range d.patterns {
-		if matchesTree(pat, c) {
-			return true, pat
-		}
+	if i := slices.IndexFunc(d.patterns, func(pat string) bool { return matchesTree(pat, c) }); i >= 0 {
+		return true, d.patterns[i]
 	}
 	return false, ""
 }
@@ -120,10 +77,7 @@ func (d *List) MatchTree(dir string) (bool, string) {
 // matchCandidate reports the first pattern in list order that matches, so doctor and the audit log quote back the compiled entry.
 func (d *List) matchCandidate(c string) (bool, string) {
 	for _, pat := range d.patterns {
-		if ok, err := doublestar.Match(pat, c); err == nil && ok {
-			return true, pat
-		}
-		if matchesTree(pat, c) {
+		if ok, err := doublestar.Match(pat, c); (err == nil && ok) || matchesTree(pat, c) {
 			return true, pat
 		}
 	}
@@ -144,15 +98,13 @@ func (d *List) CheckRoot(root string) error {
 	return nil
 }
 
-// CheckIncludes refuses a config whose include globs actually reach a denied file on this machine now. Glob
-// subsumption is deliberately not computed: the read-time Match call stays the authority.
+// CheckIncludes refuses include globs that reach a denied file here now; glob subsumption is not computed, read-time Match decides.
 func (d *List) CheckIncludes(root string, includes []string) error {
 	fsys := os.DirFS(root)
 	for _, glob := range includes {
 		pattern := strings.TrimPrefix(filepath.ToSlash(glob), "/")
 		matches, err := doublestar.Glob(fsys, pattern)
 		if err != nil {
-			// A malformed glob is a config error in its own right.
 			return fmt.Errorf("include glob %q is not valid: %w", glob, err)
 		}
 		for _, m := range matches {
@@ -166,8 +118,7 @@ func (d *List) CheckIncludes(root string, includes []string) error {
 	return nil
 }
 
-// normalize converts a path to forward slashes and, on Windows, to lower case: doublestar matching is
-// slash-separated and case-sensitive.
+// normalize slashes (and on Windows lower-cases) a path, since doublestar matching is slash-separated and case-sensitive.
 func normalize(p string) string {
 	p = filepath.ToSlash(filepath.Clean(p))
 	if runtime.GOOS == "windows" {

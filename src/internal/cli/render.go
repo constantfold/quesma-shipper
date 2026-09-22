@@ -16,15 +16,8 @@ type palette struct {
 }
 
 func ansiPalette() palette {
-	return palette{
-		green:  "\x1b[32m",
-		yellow: "\x1b[33m",
-		red:    "\x1b[31m",
-		cyan:   "\x1b[36m",
-		dim:    "\x1b[2m",
-		bold:   "\x1b[1m",
-		reset:  "\x1b[0m",
-	}
+	return palette{green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m", cyan: "\x1b[36m",
+		dim: "\x1b[2m", bold: "\x1b[1m", reset: "\x1b[0m"}
 }
 
 var valueTokens = regexp.MustCompile(`[a-z][a-z0-9+.-]*://\S+` + // s3://…, https://…
@@ -103,29 +96,29 @@ func renderSections(w io.Writer, p palette, secs []app.Section) {
 		}
 
 		for _, row := range sec.Rows {
-			pad := strings.Repeat(" ", max(width-utf8.RuneCountInString(row.Head()), 0))
-			label := row.Head() + pad
-			if row.Name {
-				label = p.bold + row.Label + p.reset
-				if row.Tag != "" {
-					label += " " + p.cyan + row.Tag + p.reset
+			style, reset, glyph := "", "", p.glyph(row.Sev)
+			if row.Sev == app.SevDim {
+				style, reset, glyph = p.dim, p.reset, "-"
+			}
+			var line string
+			if row.Sub {
+				detail := row.Detail
+				if label := strings.TrimSpace(row.Label); label != "" {
+					detail = label + ": " + detail
 				}
-				label += pad
+				line = fixIndent + p.paint(detail, style)
+			} else {
+				label := row.Head()
+				if row.Name {
+					label = p.bold + row.Label + p.reset
+					if row.Tag != "" {
+						label += " " + p.cyan + row.Tag + p.reset
+					}
+				}
+				label += strings.Repeat(" ", max(width-utf8.RuneCountInString(row.Head()), 0))
+				line = strings.TrimRight(fmt.Sprintf("  %s  %s  %s", glyph, label, p.paint(row.Detail, style)), " ")
 			}
-			line := strings.TrimRight(fmt.Sprintf("  %s  %s  %s", p.glyph(row.Sev), label, p.paint(row.Detail, "")), " ")
-			sub := row.Detail
-			if l := strings.TrimSpace(row.Label); l != "" {
-				sub = l + ": " + sub
-			}
-			switch {
-			case row.Sub && row.Sev == app.SevDim:
-				line = p.dim + fixIndent + p.paint(sub, p.dim) + p.reset
-			case row.Sub:
-				line = fixIndent + p.paint(sub, "")
-			case row.Sev == app.SevDim:
-				line = p.dim + strings.TrimRight(fmt.Sprintf("  -  %s  %s", label, p.paint(row.Detail, p.dim)), " ") + p.reset
-			}
-			fmt.Fprintln(w, line)
+			fmt.Fprintln(w, style+line+reset)
 			for i, fix := range strings.Split(row.Fix, "\n") {
 				if fix == "" {
 					continue
@@ -141,38 +134,29 @@ func renderSections(w io.Writer, p palette, secs []app.Section) {
 }
 
 func verdict(fails, warns int) string {
-	issue := func(n int) string {
-		if n == 1 {
-			return "1 issue needs attention"
-		}
-		return fmt.Sprintf("%d issues need attention", n)
-	}
-	switch {
-	case fails == 0 && warns == 0:
+	if fails == 0 && warns == 0 {
 		return "Everything is being collected."
-	case fails == 0:
-		return issue(warns) + "."
-	default:
-		problem := "1 problem is stopping collection"
-		if fails > 1 {
-			problem = fmt.Sprintf("%d problems are stopping collection", fails)
-		}
-		if warns > 0 {
-			return problem + "; " + issue(warns) + "."
-		}
-		return problem + "."
 	}
+	problems, issues := "problems are", "issues need"
+	if fails == 1 {
+		problems = "problem is"
+	}
+	if warns == 1 {
+		issues = "issue needs"
+	}
+	var parts []string
+	if fails > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s stopping collection", fails, problems))
+	}
+	if warns > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s attention", warns, issues))
+	}
+	return strings.Join(parts, "; ") + "."
 }
 
+// printWarning indents a multi-line warning under its first line.
 func printWarning(w io.Writer, warning string) {
-	if warning == "" {
-		return
-	}
-	for i, line := range strings.Split(warning, "\n") {
-		if i == 0 {
-			fmt.Fprintf(w, "warning: %s\n", line)
-			continue
-		}
-		fmt.Fprintf(w, "         %s\n", line)
+	if warning != "" {
+		fmt.Fprintf(w, "warning: %s\n", strings.ReplaceAll(warning, "\n", "\n         "))
 	}
 }

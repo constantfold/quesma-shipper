@@ -18,10 +18,8 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 	rep := &Report{}
 	eff, paths, remote, err := ResolveOnline(ctx)
 	if err != nil {
-		rep.Sections = []Section{{Title: "Configuration", Rows: []Row{{
-			Sev: SevFail, Label: "config", Detail: fmt.Sprintf("refused: %v", err),
-			Fix: "nothing runs until this resolves, `quesma-shipper config` walks the layers",
-		}}}}
+		rep.Sections = []Section{{Title: "Configuration", Rows: []Row{{Sev: SevFail, Label: "config", Detail: fmt.Sprintf("refused: %v", err),
+			Fix: "nothing runs until this resolves, `quesma-shipper config` walks the layers"}}}}
 		rep.Update = UpdateStatus{State: "skipped", Detail: "not checked - config did not resolve"}
 		return rep
 	}
@@ -42,20 +40,13 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		installID = unit.InstallID.String()
 	}
 	doc, docErr := engine.Peek(paths.StateDir)
-	registry := sources.NewRegistry()
 	trackFilter := eff.Catalog.RepoFilter()
 	var probes []sourceProbe
 	for _, src := range eff.Sources {
 		pr := sourceProbe{src: src}
 		if src.Enabled {
-			if prim, err := registry.For(src.Gather); err != nil {
-				pr.err = err
-			} else {
-				pr.d, pr.err = prim.Discover(sources.Request{
-					Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
-					StateDir: paths.StateDir, Username: username,
-				})
-			}
+			pr.d, pr.err = sources.Discover(sources.Request{Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
+				StateDir: paths.StateDir, Username: username})
 			if pr.err == nil && docErr == nil {
 				pr.pending, _ = pending(doc, src, pr.d)
 			}
@@ -66,11 +57,9 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 	agents, agentsCollecting, filesFound := agentRows(probes, familyNames(eff.Catalog), loadLastUpload(paths.StateDir), now, verbose)
 	rep.AgentsCollecting, rep.FilesFound = agentsCollecting, filesFound
 
-	var shipping []Row
+	storage := Row{Sev: SevFail, Label: "storage", Brief: "cannot send"}
 	if env, err := NewFrom(build, eff, paths, remote); err != nil {
-		shipping = append(shipping, Row{Sev: SevFail, Label: "storage", Brief: "cannot send",
-			Detail: fmt.Sprintf("unavailable: %v", err),
-			Fix:    "nothing is sent until this resolves"})
+		storage.Detail, storage.Fix = fmt.Sprintf("unavailable: %v", err), "nothing is sent until this resolves"
 	} else {
 		pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -78,18 +67,14 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		if verbose {
 			where = env.Destination() + ", "
 		}
-		// Doctor probes the write path with the one state object the protocol authorizes.
-		// mirror=false: doctor collects nothing, and mirroring its all-zero counters would erase
-		// the record of the last real flush, the very thing doctor reads.
+		// Unmirrored: doctor's all-zero counters would erase the local record of the last real flush.
 		if err := env.writeHeartbeat(pctx, doctorReport(probes), false); err != nil {
-			shipping = append(shipping, Row{Sev: SevFail, Label: "storage", Brief: "cannot send",
-				Detail: where + "upload check failed: " + err.Error(),
-				Fix:    "nothing can be sent until this works"})
+			storage.Detail, storage.Fix = where+"upload check failed: "+err.Error(), "nothing can be sent until this works"
 		} else {
-			shipping = append(shipping, Row{Sev: SevOK, Label: "storage",
-				Detail: where + "one test file sent"})
+			storage = Row{Sev: SevOK, Label: "storage", Detail: where + "one test file sent"}
 		}
 	}
+	shipping := []Row{storage}
 	for _, row := range controlPlaneRows(enr, enrErr, eff, remote) {
 		if verbose || row.Sev != SevOK {
 			shipping = append(shipping, row)
@@ -105,6 +90,13 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 			stateDetail = append(stateDetail, row)
 		}
 	}
+	idRow := Row{Sev: SevDim, Label: "install_id", Detail: installID}
+	if unitErr != nil {
+		idRow = Row{Sev: SevFail, Label: "identity", Detail: fmt.Sprintf("missing: %v", unitErr), Fix: "`quesma-shipper login`"}
+		if !verbose {
+			shipping = append(shipping, idRow)
+		}
+	}
 	rep.Sections = []Section{{Title: "Collecting", Rows: agents}, {Title: "Sending", Rows: shipping}}
 
 	if verbose {
@@ -112,34 +104,24 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		for _, pr := range probes {
 			tech = append(tech, technicalSourceRows(pr)...)
 		}
-		conf := []Row{{Sev: SevDim, Label: "build", Detail: VersionLine(build)}}
-		if unitErr != nil {
-			conf = append(conf, Row{Sev: SevFail, Label: "identity", Detail: fmt.Sprintf("missing: %v", unitErr), Fix: "`quesma-shipper login`"})
-		} else {
-			conf = append(conf, Row{Sev: SevDim, Label: "install_id", Detail: installID})
+		conf := []Row{{Sev: SevDim, Label: "build", Detail: VersionLine(build)}, idRow,
+			{Sev: SevDim, Label: "state_dir", Detail: paths.StateDir},
+			{Sev: SevDim, Label: "config_version", Detail: fmt.Sprintf("%d", eff.ConfigVersion)},
+			{Sev: SevDim, Label: "rule_packs", Detail: fmt.Sprintf("%v", eff.RulePacks)},
+			{Sev: SevDim, Label: "deny_patterns", Detail: fmt.Sprintf("%d compiled + served additions", len(eff.Deny.Patterns()))},
 		}
-		conf = append(conf,
-			Row{Sev: SevDim, Label: "state_dir", Detail: paths.StateDir},
-			Row{Sev: SevDim, Label: "config_version", Detail: fmt.Sprintf("%d", eff.ConfigVersion)},
-			Row{Sev: SevDim, Label: "rule_packs", Detail: fmt.Sprintf("%v", eff.RulePacks)},
-			Row{Sev: SevDim, Label: "deny_patterns", Detail: fmt.Sprintf("%d compiled + served additions", len(eff.Deny.Patterns()))},
-		)
 		conf = append(conf, enrollmentRows(paths.StateDir, enr, enrErr, eff, remote)...)
 		conf = append(conf, stateDetail...)
 		if st := packaging.ServiceState(paths.StateDir); st.Path != "" {
 			conf = append(conf, Row{Sev: SevDim, Label: "service_entry", Detail: st.Path})
 		}
-		rep.Sections = append(rep.Sections, Section{Title: "Sources (technical)", Rows: tech}, Section{Title: "Configuration", Rows: conf})
-		for si := 2; si < len(rep.Sections); si++ {
-			for ri := range rep.Sections[si].Rows {
-				if rep.Sections[si].Rows[ri].Sev == SevWarn {
-					rep.Sections[si].Rows[ri].Rollup = true
-				}
+		// Technical warnings repeat what the sections above already count.
+		for _, rows := range [][]Row{tech, conf} {
+			for i := range rows {
+				rows[i].Rollup = rows[i].Sev == SevWarn
 			}
 		}
-	} else if unitErr != nil {
-		rep.Sections[1].Rows = append(rep.Sections[1].Rows, Row{Sev: SevFail, Label: "identity",
-			Detail: fmt.Sprintf("missing: %v", unitErr), Fix: "`quesma-shipper login`"})
+		rep.Sections = append(rep.Sections, Section{Title: "Sources (technical)", Rows: tech}, Section{Title: "Configuration", Rows: conf})
 	}
 	rep.Update = <-updCh
 	return rep

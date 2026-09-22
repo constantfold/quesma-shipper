@@ -1,29 +1,23 @@
-package transforms_test
+package transforms
 
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"filippo.io/age"
-
 	"github.com/klauspost/compress/zstd"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const vectorPath = "../../conformance/v1/seal/container.json"
 
-// containerVectors pins the tar layer, which is deterministic and holds the contract that
-// matters: entry order, entry names, normalised headers. zstd output moves with the encoder
-// version and age is nondeterministic by design, so whole-object bytes are covered by round-trip
-// and opacity tests instead.
+// containerVectors fix the tar layer: entry order, names, normalised headers. zstd output moves
+// with the encoder and age is nondeterministic, so round-trip tests cover the whole object.
 type containerVectors struct {
 	VectorSet     string          `json:"vector_set"`
 	VectorVersion int             `json:"vector_version"`
@@ -43,90 +37,50 @@ type tarHeaderVector struct {
 }
 
 type tarVector struct {
-	Name        string `json:"name"`
-	ManifestB64 string `json:"manifest_json"`
-	PayloadHex  string `json:"payload_hex"`
-	TarSHA256   string `json:"tar_sha256"`
+	Name         string `json:"name"`
+	ManifestJSON string `json:"manifest_json"`
+	PayloadHex   string `json:"payload_hex"`
+	TarSHA256    string `json:"tar_sha256"`
 }
 
 func TestConformanceContainerLayout(t *testing.T) {
-	if *update {
-		if err := os.MkdirAll(filepath.Dir(vectorPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(vectorPath, generateContainerVectors(t), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("regenerated %s", vectorPath)
-	}
-
-	raw, err := os.ReadFile(vectorPath)
-	if err != nil {
-		t.Fatalf("read vectors: %v", err)
-	}
+	updateVectors(t, vectorPath, generateContainerVectors)
 	var v containerVectors
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatal(err)
-	}
+	readVectors(t, vectorPath, &v)
 
-	if v.ZstdLevel != transforms.ZstdLevel {
-		t.Errorf("zstd level drifted: vector says %d, code says %d", v.ZstdLevel, transforms.ZstdLevel)
-	}
-	want := []string{transforms.ManifestEntry, transforms.PayloadEntry}
-	for i, name := range want {
-		if i >= len(v.EntryOrder) || v.EntryOrder[i] != name {
-			t.Fatalf("entry order drifted: %v, want %v", v.EntryOrder, want)
-		}
-	}
+	assert.Equalf(t, ZstdLevel, v.ZstdLevel, "zstd level drifted: vector says %d, code says %d", v.ZstdLevel, ZstdLevel)
+	require.Equal(t, []string{ManifestEntry, PayloadEntry}, v.EntryOrder)
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			payload, err := hex.DecodeString(c.PayloadHex)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := tarBytesFor(t, []byte(c.ManifestB64), payload)
-			sum := sha256.Sum256(got)
-			if hex.EncodeToString(sum[:]) != c.TarSHA256 {
-				t.Errorf("tar layer bytes changed:\n got %s\nwant %s",
-					hex.EncodeToString(sum[:]), c.TarSHA256)
-			}
+			require.NoError(t, err)
+			got := tarBytesFor(t, []byte(c.ManifestJSON), payload)
+			assert.Equal(t, c.TarSHA256, sha256Hex(got), "tar layer bytes changed")
 		})
 	}
 }
 
-// tarBytesFor recovers the tar layer from a real sealed object, so the vector pins what Seal
-// writes rather than a reimplementation.
+// tarBytesFor recovers the tar layer from a real sealed object, so the vector checks what Seal writes.
 func tarBytesFor(t *testing.T, manifestJSON, payload []byte) []byte {
 	t.Helper()
 
-	var m transforms.Manifest
-	if err := json.Unmarshal(manifestJSON, &m); err != nil {
-		t.Fatal(err)
-	}
+	var m Manifest
+	require.NoError(t, json.Unmarshal(manifestJSON, &m))
 	id := identity(t)
-	obj, _, err := transforms.Seal(m, payload, []age.Recipient{id.Recipient()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	obj, _, err := Seal(m, payload, []age.Recipient{id.Recipient()})
+	require.NoError(t, err)
 
 	dec, err := age.Decrypt(bytes.NewReader(obj), id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	zr, err := zstd.NewReader(dec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer zr.Close()
 
 	tarred, err := io.ReadAll(zr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	// Recipient key IDs differ per run, so rebuild the tar with them blanked, which is what the
-	// vector records.
+	// Recipient key IDs differ per run; the vector records the tar with them removed.
 	return normalizeTar(t, tarred)
 }
 
@@ -142,113 +96,42 @@ func normalizeTar(t *testing.T, tarred []byte) []byte {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		body, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if hdr.Name == transforms.ManifestEntry {
+		require.NoError(t, err)
+		if hdr.Name == ManifestEntry {
 			var m map[string]any
-			if err := json.Unmarshal(body, &m); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, json.Unmarshal(body, &m))
 			delete(m, "encryption")
 			body, err = json.Marshal(m)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			hdr.Size = int64(len(body))
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tw.Write(body); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, writeErr := tw.Write(body)
+		require.NoError(t, writeErr)
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, tw.Close())
 	return out.Bytes()
 }
 
 func generateContainerVectors(t *testing.T) []byte {
 	t.Helper()
-
-	cases := []struct {
-		name    string
-		mutate  func(*transforms.Manifest)
-		payload []byte
-	}{
-		{"jsonl transcript", nil, []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n")},
-		{"empty payload", nil, nil},
-		{"derived enricher output", func(m *transforms.Manifest) {
-			m.Derived = true
-			m.Enricher = &transforms.EnricherRef{ID: "cursor-transcript-join", Version: 1}
-			m.DerivedFrom = []string{hexRepeat("a")}
-			m.EnrichStatus = "ok"
-			m.NativePath = "/c8cbeb0b/c8cbeb0b.jsonl.enriched.jsonl"
-		}, []byte("{\"_enrich\":{}}\n")},
-	}
-
-	out := containerVectors{
-		VectorSet:     "container",
-		VectorVersion: 1,
-		Description: "Object container layout: tar(manifest.json FIRST, payload) -> zstd level 3 -> age. " +
-			"Manifest-first is what makes a ranged GET of the object head yield the whole manifest, which " +
-			"is why no manifest sidecar object exists. Only the tar layer is byte-pinned here: zstd output " +
-			"depends on the encoder version and age is nondeterministic by design, so those layers are " +
-			"covered by round-trip and opacity tests instead. The manifest's encryption block is removed " +
-			"before hashing because recipient key IDs differ per run.",
-		LayerOrder: []string{"tar", "zstd", "age"},
-		EntryOrder: []string{transforms.ManifestEntry, transforms.PayloadEntry},
-		ZstdLevel:  transforms.ZstdLevel,
-		TarHeader: tarHeaderVector{
-			Mode:            "0600",
-			UIDGID:          0,
-			Format:          "USTAR",
-			ManifestModTime: "1970-01-01T00:00:00Z",
-		},
-	}
-
-	for _, c := range cases {
-		m := manifest()
-		if c.mutate != nil {
-			c.mutate(&m)
-		}
-		// Fill the fields Seal would compute, so the recorded manifest is the one that lands.
-		sum := sha256.Sum256(c.payload)
-		m.ShippedHash = hex.EncodeToString(sum[:])
-		m.PayloadSize = int64(len(c.payload))
-
+	var out containerVectors
+	readVectors(t, vectorPath, &out)
+	out.EntryOrder = []string{ManifestEntry, PayloadEntry}
+	out.ZstdLevel = ZstdLevel
+	for i := range out.Vectors {
+		c := &out.Vectors[i]
+		payload, err := hex.DecodeString(c.PayloadHex)
+		require.NoError(t, err)
+		var m Manifest
+		require.NoError(t, json.Unmarshal([]byte(c.ManifestJSON), &m))
+		m.ShippedHash, m.PayloadSize = sha256Hex(payload), int64(len(payload))
 		encoded, err := json.Marshal(m)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tarred := tarBytesFor(t, encoded, c.payload)
-		tarSum := sha256.Sum256(tarred)
-
-		out.Vectors = append(out.Vectors, tarVector{
-			Name:        c.name,
-			ManifestB64: string(encoded),
-			PayloadHex:  hex.EncodeToString(c.payload),
-			TarSHA256:   hex.EncodeToString(tarSum[:]),
-		})
+		require.NoError(t, err)
+		c.ManifestJSON = string(encoded)
+		c.TarSHA256 = sha256Hex(tarBytesFor(t, encoded, payload))
 	}
-
-	b, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(b, '\n')
-}
-
-func hexRepeat(c string) string {
-	out := ""
-	for range 64 {
-		out += c
-	}
-	return out
+	return encodeVectors(t, out)
 }

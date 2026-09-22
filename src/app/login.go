@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
@@ -13,10 +15,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
-type LoginResult struct {
-	Organization string
-	Machine      string
-}
+type LoginResult struct{ Organization, Machine string }
 
 var ErrAlreadyLoggedIn = errors.New("already logged in")
 
@@ -32,7 +31,7 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
-	pub, priv, err := controlplane.NewDeviceKey()
+	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -41,14 +40,8 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 		return LoginResult{}, err
 	}
 	hostname, _ := os.Hostname()
-	req := controlplane.EnrollRequest{
-		InstallID:       unit.InstallID.String(),
-		DevicePublicKey: controlplane.EncodeKey(pub),
-		AgeRecipient:    unit.Recipient().String(),
-		Hostname:        hostname,
-		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
-	}
-	req.Invite = token
+	req := controlplane.EnrollRequest{InstallID: unit.InstallID.String(), DevicePublicKey: controlplane.EncodeKey(pub),
+		AgeRecipient: unit.Recipient().String(), Hostname: hostname, Platform: runtime.GOOS + "/" + runtime.GOARCH, Invite: token}
 	resp, err := c.Enroll(ctx, req)
 	if errors.Is(err, formats.ErrCredentialsRefused) {
 		req.Invite, req.Grant = "", token
@@ -57,13 +50,8 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
-	rec := controlplane.Enrollment{
-		InstallID:    unit.InstallID.String(),
-		Organization: resp.Organization,
-		Endpoint:     server,
-		DeviceKey:    controlplane.EncodeKey(priv),
-		EnrolledAt:   controlplane.Now(),
-	}
+	rec := controlplane.Enrollment{InstallID: unit.InstallID.String(), Organization: resp.Organization, Endpoint: server,
+		DeviceKey: controlplane.EncodeKey(priv), EnrolledAt: time.Now().UTC().Format(time.RFC3339)}
 	if err := rec.Save(paths.StateDir); err != nil {
 		return LoginResult{}, err
 	}
@@ -96,11 +84,8 @@ func LocalDev() (config.Paths, *identity.Unit, error) {
 
 func loadOrMintIdentity(stateDir string) (*identity.Unit, error) {
 	unit, err := identity.Load(stateDir)
-	if err == nil {
-		return unit, nil
+	if errors.Is(err, os.ErrNotExist) {
+		return identity.Mint(stateDir)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	return identity.Mint(stateDir)
+	return unit, err
 }

@@ -1,23 +1,5 @@
-# Cursor (IDE) — the one Group-1 source whose trajectory is split across stores of
-# unequal fidelity. What ships is the native JSONL transcript: real NDJSON, one
-# file per conversation, repo path recoverable from the directory slug, appended
-# cleanly enough that a byte-offset cursor is safe (measured).
-#
-# What it lacks is the point of the enricher: zero tool_result blocks, no tool-call
-# ids, no per-row timestamps, no usage, reasoning written as a literal [REDACTED].
-# A record of intent with no outcomes.
-#
-# The global state.vscdb is ENRICHER INPUT ONLY — no rows ever ship. The
-# enricher reads it through the SQLite ladder and its derived JSONL is the sole
-# carrier of the DB-side fields. The key-level deny is COMPILED, not config:
-# cursorAuth/* keys and the blobEncryptionKey /
-# speculativeSummarizationEncryptionKey fields are stripped from every enricher
-# read, and no config layer can disable that filter. Auth material lives inside
-# the same database as the trajectories, so it is a row-level exclude that a path
-# deny list structurally cannot express.
-#
-# Deferred to v1.1: workspace state.vscdb, conversation-search.db, workspaceStorage
-# images, the composerHeaders table.
+# Cursor transcripts omit tool results and timestamps; the enricher supplies those from state.vscdb.
+# Database rows never ship directly, and the SQLite reader excludes authentication material.
 spec_version: 1
 family: cursor
 display_name: Cursor
@@ -32,12 +14,10 @@ sources:
       predating the transcript feature exist only in the database.
     gather: file_glob
     artifact_class: trajectory
-    roots:
+    roots: &cursor_roots
       - $CURSOR_PROJECTS_DIR
       - ~/.cursor/projects
-    # Cursor writes one transcript per conversation and its own store caps what it keeps.
-    # Same ceiling as the other transcript sources: this bounds what the pipeline can be
-    # asked to hold, not what Cursor is expected to produce.
+    # Bound what a corrupt or unexpectedly large transcript can make the pipeline hold.
     max_file_bytes: 268435456
     include:
       - "**/agent-transcripts/**/*.jsonl"
@@ -56,9 +36,7 @@ sources:
       a file Cursor ships.
     gather: file_glob
     artifact_class: context
-    roots:
-      - $CURSOR_PROJECTS_DIR
-      - ~/.cursor/projects
+    roots: *cursor_roots
     include:
       - "**/agent-tools/**"
       - "**/terminals/**"

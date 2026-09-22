@@ -23,30 +23,23 @@ func clearSelfUpdateHop() {
 }
 
 func updateCmd(build app.Build) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "Install the newest version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			w := cmd.OutOrStdout()
-			p := paletteFor(w)
-			opts := packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()}
-			if !build.Release {
-				return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
-			}
-			res, err := packaging.Update(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			if !res.Updated {
-				fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
-				return nil
-			}
-			fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
-			return restartService(cmd.Context(), w)
-		},
-	}
-	return cmd
+	return verb("update", "Install the newest version", func(cmd *cobra.Command) error {
+		if !build.Release {
+			return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
+		}
+		res, err := packaging.Update(cmd.Context(), packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()})
+		if err != nil {
+			return err
+		}
+		w := cmd.OutOrStdout()
+		p := paletteFor(w)
+		if !res.Updated {
+			fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
+			return nil
+		}
+		fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
+		return restartService(cmd.Context(), w)
+	})
 }
 
 func restartService(ctx context.Context, w io.Writer) error {
@@ -56,11 +49,10 @@ func restartService(ctx context.Context, w io.Writer) error {
 		return nil
 	}
 	stateCtx, stateCancel := context.WithTimeout(ctx, serviceStateTimeout)
+	defer stateCancel()
 	state := packaging.ServiceStateContext(stateCtx, paths.StateDir)
-	stateErr := stateCtx.Err()
-	stateCancel()
-	if stateErr != nil {
-		return serviceStateTimeoutError(stateErr)
+	if err := stateCtx.Err(); err != nil {
+		return serviceStateTimeoutError(err)
 	}
 	if !restartWanted(state) {
 		return nil
@@ -83,52 +75,31 @@ func restartService(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// restartWanted reports whether there is a background service for `update` to restart.
-//
-// The predicate is Installed rather than Loaded. A service entry that exists is one to restart, and
-// whether the supervisor currently reports it loaded is exactly what a platform can get wrong: a
-// Windows install whose scheduled task could not be parsed reported Loaded false while that task
-// was running, so the restart was skipped and the daemon went on executing the previous binary.
-// Loaded is also legitimately false for a plist written but never bootstrapped, or an inactive
-// unit -- the state macOS calls "present but NOT loaded", which collects nothing while looking
-// installed. Restarting is the right answer in all three; only the absence of an entry is not.
-func restartWanted(st packaging.ServiceStatus) bool {
-	return st.Installed
-}
-
-// configUnreadableWarning covers the update that lands with nowhere to look up the service: the
-// binary is replaced and the daemon keeps the old one. Silent, this is indistinguishable from a
-// restart that happened.
-func configUnreadableWarning(err error) string {
-	msg := fmt.Sprintf("the configuration does not resolve (%v), so the background service was not restarted;\n"+
-		"the update is installed and the daemon keeps the previous version until something restarts it", err)
+// withRestart appends the command that forces a restart, on platforms that have one.
+func withRestart(msg, lead string) string {
 	if cmd := packaging.RestartCommand(); cmd != "" {
-		msg += ";\nto force it now: " + cmd
+		return msg + lead + cmd
 	}
 	return msg
+}
+
+// configUnreadableWarning keeps an unrestarted service from looking like a restart that happened.
+func configUnreadableWarning(err error) string {
+	return withRestart(fmt.Sprintf("the configuration does not resolve (%v), so the background service was not restarted;\n"+
+		"the update is installed and the daemon keeps the previous version until something restarts it", err), ";\nto force it now: ")
 }
 
 func serviceStateTimeoutError(err error) error {
-	detail := "the update is installed but its service restart was not requested"
-	if cmd := packaging.RestartCommand(); cmd != "" {
-		detail += "; restart it with: " + cmd
-	}
 	return fmt.Errorf("could not determine whether the background service is running within %s: %w; %s",
-		serviceStateTimeout, err, detail)
+		serviceStateTimeout, err, withRestart("the update is installed but its service restart was not requested", "; restart it with: "))
 }
 
-// restartTimeoutWarning is not an error: the binary is swapped and the supervisor restarts the
-// agent onto it as soon as the drain ends. Only the wait for confirmation gave up.
+// restartTimeoutWarning is not an error: the binary is swapped and the service restarts onto it after draining.
 func restartTimeoutWarning(budget time.Duration) string {
-	msg := fmt.Sprintf("the background service was still shutting down after %s; the update is installed and the service starts on the new version when its final slice is shipped", budget)
-	if cmd := packaging.RestartCommand(); cmd != "" {
-		msg += "; to force it now: " + cmd
-	}
-	return msg
+	return withRestart(fmt.Sprintf("the background service was still shutting down after %s; the update is installed and the service starts on the new version when its final slice is shipped", budget), "; to force it now: ")
 }
 
-// selfUpdateGate blocks the hop that did not land: we updated to persistedHop, restarted, and are
-// still not running it. A hop that matches this build has done its job and the caller clears it.
+// selfUpdateGate blocks a hop that did not land: we updated to persistedHop and still run something else.
 func selfUpdateGate(build app.Build, getenv func(string) string, persistedHop string) (run bool, why string) {
 	if !build.Release {
 		return false, ""
@@ -145,8 +116,7 @@ func selfUpdateGate(build app.Build, getenv func(string) string, persistedHop st
 	return true, ""
 }
 
-// maybeSelfUpdate replaces a released binary at daemon start; autoupdate is the resolved
-// autoupdate.enabled, true when the config did not resolve.
+// maybeSelfUpdate replaces a released binary at daemon start; autoupdate is true when config did not resolve.
 func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errOut io.Writer) {
 	stateDir, stateErr := app.StateDirWithoutConfig()
 	persistedHop := ""
@@ -177,21 +147,21 @@ func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errO
 		return
 	}
 	fmt.Fprintf(errOut, "self-update: %s -> %s, restarting\n", res.From, res.To)
+	if stateErr == nil {
+		stateErr = packaging.WriteSelfUpdateHop(stateDir, res.To)
+	}
 	if stateErr != nil {
 		fmt.Fprintf(errOut, "self-update: cannot persist the restart guard (%v); the new version runs from the next supervised restart\n", stateErr)
 		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but could not persist the restart guard: %v", res.To, stateErr))
 		return
 	}
-	if err := packaging.WriteSelfUpdateHop(stateDir, res.To); err != nil {
-		fmt.Fprintf(errOut, "self-update: cannot persist the restart guard (%v); the new version runs from the next supervised restart\n", err)
-		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but could not persist the restart guard: %v", res.To, err))
-		return
-	}
 	os.Setenv(app.ReexecGuardEnv, res.To) // keeps compatibility with an older Unix binary on the hop
 	if err := packaging.ReExec(); err != nil {
 		fmt.Fprintf(errOut, "self-update: restart failed (%v); the new version runs from the next restart\n", err)
-		// The binary IS updated; only the restart failed. Recorded because a supervisor that never
-		// restarts leaves the install running the old code with nothing saying so.
+		// Recorded: a supervisor that never restarts leaves the old code running with nothing saying so.
 		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but the restart failed: %v", res.To, err))
 	}
 }
+
+// restartWanted keys on Installed, not Loaded: detection can be wrong, and an unloaded or unparseable service still needs restarting.
+func restartWanted(state packaging.ServiceStatus) bool { return state.Installed }

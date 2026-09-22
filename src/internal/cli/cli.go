@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
+	"github.com/QuesmaOrg/quesma-shipper/internal/legal"
 )
 
 const (
@@ -62,7 +63,9 @@ func Root(b app.Build, out, errOut io.Writer) *cobra.Command {
 
 	cobra.EnableCommandSorting = false
 	for _, c := range []*cobra.Command{
-		trackingCmd(), pauseCmd(), resumeCmd(), statusCmd(b), doctorCmd(b), updateCmd(b), uninstallCmd(b), licensesCmd(),
+		trackingCmd(), pauseCmd(), resumeCmd(), statusCmd(b), doctorCmd(b), updateCmd(b), uninstallCmd(b),
+		verb("licenses", "Print the license and the third-party notices",
+			func(cmd *cobra.Command) error { return legal.Write(cmd.OutOrStdout()) }),
 	} {
 		c.GroupID = groupUser
 		root.AddCommand(c)
@@ -81,13 +84,19 @@ func Root(b app.Build, out, errOut io.Writer) *cobra.Command {
 }
 
 func ErrorLine(err error, w io.Writer) string {
-	p := paletteFor(w)
-	return app.Name + ": " + p.names(err.Error(), "")
+	return app.Name + ": " + paletteFor(w).names(err.Error(), "")
 }
 
-func HelpPointer(w io.Writer) string {
-	p := paletteFor(w)
-	return styled(p.dim, "More:", p.reset) + " " + styled(p.cyan, app.Name+" --help", p.reset)
+func HelpPointer(w io.Writer) string { return more(paletteFor(w), app.Name+" --help") }
+
+func more(p palette, command string) string {
+	return styled(p.dim, "More:", p.reset) + " " + styled(p.cyan, command, p.reset)
+}
+
+// verb is a subcommand that takes no arguments.
+func verb(use, short string, run func(cmd *cobra.Command) error) *cobra.Command {
+	return &cobra.Command{Use: use, Short: short, Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return run(cmd) }}
 }
 
 type errSilent struct{ code int }
@@ -109,9 +118,7 @@ func ExitCode(err error) (code int, show bool) {
 	return 1, true
 }
 
-// Renders in plain Go rather than a cobra template: a custom template makes
-// text/template's reflect.Value.MethodByName reachable, which turns off the
-// linker's dead-code elimination for the whole binary (cmd/quesma-shipper/deps_test.go).
+// Plain Go rather than a cobra template, whose reflect.Value.MethodByName disables dead-code elimination.
 func printUsage(c *cobra.Command, pal palette) error {
 	name := func(s string) string { return styled(pal.cyan, s, pal.reset) }
 	dim := func(s string) string { return styled(pal.dim, s, pal.reset) }

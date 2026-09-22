@@ -1,42 +1,30 @@
-package transforms_test
+package transforms
 
 import (
 	"fmt"
-	"math"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
+	"github.com/stretchr/testify/assert"
 )
 
-// The seeded corpus DefaultEntropyConfig promises. Three populations, three contracts: benign
-// path-shaped content draws ZERO entropy hits, since a path the backstop eats is a repository
-// name lost downstream; git SHAs get a small budget rather than zero, because uniform 40-hex
-// averages ~3.73 bits/char against the 3.8 threshold and the tail crosses it; planted secrets
-// are caught at 100% recall. A fixed seed makes a retune a deterministic diff, not a flake.
+// DefaultEntropyConfig's promise on a seeded corpus: benign paths draw ZERO entropy hits, git SHAs a small
+// budget (40-hex averages ~3.73 bits/char against 3.8), planted secrets 100% recall. A retune is a diff.
 func TestSeededCorpusCalibration(t *testing.T) {
 	s := newScrubber(t)
 	rng := &xorshift{state: 0x9E3779B97F4A7C15}
 
-	var corpus []string
-
-	// --- population 1: benign, strict zero -----------------------------------
+	// Population 1: benign, strict zero.
 	benign := generateBenignLines(rng, 400)
-	corpus = append(corpus, benign...)
+	corpus := slices.Clone(benign)
 	for i, line := range benign {
 		res := scrubJSONL(t, s, "claude-code", line+"\n")
-		if res.RuleHits["generic-entropy"] != 0 {
-			t.Errorf("benign line %d drew an entropy hit:\n in %s\nout %s", i, line, res.Out)
-		}
-		if strings.Contains(string(res.Out), "__REDACTED:") {
-			t.Errorf("benign line %d was redacted by %v:\n in %s\nout %s", i, res.RuleHits, line, res.Out)
-		}
+		assert.Equal(t, 0, res.RuleHits["generic-entropy"])
+		assert.NotContainsf(t, string(res.Out), "__REDACTED:", "benign line %d was redacted by %v:\n in %s\nout %s", i, res.RuleHits, line, res.Out)
 	}
 
-	// --- population 2: git SHAs, budgeted ------------------------------------
-	// With this seed exactly 7 of 50 fire (14%), a property of the hex threshold alone: a SHA has
-	// no slash, so the alphabet cannot touch it. Recorded so a retune announces itself as a count
-	// change rather than a surprise in fleet density.
+	// Population 2: git SHAs. With this seed exactly 7 of 50 fire, so a hex retune shows as a count change.
 	const shaLines = 50
 	const shaFireWithThisSeed = 7
 	fired := 0
@@ -49,22 +37,15 @@ func TestSeededCorpusCalibration(t *testing.T) {
 			fired++
 		}
 	}
-	if fired != shaFireWithThisSeed {
-		t.Errorf("%d of %d random SHAs drew entropy hits, calibrated count is %d — the hex threshold moved; re-measure and update this note", fired, shaLines, shaFireWithThisSeed)
-	}
+	assert.Equalf(t, shaFireWithThisSeed, fired, "%d of %d random SHAs drew entropy hits, calibrated count is %d — the hex threshold moved; re-measure and update this note", fired, shaLines, shaFireWithThisSeed)
 
-	// --- population 3: planted secrets, 100%% recall --------------------------
-	planted := []struct {
-		name   string
-		text   string
-		secret string
-		rule   string // empty when overlapping rules make attribution ambiguous
-	}{
+	// Population 3: planted secrets, 100% recall.
+	// rule is empty when overlapping rules make attribution ambiguous.
+	planted := []struct{ name, text, secret, rule string }{
 		{"aws access key id", "run with AKIAIOSFODNN7EXAMPLE as the principal", "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"},
 		{"github pat", "push using ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"},
 		{"anthropic key", "export it: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"},
-		// The slash-carrying base64 shape the backstop no longer covers bare: labeled, it must always
-		// be caught. Attribution is not pinned, since key-name and aws-secret-key both claim it.
+		// The slash-carrying shape the backstop misses bare must be caught labeled, by either claimant.
 		{"labeled slash-bearing base64", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ""},
 		{"shapeless value behind a telling name", "MY_SERVICE_TOKEN=plain-looking-value-1234", "plain-looking-value-1234", "key-name"},
 		{"bare slash-free base64url blob", "stash " + randomHighEntropyToken(rng, 40) + " somewhere", "", "generic-entropy"},
@@ -79,30 +60,19 @@ func TestSeededCorpusCalibration(t *testing.T) {
 			line := `{"type":"user","uuid":"p1","toolUseResult":{"stdout":"` + p.text + `"}}`
 			corpus = append(corpus, line)
 			res := scrubJSONL(t, s, "claude-code", line+"\n")
-			if strings.Contains(string(res.Out), secret) {
-				t.Errorf("planted secret survived:\n in %s\nout %s", line, res.Out)
-			}
-			if p.rule != "" && res.RuleHits[p.rule] == 0 {
-				t.Errorf("expected %q to claim the hit, ledger was %v", p.rule, res.RuleHits)
+			assert.NotContainsf(t, string(res.Out), secret, "planted secret survived:\n in %s\nout %s", line, res.Out)
+			if p.rule != "" {
+				assert.NotZero(t, res.RuleHits[p.rule], "expected %q to claim the hit, ledger was %v", p.rule, res.RuleHits)
 			}
 		})
 	}
 
-	// --- the alarm ------------------------------------------------------------
-	// Whole-corpus density is the fleet signal the manifests carry; the ceiling exists to catch a
-	// rule that starts eating content.
-	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d := res.Density(); d >= 0.05 {
-		t.Errorf("whole-corpus redaction density %.4f crossed the 0.05 alarm — a rule is eating content", d)
-	}
+	// The alarm: whole-corpus density is the fleet signal, and the ceiling catches a rule eating content.
+	res := scrubJSONL(t, s, "claude-code", strings.Join(corpus, "\n")+"\n")
+	assert.Less(t, res.Density(), 0.05, "whole-corpus redaction density crossed the alarm — a rule is eating content")
 }
 
-// generateBenignLines builds path-heavy records across the shapes that fired before '/' left the entropy alphabet.
-// Carrier fields rotate between cwd (exempt), free text and tool output (both unexempt), so the
-// alphabet is exercised and not just the exemptions.
+// generateBenignLines builds path records shaped like the "/"-era false positives, in exempt and unexempt fields.
 func generateBenignLines(rng *xorshift, n int) []string {
 	segs := []string{
 		"Work2026", "SampleOrg", "blink-UI", "webFrontend", "GolandProjects",
@@ -121,13 +91,7 @@ func generateBenignLines(rng *xorshift, n int) []string {
 		}
 		return strings.Join(parts, "/")
 	}
-	slug := func(depth int) string {
-		parts := make([]string, depth)
-		for i := range parts {
-			parts[i] = segs[rng.intn(len(segs))]
-		}
-		return "-Users-jane-" + strings.Join(parts, "-")
-	}
+	slug := func(depth int) string { return "-Users-jane-" + strings.ReplaceAll(path(depth), "/", "-") }
 
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -188,8 +152,7 @@ func randomUUID(rng *xorshift) string {
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
-// randomHighEntropyToken rejects drafts until a test-local Shannon measure clears the engine's
-// threshold with margin, so the recall assertion is fair rather than seed-lucky.
+// randomHighEntropyToken clears the threshold with margin, so the recall assertion is not seed-lucky.
 func randomHighEntropyToken(rng *xorshift, n int) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	for {
@@ -197,25 +160,8 @@ func randomHighEntropyToken(rng *xorshift, n int) string {
 		for i := range out {
 			out[i] = alphabet[rng.intn(len(alphabet))]
 		}
-		if localShannonBits(string(out)) >= 4.3 {
+		if refShannonBits(string(out)) >= 4.3 {
 			return string(out)
 		}
 	}
-}
-
-func localShannonBits(s string) float64 {
-	var counts [256]int
-	for i := 0; i < len(s); i++ {
-		counts[s[i]]++
-	}
-	total := float64(len(s))
-	bits := 0.0
-	for _, c := range counts {
-		if c == 0 {
-			continue
-		}
-		p := float64(c) / total
-		bits -= p * math.Log2(p)
-	}
-	return bits
 }

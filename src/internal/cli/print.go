@@ -11,7 +11,6 @@ import (
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
-	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
 func printPreview(out io.Writer, rep formats.Report, env *app.Runtime) {
@@ -37,6 +36,7 @@ func printPreview(out io.Writer, rep formats.Report, env *app.Runtime) {
 		fmt.Fprintf(w, "note\tmax_files_per_run reached; the rest would follow next tick\n")
 	}
 }
+
 func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	defer w.Flush()
@@ -55,19 +55,22 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		fmt.Fprintln(out, line)
 	}
 	for _, s := range rep.Sources {
-		if s.Health != sources.Collected {
+		if s.Health != formats.Collected {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", s.SourceID, s.Health, s.Reason)
 		}
 	}
 	if rep.Truncated {
-		fmt.Fprintf(w, "  note\tmax_files_per_run reached; %d left, %.0f%% of this tick's work shipped\n",
-			rep.Remaining, completeness(rep.Shipped, rep.Remaining))
+		shipped := 100.0
+		if n := rep.Shipped + rep.Remaining; n > 0 {
+			shipped = 100 * float64(rep.Shipped) / float64(n)
+		}
+		fmt.Fprintf(w, "  note\tmax_files_per_run reached; %d left, %.0f%% of this tick's work shipped\n", rep.Remaining, shipped)
 		if adviseDrain && rep.Shipped > 0 {
 			fmt.Fprintf(w, "  \tflush the rest now with `quesma-shipper run --once --drain`\n")
 		}
 	}
 	for _, s := range rep.Sources {
-		if s.Unreadable > 0 && s.Health == sources.Collected {
+		if s.Unreadable > 0 && s.Health == formats.Collected {
 			fmt.Fprintf(w, "  %s\t%d %s not readable during discovery, skipped\n",
 				s.SourceID, s.Unreadable, app.Plural(s.Unreadable, "path"))
 			fmt.Fprintf(w, "  \t%s\n", s.UnreadableReason)
@@ -78,22 +81,18 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 		fmt.Fprintf(w, "  %s\t%d %s over the %s cap, not collected\n",
 			s.SourceID, s.Oversize, app.Plural(s.Oversize, "file"), app.HumanBytes(s.OversizeLimit))
-		fmt.Fprintf(w, "  \tlargest %s  %s\n",
-			app.HumanBytes(s.OversizeLargest), s.OversizeExample)
-		fmt.Fprintf(w, "  \tnever collected; raise sources[%s].max_file_bytes to change that\n",
-			s.SourceID)
+		fmt.Fprintf(w, "  \tlargest %s  %s\n", app.HumanBytes(s.OversizeLargest), s.OversizeExample)
+		fmt.Fprintf(w, "  \tnever collected; raise sources[%s].max_file_bytes to change that\n", s.SourceID)
 	}
 	if rep.Parked > 0 {
 		fmt.Fprintf(w, "  note\tparked entries need attention: see `quesma-shipper doctor`\n")
 	}
 	for _, s := range rep.Sources {
 		if s.Enriched > 0 {
-			fmt.Fprintf(w, "  %s\tenriched %d via %s@%d\n", s.SourceID, s.Enriched,
-				s.EnricherID, s.EnricherVersion)
+			fmt.Fprintf(w, "  %s\tenriched %d via %s@%d\n", s.SourceID, s.Enriched, s.EnricherID, s.EnricherVersion)
 		}
 		if s.EnrichMismatch > 0 {
-			fmt.Fprintf(w, "  %s\t%d files sent without their database details\n",
-				s.SourceID, s.EnrichMismatch)
+			fmt.Fprintf(w, "  %s\t%d files sent without their database details\n", s.SourceID, s.EnrichMismatch)
 		}
 		if s.EnrichErrors > 0 {
 			fmt.Fprintf(w, "  %s\tenrich errors ×%d\n", s.SourceID, s.EnrichErrors)
@@ -106,6 +105,7 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 	}
 }
+
 func statsLine(rep formats.Report) string {
 	if rep.FinishedAt.IsZero() || rep.BytesRead == 0 {
 		return ""
@@ -126,6 +126,7 @@ func statsLine(rep formats.Report) string {
 	}
 	return line
 }
+
 func progressLine(sourceID string, done, total int, f formats.FileOutcome) string {
 	switch f.Decision {
 	case formats.DecisionUnchanged:
@@ -146,20 +147,9 @@ func ruleSummary(hits map[string]int) string {
 	if len(hits) == 0 {
 		return "no redactions"
 	}
-	out := ""
+	var parts []string
 	for _, id := range slices.Sorted(maps.Keys(hits)) {
-		if out != "" {
-			out += ", "
-		}
-		out += fmt.Sprintf("%s×%d", id, hits[id])
+		parts = append(parts, fmt.Sprintf("%s×%d", id, hits[id]))
 	}
-	return out
-}
-
-func completeness(shipped, remaining int) float64 {
-	wanted := shipped + remaining
-	if wanted <= 0 {
-		return 100
-	}
-	return 100 * float64(shipped) / float64(wanted)
+	return strings.Join(parts, ", ")
 }

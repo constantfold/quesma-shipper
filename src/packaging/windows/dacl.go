@@ -6,8 +6,7 @@ package windows
 
 import "strings"
 
-// Win32 access-mask bits that permit changing a directory's contents or its own permissions.
-// Named here rather than taken from x/sys so the decision logic carries no build tag.
+// Win32 write access-mask bits, named here so the decision logic carries no build tag.
 const (
 	fileWriteData       = 0x00000002 // FILE_WRITE_DATA / FILE_ADD_FILE
 	fileAppendData      = 0x00000004 // FILE_APPEND_DATA / FILE_ADD_SUBDIRECTORY
@@ -31,8 +30,7 @@ const (
 	inheritOnlyACE       = 0x08 // ACE_HEADER.AceFlags: describes children, not this object
 )
 
-// Trustees whose write access is not a finding: the platform's own identities, and CREATOR OWNER,
-// which is not a fixed principal but resolves to whoever created the object.
+// Trustees whose write access is no finding: platform identities, and CREATOR OWNER, which resolves to the creator.
 const (
 	sidLocalSystem      = "S-1-5-18"
 	sidAdministrators   = "S-1-5-32-544"
@@ -50,9 +48,7 @@ type ace struct {
 	InheritOnly bool
 }
 
-// untrustedWriters names the trustees that can change this directory besides the installing user.
-// Deny entries are ignored rather than subtracted: over-reporting a locked-down directory is the
-// safe direction, and ordered DACL evaluation is not worth reimplementing for a guard.
+// untrustedWriters ignores deny entries rather than subtracting them: over-reporting is the safe direction.
 func untrustedWriters(aces []ace, installerSID string) []string {
 	var found []string
 	seen := make(map[string]bool, len(aces))

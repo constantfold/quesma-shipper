@@ -1,0 +1,228 @@
+package cursorjoin
+
+import (
+	"cmp"
+	"strings"
+)
+
+// Consumption evidence detects repeats; declined bubbles stay unavailable after an ambiguous match.
+type bubbleState struct {
+	used, declined bool
+	ev             evidence
+	n              int
+}
+
+// Bound consumption so a coincidental match cannot skip the conversation; repeat detection is unbounded.
+const (
+	lookAhead  = 16
+	lookBehind = 64
+)
+
+type matchOutcome int
+
+const (
+	matchNone      matchOutcome = iota // no bubble accounts for the block: mismatch or tail
+	matchFound                         // the returned index is the block's bubble
+	matchRepeat                        // the store deduplicated a call consumed with the same evidence
+	matchAmbiguous                     // a dedup and a new argument-less call are indistinguishable
+)
+
+// matchBlock returns the chosen bubble and its evidence for later repeat detection.
+func matchBlock(blk block, role string, events []*bubble, cursor int, state []bubbleState) (int, matchOutcome, evidence, int) {
+	weigh := func(b *bubble) (evidence, int) { return blk.evidenceFor(b, role) }
+	// Forward positives win; lesser grades wait until both windows have been searched.
+	fwd, behind := newMatchWindow(), newMatchWindow()
+	for i := cursor; i < min(len(events), cursor+lookAhead); i++ {
+		if !state[i].declined {
+			ev, n := weigh(events[i])
+			fwd.consider(i, ev, n, blk, events[i])
+		}
+	}
+	if fwd.positive >= 0 {
+		return fwd.positive, matchFound, evidencePositive, fwd.strength
+	}
+
+	// Store and transcript order can differ within a turn, leaving real matches behind the cursor.
+	repeat, repeatEv, repeatN := false, evidenceNegative, 0
+	for i := cursor - 1; i >= 0; i-- {
+		if state[i].used {
+			// Only identical consumption evidence supports a repeat, at any distance.
+			if blk.Type == "tool_use" && state[i].ev >= evidencePartial {
+				if ev, n := weigh(events[i]); ev == state[i].ev && n == state[i].n {
+					repeat = true
+					if ev > repeatEv || (ev == repeatEv && n > repeatN) {
+						repeatEv, repeatN = ev, n
+					}
+				}
+			}
+			continue
+		}
+		if i < cursor-lookBehind || state[i].declined {
+			continue
+		}
+		// Prose needs actual overlap to match behind the cursor.
+		if ev, n := weigh(events[i]); blk.Type == "tool_use" || ev == evidencePositive {
+			behind.consider(i, ev, n, blk, events[i])
+		}
+	}
+	if behind.positive >= 0 {
+		return behind.positive, matchFound, evidencePositive, behind.strength
+	}
+
+	best := fallbackCandidate(fwd, behind)
+
+	if repeat {
+		// A fresh positive anywhere rules out deduplication; report the out-of-window mismatch.
+		for i := range events {
+			if state[i].used || state[i].declined {
+				continue
+			}
+			if ev, _ := weigh(events[i]); ev == evidencePositive {
+				return -1, matchNone, evidenceNegative, 0
+			}
+		}
+		if best >= 0 {
+			ev, n := weigh(events[best])
+			if ev == evidenceNeutral {
+				return best, matchAmbiguous, evidenceNeutral, 0
+			}
+			if ev > repeatEv || (ev == repeatEv && n >= repeatN) {
+				return best, matchFound, ev, n
+			}
+		}
+		// A weaker candidate belongs to another call; keep its bubble available.
+		return -1, matchRepeat, evidenceNegative, 0
+	}
+	if best >= 0 {
+		ev, n := weigh(events[best])
+		return best, matchFound, ev, n
+	}
+	return -1, matchNone, evidenceNegative, 0
+}
+
+// Each window keeps its first candidate per grade; positive ties favor stronger evidence.
+type matchWindow struct {
+	positive, partial, neutral, weak int
+	strength, partials               int
+}
+
+func newMatchWindow() matchWindow {
+	return matchWindow{positive: -1, partial: -1, neutral: -1, weak: -1}
+}
+
+func (w *matchWindow) consider(i int, ev evidence, n int, blk block, b *bubble) {
+	switch ev {
+	case evidencePositive:
+		if n > w.strength {
+			w.positive, w.strength = i, n
+		}
+	case evidencePartial:
+		w.partials++
+		if w.partial < 0 {
+			w.partial = i
+		}
+	case evidenceNeutral, evidenceWeak:
+		if blk.Type == "tool_use" && !namesCompatible(string(blk.Name), b.ToolFormerData) {
+			return
+		}
+		first := &w.neutral
+		if ev == evidenceWeak {
+			first = &w.weak
+		}
+		if *first < 0 {
+			*first = i
+		}
+	}
+}
+
+// A unique partial identifies a call. Otherwise position wins: forward, behind, then weak evidence.
+func fallbackCandidate(fwd, behind matchWindow) int {
+	if fwd.partials+behind.partials == 1 {
+		return max(fwd.partial, behind.partial)
+	}
+	first := fwd.neutral
+	if fwd.partial >= 0 && (first < 0 || fwd.partial < first) {
+		first = fwd.partial
+	}
+	for _, i := range []int{first, max(behind.neutral, behind.partial), fwd.weak, behind.weak} {
+		if i >= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+func (blk block) evidenceFor(b *bubble, role string) (evidence, int) {
+	wantType := 2
+	if role == "user" {
+		wantType = 1
+	}
+	if b.Type != 0 && b.Type != wantType {
+		return evidenceNegative, 0
+	}
+	switch blk.Type {
+	case "tool_use":
+		if b.ToolFormerData == nil {
+			return evidenceNegative, 0
+		}
+		// Display and internal names differ; arguments distinguish calls of the same tool.
+		return argsEvidence(blk.Input, b.ToolFormerData)
+
+	case "text":
+		if b.ToolFormerData != nil {
+			return evidenceNegative, 0
+		}
+		reasoning := b.reasoningText()
+		ev, n := textEvidence(string(blk.Text), cmp.Or(reasoning, b.Text))
+		// Empty text must not consume a reasoning bubble.
+		if reasoning != "" && ev == evidenceNeutral {
+			return evidenceNegative, 0
+		}
+		return ev, n
+
+	default:
+		// An unknown block type means Cursor changed; the loud outcome is right.
+		return evidenceNegative, 0
+	}
+}
+
+// textEvidence treats an empty side as positional evidence; matching prose confirms identity.
+func textEvidence(transcript, stored string) (evidence, int) {
+	t, s := normaliseText(transcript), normaliseText(stored)
+	if t == "" || s == "" {
+		return evidenceNeutral, 0
+	}
+	// Some store generations truncate prose, so a shared prefix still confirms it.
+	n := min(len(t), len(s), 64)
+	if strings.Contains(t, s) || strings.Contains(s, t) || t[:n] == s[:n] {
+		return evidencePositive, 1
+	}
+	return evidenceNegative, 0
+}
+
+// normaliseText strips the transcript's wrapper tags, which the store lacks; user_query keeps its contents.
+func normaliseText(s string) string {
+	s = stripTag(s, "timestamp", false)
+	s = stripTag(s, "user_query", true)
+	return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
+}
+
+func stripTag(s, tag string, keepInner bool) string {
+	for {
+		before, rest, ok := strings.Cut(s, "<"+tag+">")
+		if !ok {
+			return s
+		}
+		inner, after, ok := strings.Cut(rest, "</"+tag+">")
+		if !ok {
+			return before
+		}
+		if keepInner {
+			before += inner
+		}
+		s = before + after
+	}
+}
+
+// isRedactedReasoning matches the literal placeholder Cursor writes instead of reasoning.
+func isRedactedReasoning(text string) bool { return strings.TrimSpace(text) == "[REDACTED]" }

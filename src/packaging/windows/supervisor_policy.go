@@ -25,9 +25,5 @@ func restartPolicy(exitCode int, uptime time.Duration, crashes int) (delay time.
 	if nextCrashes >= maxCrashCount {
 		return 0, nextCrashes, false
 	}
-	delay = firstCrashDelay << crashes
-	if delay > maxCrashDelay {
-		delay = maxCrashDelay
-	}
-	return delay, nextCrashes, true
+	return min(firstCrashDelay<<crashes, maxCrashDelay), nextCrashes, true
 }

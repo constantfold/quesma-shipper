@@ -8,8 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
@@ -17,71 +18,43 @@ import (
 func TestHomebrewUpdateReexec(t *testing.T) {
 	if os.Getenv("QUESMA_TEST_BREW_REEXEC") == "1" {
 		release := common.Release{Targets: map[string]string{"darwin/" + runtime.GOARCH: "raw-binary", "darwin/pkg": "package"}}
-		if got := UpdateTarget(release); got != "raw-binary" {
-			t.Fatalf("update target = %q", got)
-		}
+		require.Equal(t, "raw-binary", UpdateTarget(release))
 		raw, err := os.ReadFile(os.Getenv("QUESMA_TEST_BREW_REPLACEMENT"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := ApplyTarget(raw, "1.0.1"); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+		require.NoError(t, ApplyTarget(raw, "1.0.1"))
 		os.Args = []string{os.Args[0], "self-update restarted"}
 		t.Fatal(common.ReExec())
 	}
 	root := t.TempDir()
 	helper := filepath.Join(root, "replacement.go")
-	if err := os.WriteFile(helper, []byte("package main\nimport (\"fmt\"; \"os\")\nfunc main() { fmt.Println(os.Args[1]) }\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(helper, []byte("package main\nimport (\"fmt\"; \"os\")\nfunc main() { fmt.Println(os.Args[1]) }\n"), 0o600))
 	replacement := filepath.Join(root, "replacement")
-	if out, err := exec.Command("go", "build", "-o", replacement, helper).CombinedOutput(); err != nil {
-		t.Fatalf("build replacement: %v, %s", err, out)
-	}
+	out, err := exec.Command("go", "build", "-o", replacement, helper).CombinedOutput()
+	require.NoErrorf(t, err, "build replacement: %s", out)
 	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	raw, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	installed := filepath.Join(root, "Caskroom", "quesma-shipper", "1.0.0", "quesma-shipper")
-	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(installed, raw, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(installed), 0o755))
+	require.NoError(t, os.WriteFile(installed, raw, 0o755))
 	link := filepath.Join(root, "shipper")
-	if err := os.Symlink(installed, link); err != nil {
-		t.Fatal(err)
-	}
-	plist := filepath.Join(root, "agent.plist")
-	spec := testSpec()
-	spec.Executable = installed
-	if err := os.WriteFile(plist, []byte(renderPlist(spec)), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(installed, link))
+	plist := writePlist(t, root, installed)
 	cmd := exec.Command(link, "-test.run=^TestHomebrewUpdateReexec$")
 	cmd.Env = append(os.Environ(), "QUESMA_TEST_BREW_REEXEC=1", "QUESMA_TEST_BREW_REPLACEMENT="+replacement)
-	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "self-update restarted\n" {
-		t.Fatalf("update and reexec: %v, %s", err, out)
-	}
-	if target, err := os.Readlink(link); err != nil || target != installed {
-		t.Fatalf("command link changed: %q, %v", target, err)
-	}
-	if got := common.ServiceProgram(Status{Path: plist}); got != installed {
-		t.Fatalf("service program changed: %q", got)
-	}
+	out, err = cmd.CombinedOutput()
+	require.NoErrorf(t, err, "update and reexec: %s", out)
+	require.Equal(t, "self-update restarted\n", string(out))
+	target, err := os.Readlink(link)
+	require.NoError(t, err)
+	require.Equal(t, installed, target, "command link changed")
+	require.Equal(t, common.ServiceProgram(Status{Path: plist}), installed)
 	updated, err := os.ReadFile(installed)
-	if err != nil || bytes.Equal(raw, updated) {
-		t.Fatalf("binary was not replaced: %v", err)
-	}
-	if out, err := exec.Command(link, "next launch").CombinedOutput(); err != nil || string(out) != "next launch\n" {
-		t.Fatalf("launch after update: %v, %s", err, out)
-	}
+	require.Truef(t, err == nil && !bytes.Equal(raw, updated), "binary was not replaced: %v", err)
+	out, err = exec.Command(link, "next launch").CombinedOutput()
+	require.NoErrorf(t, err, "launch after update: %s", out)
+	require.Equal(t, "next launch\n", string(out))
 }
 
 func TestHomebrewServiceOwnership(t *testing.T) {
@@ -103,36 +76,21 @@ func TestHomebrewServiceOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plist := filepath.Join(t.TempDir(), "agent.plist")
 			if tc.previous != "" {
-				spec := testSpec()
-				spec.Executable = tc.previous
-				if err := os.WriteFile(plist, []byte(renderPlist(spec)), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if got := common.ServiceProgram(Status{Path: plist}); got != tc.previous {
-					t.Fatalf("program = %q", got)
-				}
+				plist = writePlist(t, t.TempDir(), tc.previous)
+				require.Equal(t, common.ServiceProgram(Status{Path: plist}), tc.previous)
 			}
-			if err := checkInstallOwner(tc.next, plist); (err == nil) != tc.allowed {
-				t.Fatalf("checkInstallOwner = %v, allowed = %v", err, tc.allowed)
-			}
+			require.Equal(t, (checkInstallOwner(tc.next, plist) == nil), tc.allowed)
 		})
 	}
 }
 
 func TestHomebrewProgramCannotRemoveItself(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "Caskroom", "quesma-shipper", "1.0.0", "quesma-shipper")
-	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(exe, []byte("installed binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := RemoveProgram(exe); err == nil || !strings.Contains(err.Error(), "brew uninstall") {
-		t.Fatalf("RemoveProgram = %v", err)
-	}
-	if _, err := os.Stat(exe); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
+	require.NoError(t, os.WriteFile(exe, []byte("installed binary"), 0o755))
+	_, err := RemoveProgram(exe)
+	require.ErrorContains(t, err, "brew uninstall")
+	require.FileExists(t, exe)
 }
 
 func TestHomebrewUninstallOwnership(t *testing.T) {
@@ -150,20 +108,23 @@ func TestHomebrewUninstallOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plist := filepath.Join(t.TempDir(), "agent.plist")
 			if tc.program != "" {
-				spec := testSpec()
-				spec.Executable = tc.program
-				raw := renderPlist(spec)
-				if tc.bad {
-					raw = "broken plist"
-				}
-				if err := os.WriteFile(plist, []byte(raw), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				plist = writePlist(t, t.TempDir(), tc.program)
+			}
+			if tc.bad {
+				require.NoError(t, os.WriteFile(plist, []byte("broken plist"), 0o600))
 			}
 			owned, err := ownsHomebrewService(exe, plist)
-			if owned != tc.owned || (err != nil) != tc.bad {
-				t.Fatalf("ownership = %v, %v", owned, err)
-			}
+			require.Truef(t, owned == tc.owned && err != nil == tc.bad, "ownership = %v, %v", owned, err)
 		})
 	}
+}
+
+// writePlist installs a LaunchAgent entry for program under dir and returns its path.
+func writePlist(t *testing.T, dir, program string) string {
+	t.Helper()
+	spec := testSpec()
+	spec.Executable = program
+	plist := filepath.Join(dir, "agent.plist")
+	require.NoError(t, os.WriteFile(plist, []byte(renderPlist(spec)), 0o600))
+	return plist
 }

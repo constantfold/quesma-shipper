@@ -1,48 +1,34 @@
-// The local fingerprint store is authoritative for upload progress: no backend tracks what was
-// uploaded. One JSON document, replaced atomically under a process flock; retry is re-run, so a
-// wiped or unloadable document costs a re-hash and a per-object probe, never a lost file.
 package engine
 
 import (
-	"cmp"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"time"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// StateSchema versions the document. A mismatch means downgrade or corruption: reject, never guess.
-const StateSchema = 1
+// The fingerprint store: one JSON document, replaced atomically, beside a separate lock file so the
+// document itself is never held open. Losing it costs a re-hash, never a re-upload.
 
-// The lock is a separate file so the document itself is only ever replaced, never held open.
 const (
-	FileName = "fingerprints.json"
-	lockName = "fingerprints.lock"
+	// StateSchema versions the document. A mismatch means downgrade or corruption: reject, never guess.
+	StateSchema = 1
+	FileName    = "fingerprints.json"
+	lockName    = "fingerprints.lock"
+
+	// Roughly a hundred thousand entries at 400 bytes each; Prune and Reset may read further.
+	maxDocumentBytes      = 64 << 20
+	pruneMaxDocumentBytes = 512 << 20
 )
 
-// maxDocumentBytes bounds the document: roughly a hundred thousand entries at 400 bytes each.
-const maxDocumentBytes = 64 << 20
+// ErrLocked means another flush holds the store; the caller should try later rather than wait.
+var ErrLocked = errors.New("state: store is locked by another flush")
 
-var (
-	// ErrLocked means another flush holds the store; the caller should try later rather than wait.
-	ErrLocked = errors.New("state: store is locked by another flush")
-
-	// ErrSchemaMismatch means the document was written by a different version.
-	ErrSchemaMismatch = errors.New("state: document schema mismatch")
-)
-
-// Key identifies one fingerprint.
 type Key struct {
 	SourceID   string
 	NativePath string
@@ -50,8 +36,7 @@ type Key struct {
 
 // Fingerprint is what the store remembers about one file.
 type Fingerprint struct {
-	// Size and mtime are the cheap pre-filter; the content hash is the authority. SourceHash also
-	// marks a completed ship: only the post-verified-PUT commit may write it, never a failure path.
+	// Size and mtime pre-filter; SourceHash is the authority, written only after a confirmed PUT.
 	SourceSize  int64
 	SourceMTime time.Time
 	SourceHash  string
@@ -60,17 +45,14 @@ type Fingerprint struct {
 	Enricher   *EnricherRef
 	OutputHash string
 
-	// A parked entry waits for backoff. There is no max-retry: giving up is silent data loss.
+	// A parked entry waits for backoff; Attempts counts consecutive failures. There is no max-retry.
 	Parked       bool
 	LastError    string
 	BackoffUntil time.Time
-
-	// Attempts counts consecutive failures on this file, turning retry-every-tick into a backoff.
-	Attempts int
+	Attempts     int
 }
 
-// EnricherRef identifies the enricher that produced a derived entry: the manifest's own shape,
-// which is also this document's wire shape.
+// EnricherRef identifies the enricher that produced a derived entry, in the manifest's own shape.
 type EnricherRef = transforms.EnricherRef
 
 // Document is the whole on-disk state, as read by Peek.
@@ -81,8 +63,7 @@ type Document struct {
 	Entries     map[Key]Fingerprint
 }
 
-// ForeignTo reports whether another install wrote this document. An unstamped one belongs to
-// whoever opens it, so an empty id on either side is never foreign.
+// ForeignTo reports whether another install wrote this document. An empty id on either side is never foreign.
 func (d Document) ForeignTo(installID string) bool {
 	return d.InstallID != "" && installID != "" && d.InstallID != installID
 }
@@ -94,12 +75,10 @@ type Store struct {
 	lock      *os.File
 	specs     map[string]string
 	entries   map[Key]Fingerprint
-
-	corrupt bool
+	corrupt   bool
 }
 
-// Corrupt says the document could not be loaded and was discarded: the run continues from an empty
-// store and the first flush replaces the file. Carried out so the discard is reported, not survived.
+// Corrupt says the document could not be loaded and was discarded, so the run can report it.
 func (s *Store) Corrupt() bool { return s.corrupt }
 
 // Open takes the flock, non-blocking, and loads the document: a busy store is refused, not queued.
@@ -107,16 +86,11 @@ func Open(stateDir, installID string) (*Store, error) {
 	return open(stateDir, installID, maxDocumentBytes)
 }
 
-// pruneMaxDocumentBytes is what Prune and Reset may read: larger than the ordinary cap, still bounded.
-const pruneMaxDocumentBytes = 512 << 20
-
 func open(stateDir, installID string, maxBytes int64) (*Store, error) {
 	if err := platform.EnsureDir(stateDir, 0o700); err != nil {
 		return nil, err
 	}
-
-	lockPath := filepath.Join(stateDir, lockName)
-	lock, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	lock, err := os.OpenFile(filepath.Join(stateDir, lockName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("state: open lock: %w", err)
 	}
@@ -126,8 +100,7 @@ func open(stateDir, installID string, maxBytes int64) (*Store, error) {
 	}
 	s := &Store{dir: stateDir, installID: installID, lock: lock}
 
-	// Any document that cannot be loaded is discarded, never fatal: the archive answers for what it
-	// already holds, so an empty store costs a re-hash, not a re-upload.
+	// An unloadable document is discarded, never fatal: the archive answers for what it holds.
 	doc, err := load(stateDir, maxBytes)
 	if err == nil && doc.ForeignTo(installID) {
 		err = fmt.Errorf("state: %s belongs to install %s, this install is %s",
@@ -142,7 +115,6 @@ func open(stateDir, installID string, maxBytes int64) (*Store, error) {
 	return s, nil
 }
 
-// Close releases the lock.
 func (s *Store) Close() error {
 	if s.lock == nil {
 		return nil
@@ -153,16 +125,13 @@ func (s *Store) Close() error {
 	return err
 }
 
-// editStore is the shell both operator overrides share: it reads past maxDocumentBytes, since a
-// past-the-ceiling document must not lock out the override, and writes only what edit changed.
-// A discarded document is always written back: the override is the operator's chance to replace it.
+// editStore runs an operator override; a discarded document is always written back, even unchanged.
 func editStore(stateDir, installID string, dryRun bool, edit func(*Store) int) (int, error) {
 	s, err := open(stateDir, installID, pruneMaxDocumentBytes)
 	if err != nil {
 		return 0, err
 	}
 	defer s.Close()
-
 	changed := edit(s)
 	if dryRun || (changed == 0 && !s.corrupt) {
 		return changed, nil
@@ -170,27 +139,21 @@ func editStore(stateDir, installID string, dryRun bool, edit func(*Store) int) (
 	return changed, s.flush()
 }
 
-// Prune removes entries whose file is gone. It tests existence on disk, so a file on an unmounted
-// volume reads as gone, which is why it stays a command.
+// Prune removes entries whose file is gone; an unmounted volume reads as gone, so it stays a command.
 func Prune(stateDir, installID string, dryRun bool) (removed, kept int, err error) {
 	removed, err = editStore(stateDir, installID, dryRun, func(s *Store) int {
-		gone := 0
-		for k := range s.entries {
-			if _, statErr := os.Lstat(k.NativePath); statErr == nil {
-				kept++
-				continue
-			}
-			gone++
-			delete(s.entries, k)
-		}
-		return gone
+		before := len(s.entries)
+		maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool {
+			_, err := os.Lstat(k.NativePath)
+			return err != nil
+		})
+		kept = len(s.entries)
+		return before - kept
 	})
 	return removed, kept, err
 }
 
-// Reset forgets every fingerprint, so the next sync re-hashes the whole history and re-probes the
-// archive; unchanged bytes come back already_present, so a reset never forces a re-seal.
-// The document is replaced with an empty one rather than deleted, so the install id survives.
+// Reset forgets every fingerprint but keeps the document, and with it the install id.
 func Reset(stateDir, installID string, dryRun bool) (removed int, err error) {
 	return editStore(stateDir, installID, dryRun, func(s *Store) int {
 		removed := len(s.entries)
@@ -204,68 +167,39 @@ func Peek(stateDir string) (Document, error) {
 	return load(stateDir, maxDocumentBytes)
 }
 
-// Get returns a fingerprint.
 func (s *Store) Get(k Key) (Fingerprint, bool) {
 	fp, ok := s.entries[k]
 	return fp, ok
 }
 
-// Len reports how many entries the store holds.
 func (s *Store) Len() int { return len(s.entries) }
 
-// CommitAll records several fingerprints in one document replacement. The only durable step in the
-// loop, and it happens last: a crash before the replace re-runs those files onto their existing
-// keys. Safe under retry-is-re-run. Never make this a database.
+// CommitAll records fingerprints in one document replacement; a crash re-runs them onto the same keys.
 func (s *Store) CommitAll(updates map[Key]Fingerprint) error {
-	for k, fp := range updates {
-		s.entries[k] = fp
-	}
+	maps.Copy(s.entries, updates)
 	return s.flush()
 }
 
-// SpecFor reports the spec generation this source's entries were recorded under.
-func (s *Store) SpecFor(sourceID string) (string, bool) {
-	stored, known := s.specs[sourceID]
-	return stored, known
-}
-
-// EnsureSpec records which spec generation this source's entries belong to, dropping them all when
-// it differs. Per source and never the global config_version, which would invalidate every
-// fingerprint on every machine. Entries with no recorded generation adopt it without dropping.
+// EnsureSpec drops a source's entries when its spec changes; per source, never per config_version.
 func (s *Store) EnsureSpec(sourceID, specFP string) (dropped int, err error) {
 	stored, known := s.specs[sourceID]
 	if known && stored == specFP {
 		return 0, nil
 	}
 	if known {
-		for k := range s.entries {
-			if k.SourceID == sourceID {
-				delete(s.entries, k)
-				dropped++
-			}
-		}
-	}
-	if s.specs == nil {
-		s.specs = map[string]string{}
+		before := len(s.entries)
+		maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool { return k.SourceID == sourceID })
+		dropped = before - len(s.entries)
 	}
 	s.specs[sourceID] = specFP
 	return dropped, s.flush()
 }
 
-// DropVanished forgets this source's entries whose file discovery no longer sees, keyed by native
-// path. Only a source that collected AND returned candidates proves absence: err on kept-too-long.
+// DropVanished forgets this source's entries whose file discovery no longer sees.
 func (s *Store) DropVanished(sourceID string, live map[string]bool) (int, error) {
-	dropped := 0
-	for k := range s.entries {
-		if k.SourceID != sourceID {
-			continue
-		}
-		if live[k.NativePath] {
-			continue
-		}
-		delete(s.entries, k)
-		dropped++
-	}
+	before := len(s.entries)
+	maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool { return k.SourceID == sourceID && !live[k.NativePath] })
+	dropped := before - len(s.entries)
 	if dropped == 0 {
 		return 0, nil
 	}
@@ -278,195 +212,4 @@ func (s *Store) flush() error {
 		return err
 	}
 	return platform.WriteAtomic(filepath.Join(s.dir, FileName), body, 0o600)
-}
-
-// --- wire format ------------------------------------------------------------
-
-type wireDoc struct {
-	StateSchema int               `json:"state_schema"`
-	InstallID   string            `json:"install_id,omitempty"`
-	UpdatedAt   string            `json:"updated_at,omitempty"`
-	SourceSpecs map[string]string `json:"source_specs,omitempty"`
-
-	// A source_hash corrupted in place still parses and reads as a completed ship, which is silent
-	// permanent loss: "a lost document only costs a re-ship" holds for forgetting a ship, never for
-	// falsely remembering one. Absent on documents written before this field existed.
-	Checksum string `json:"checksum,omitempty"`
-
-	Entries []wireEntry `json:"entries"`
-}
-
-// Hashed with the checksum field cleared, so both sides compute over the same bytes. Marshal, never
-// MarshalIndent: formatting must be free to change without invalidating every store in the fleet.
-func checksumOf(doc wireDoc) (string, error) {
-	doc.Checksum = ""
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return "", fmt.Errorf("state: checksum: %w", err)
-	}
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-type wireEntry struct {
-	SourceID     string       `json:"source_id"`
-	NativePath   string       `json:"native_path"`
-	SourceSize   int64        `json:"source_size,omitempty"`
-	SourceMTime  string       `json:"source_mtime,omitempty"`
-	Attempts     int          `json:"attempts,omitempty"`
-	SourceHash   string       `json:"source_hash,omitempty"`
-	Enricher     *EnricherRef `json:"enricher,omitempty"`
-	OutputHash   string       `json:"output_hash,omitempty"`
-	Parked       bool         `json:"parked,omitempty"`
-	LastError    string       `json:"last_error,omitempty"`
-	BackoffUntil string       `json:"backoff_until,omitempty"`
-}
-
-// encode serializes deterministically: entries sorted by key, so equal state gives equal bytes.
-func encode(installID string, updatedAt time.Time, specs map[string]string, entries map[Key]Fingerprint) ([]byte, error) {
-	// json.Marshal writes map keys sorted, so source_specs is deterministic too.
-	doc := wireDoc{StateSchema: StateSchema, InstallID: installID, SourceSpecs: specs, Entries: []wireEntry{}}
-	if !updatedAt.IsZero() {
-		doc.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
-	}
-
-	keys := slices.SortedFunc(maps.Keys(entries), func(a, b Key) int {
-		return cmp.Or(strings.Compare(a.SourceID, b.SourceID), strings.Compare(a.NativePath, b.NativePath))
-	})
-
-	for _, k := range keys {
-		fp := entries[k]
-		e := wireEntry{
-			SourceID:   k.SourceID,
-			NativePath: k.NativePath,
-			SourceSize: fp.SourceSize,
-			SourceHash: fp.SourceHash,
-			OutputHash: fp.OutputHash,
-			Attempts:   fp.Attempts,
-			Parked:     fp.Parked,
-			LastError:  fp.LastError,
-			Enricher:   fp.Enricher,
-		}
-		if !fp.SourceMTime.IsZero() {
-			// RFC3339Nano, not RFC3339: the pre-filter compares this against the file's mtime for
-			// EXACT equality, so whole seconds here re-read and re-hash every file on every tick.
-			// Rounding both sides instead would skip a same-second change. Do not lower the precision.
-			e.SourceMTime = fp.SourceMTime.UTC().Format(time.RFC3339Nano)
-		}
-		if !fp.BackoffUntil.IsZero() {
-			e.BackoffUntil = fp.BackoffUntil.UTC().Format(time.RFC3339)
-		}
-		doc.Entries = append(doc.Entries, e)
-	}
-
-	sum, err := checksumOf(doc)
-	if err != nil {
-		return nil, err
-	}
-	doc.Checksum = sum
-
-	body, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("state: encode: %w", err)
-	}
-	body = append(body, '\n')
-
-	// Validate on the way out: a state file that fails its own schema is a bug to catch here.
-	if err := validate(body); err != nil {
-		return nil, err
-	}
-	return body, nil
-}
-
-func load(stateDir string, maxBytes int64) (Document, error) {
-	path := filepath.Join(stateDir, FileName)
-	raw, _, err := platform.ReadWhole(path, maxBytes)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// First run. An empty store is not an error: everything is simply unshipped.
-			return Document{Entries: map[Key]Fingerprint{}}, nil
-		}
-		return Document{}, fmt.Errorf("state: read %s: %w", path, err)
-	}
-
-	// No JSON Schema pass here: encode already proved the SHAPE, and re-parsing every run only
-	// re-proves it. The checksum below is a different question and cheap enough to ask every time:
-	// it covers the VALUES, which the schema never did. Unknown fields drop on the next rewrite and
-	// a missing field reads zero, failing toward a re-ship onto the same key. A negative attempts
-	// count must be refused: it panics as the backoff's shift.
-	var doc wireDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return Document{}, fmt.Errorf("state: parse %s: %w", path, err)
-	}
-	// The only schema guard on the load path: rejecting costs one re-upload, guessing costs more.
-	if doc.StateSchema != StateSchema {
-		return Document{}, fmt.Errorf("%w: document says %d, this client speaks %d",
-			ErrSchemaMismatch, doc.StateSchema, StateSchema)
-	}
-	// Absent means written before the field existed; it earns one on the next rewrite. A wrong one
-	// fails the whole load, because a partly-trusted store is the failure this catches.
-	if doc.Checksum != "" {
-		want, err := checksumOf(doc)
-		if err != nil {
-			return Document{}, err
-		}
-		if want != doc.Checksum {
-			return Document{}, fmt.Errorf("state: %s failed its checksum", path)
-		}
-	}
-
-	out := Document{
-		InstallID:   doc.InstallID,
-		SourceSpecs: doc.SourceSpecs,
-		Entries:     make(map[Key]Fingerprint, len(doc.Entries)),
-	}
-	if out.SourceSpecs == nil {
-		out.SourceSpecs = map[string]string{}
-	}
-	if doc.UpdatedAt != "" {
-		if t, err := time.Parse(time.RFC3339, doc.UpdatedAt); err == nil {
-			out.UpdatedAt = t
-		}
-	}
-	for _, e := range doc.Entries {
-		if e.Attempts < 0 {
-			return Document{}, fmt.Errorf("state: entry %s %s: negative attempts %d",
-				e.SourceID, e.NativePath, e.Attempts)
-		}
-		fp := Fingerprint{
-			SourceSize: e.SourceSize,
-			SourceHash: e.SourceHash,
-			OutputHash: e.OutputHash,
-			Attempts:   e.Attempts,
-			Parked:     e.Parked,
-			LastError:  e.LastError,
-			Enricher:   e.Enricher,
-		}
-		if e.SourceMTime != "" {
-			if t, err := time.Parse(time.RFC3339, e.SourceMTime); err == nil {
-				fp.SourceMTime = t
-			}
-		}
-		if e.BackoffUntil != "" {
-			if t, err := time.Parse(time.RFC3339, e.BackoffUntil); err == nil {
-				fp.BackoffUntil = t
-			}
-		}
-		out.Entries[Key{
-			SourceID:   e.SourceID,
-			NativePath: e.NativePath,
-		}] = fp
-	}
-	return out, nil
-}
-
-func validate(raw []byte) error {
-	err := formats.ValidateRaw(formats.FingerprintState, raw)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, formats.ErrNotJSON):
-		return fmt.Errorf("state: document is %w", err)
-	}
-	return fmt.Errorf("state: document does not satisfy its schema: %w", err)
 }

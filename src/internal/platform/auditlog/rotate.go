@@ -20,29 +20,28 @@ func readTail(path string, n int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bytes.Count(cur, []byte{'\n'}) >= n {
+	have := bytes.Count(cur, []byte{'\n'})
+	if have >= n {
 		return cur, nil
 	}
 	// Not enough in the current file: the rest is in the generation before it, if there is one.
-	prev, err := tailFile(path+platform.PreviousLogSuffix, n-bytes.Count(cur, []byte{'\n'}))
+	prev, err := tailFile(path+platform.PreviousLogSuffix, n-have)
 	if err != nil || len(prev) == 0 {
 		return cur, nil
 	}
 	return append(prev, cur...), nil
 }
 
-// defaultTailLines bounds a tail with no explicit count; without it, n=0 means the whole file.
-const defaultTailLines = 200
-
-// tailChunk is how much is read per backwards step.
-const tailChunk = 64 << 10
+const (
+	defaultTailLines = 200      // bounds a tail with no explicit count; without it, n=0 means the whole file
+	tailChunk        = 64 << 10 // how much is read per backwards step
+)
 
 // bytesRead counts what the backwards reader pulled off disk: the cost-is-the-answer property a test can assert on.
 var bytesRead atomic.Int64
 
 func tailFile(path string, n int) ([]byte, error) {
-	// os.Open on purpose, not the safeio path: an operator may symlink the log elsewhere, and
-	// tailing history must not refuse to follow it. Reads below use ReadAt, so only the size is needed.
+	// os.Open on purpose, not safeio: an operator may symlink the log elsewhere.
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return nil, err
@@ -76,22 +75,11 @@ func tailFile(path string, n int) ([]byte, error) {
 
 // lastLines returns the trailing n complete lines of b.
 func lastLines(b []byte, n int) []byte {
-	if len(b) == 0 {
-		return nil
-	}
-	end := len(b)
-	if b[end-1] == '\n' {
-		end--
-	}
-	count := 0
-	for i := end - 1; i >= 0; i-- {
-		if b[i] != '\n' {
-			continue
-		}
-		count++
-		if count == n {
-			return b[i+1:]
+	i := len(bytes.TrimSuffix(b, []byte{'\n'}))
+	for ; n > 0; n-- {
+		if i = bytes.LastIndexByte(b[:i], '\n'); i < 0 {
+			return b
 		}
 	}
-	return b
+	return b[i+1:]
 }

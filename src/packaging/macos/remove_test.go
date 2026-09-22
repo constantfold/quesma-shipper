@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRemoveProgramRemovesAppAndItsCLILink(t *testing.T) {
@@ -14,34 +17,20 @@ func TestRemoveProgramRemovesAppAndItsCLILink(t *testing.T) {
 	app := filepath.Join(home, "Applications", appName)
 	executable := writeTestApp(t, app, bundleIdentifier, executableName)
 	link := filepath.Join(home, ".local", "bin", "quesma-shipper")
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(executable, link); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(executable, link))
 
 	removed, err := RemoveProgram(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed != app {
-		t.Fatalf("removed path = %q, want %q", removed, app)
-	}
-	for _, path := range []string{app, link} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Errorf("%s still exists: %v", path, err)
-		}
-	}
+	require.NoError(t, err)
+	require.Equal(t, app, removed)
+	assert.NoDirExists(t, app)
+	assert.NoFileExists(t, link)
 }
 
 func TestRemoveProgramRefusesAnUnrelatedApp(t *testing.T) {
 	app := filepath.Join(t.TempDir(), "Other.app")
 	executable := writeTestApp(t, app, "com.example.other", executableName)
-	if _, err := RemoveProgram(executable); err == nil {
-		t.Fatal("uninstall accepted an unrelated app")
-	}
-	if _, err := os.Stat(app); err != nil {
-		t.Fatalf("uninstall damaged the unrelated app: %v", err)
-	}
+	_, err := RemoveProgram(executable)
+	require.Error(t, err, "uninstall accepted an unrelated app")
+	require.DirExists(t, app, "uninstall damaged the unrelated app")
 }

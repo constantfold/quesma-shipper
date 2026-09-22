@@ -6,48 +6,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Tailing must cost the answer, not the history: internal, because a whole-file read returns the same entries.
+// A large log must return the newest entries while reading only its tail.
 func TestTailingALargeLogReadsOnlyTheEndOfIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 
 	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	pad := strings.Repeat("y", 2<<10)
 	for i := 0; i < 20000; i++ {
 		fmt.Fprintf(f, `{"at":"2026-08-06T00:00:00Z","decision":"unchanged","file":"f%05d","reason":"%s"}`+"\n", i, pad)
 	}
 	f.Close()
 
-	size := mustSize(t, path)
-	if size < 30<<20 {
-		t.Fatalf("the fixture is only %d bytes; it cannot show the difference", size)
-	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	size := info.Size()
+	require.GreaterOrEqual(t, size, int64(30<<20), "the fixture is too small to show the difference")
 
 	bytesRead.Store(0)
-	if _, err := Tail(path, 3); err != nil {
-		t.Fatal(err)
-	}
+	entries, err := Tail(path, 3)
 	read := bytesRead.Load()
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, "f19999", entries[2].File, "last entry must be the newest line")
+	assert.Equal(t, "f19997", entries[0].File, "first entry must be the third newest line")
 
-	if read > 1<<20 {
-		t.Errorf("tailing 3 lines from a %d byte log read %d bytes; it should read the end, "+
-			"not the file", size, read)
-	}
-	if read == 0 {
-		t.Error("nothing was read; the counter is not wired and this test proves nothing")
-	}
-}
-
-func mustSize(t *testing.T, path string) int64 {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Size()
+	assert.LessOrEqual(t, read, int64(1<<20), "tailing 3 lines should read the end, not the file")
+	assert.NotZero(t, read, "nothing was read; the counter is not wired and this test proves nothing")
 }

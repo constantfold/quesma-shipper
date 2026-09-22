@@ -46,25 +46,20 @@ func Clear(stateDir string) error {
 	return nil
 }
 
-// Read fails closed: a flag that exists but cannot be parsed reads as paused. A flag past its
-// end reads as not paused; the file stays until the next Set or Clear.
+// Read fails closed: an unparseable flag reads as paused, and one past its end as not paused.
 func Read(stateDir string) State {
-	return ReadAt(stateDir, time.Now())
-}
-
-func ReadAt(stateDir string, now time.Time) State {
 	raw, _, err := ReadWhole(filepath.Join(stateDir, File), 64<<10)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return State{}
-		}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return State{}
+	case err != nil:
 		return State{Paused: true, Reason: "the pause flag exists but could not be read: " + err.Error()}
 	}
 	var s State
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return State{Paused: true, Reason: "the pause flag exists but could not be parsed: " + err.Error()}
 	}
-	if until := s.UntilTime(); !until.IsZero() && !now.Before(until) {
+	if until := s.UntilTime(); !until.IsZero() && !time.Now().Before(until) {
 		return State{}
 	}
 	s.Paused = true

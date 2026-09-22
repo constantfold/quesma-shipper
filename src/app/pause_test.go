@@ -3,142 +3,67 @@ package app_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// Pausing must not depend on configuration parsing: a user must be able to resume even when
-// the configuration needs repair.
-func TestPauseWorksUnderABrokenConfig(t *testing.T) {
-	home := t.TempDir()
-	configHome := filepath.Join(home, ".config")
-	stateHome := filepath.Join(home, ".state")
-	stateDir := filepath.Join(stateHome, "trajectory-shipper")
+// A broken configuration must not prevent pausing or resuming collection.
+func TestPauseStateDirectory(t *testing.T) {
+	for _, statePath := range []string{"broken-config", "elsewhere", "moved-state"} {
+		t.Run(statePath, func(t *testing.T) {
+			home := t.TempDir()
+			configHome := filepath.Join(home, ".config")
+			stateHome := filepath.Join(home, ".state")
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", configHome)
+			t.Setenv("XDG_STATE_HOME", stateHome)
 
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("XDG_STATE_HOME", stateHome)
+			stateDir := filepath.Join(home, statePath)
+			body := "config_version: 1\nstate_dir: " + stateDir + "\n"
+			wantWarning := ""
+			if statePath == "broken-config" {
+				stateDir = filepath.Join(stateHome, "trajectory-shipper")
+				body = "config_version: 1\n bad: indent: here\n"
+				wantWarning = "does not resolve"
+			}
+			configDir := filepath.Join(configHome, "trajectory-shipper")
+			require.NoError(t, os.MkdirAll(configDir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(body), 0o600))
 
-	// A config file that does not parse.
-	if err := os.MkdirAll(filepath.Join(configHome, "trajectory-shipper"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	broken := filepath.Join(configHome, "trajectory-shipper", "config.yaml")
-	if err := os.WriteFile(broken, []byte("config_version: 1\n bad: indent: here\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := app.ResolveEffective(); err == nil {
-		t.Fatal("the fixture config parses; this test proves nothing")
-	}
+			eff, paths, err := app.ResolveEffective()
+			if wantWarning != "" {
+				require.Error(t, err, "the fixture must fail to resolve")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, stateDir, paths.StateDir)
+				assert.Equal(t, stateDir, eff.StateDir)
+				assert.Equal(t, eff.StateDir, paths.StateDir, "CLI and engine must share state")
+			}
 
-	warning, err := app.Pause(time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatalf("pause failed under broken configuration: %v", err)
-	}
-	if !strings.Contains(warning, "does not resolve") {
-		t.Errorf("the fallback was silent: %q", warning)
-	}
-	if !platform.Read(stateDir).Paused {
-		t.Fatal("pausing under broken configuration did not take effect")
-	}
-
-	wasPaused, warning, err := app.Resume()
-	if err != nil {
-		t.Fatalf("resume failed under broken configuration: %v", err)
-	}
-	if !wasPaused {
-		t.Fatal("resume did not report the existing pause")
-	}
-	if !strings.Contains(warning, "does not resolve") {
-		t.Errorf("the fallback was silent: %q", warning)
-	}
-	if platform.Read(stateDir).Paused {
-		t.Fatal("resuming under broken configuration did not take effect")
+			warning, err := app.Pause(time.Now().Add(time.Hour))
+			require.NoError(t, err)
+			assertPauseWarning(t, warning, wantWarning)
+			require.True(t, platform.Read(stateDir).Paused)
+			wasPaused, warning, err := app.Resume()
+			require.NoError(t, err)
+			require.True(t, wasPaused, "resume must report the existing pause")
+			assertPauseWarning(t, warning, wantWarning)
+			require.False(t, platform.Read(stateDir).Paused)
+		})
 	}
 }
 
-// With valid configuration, pause and resume use its state directory rather than the default.
-func TestPauseHonoursAResolvedStateDir(t *testing.T) {
-	home := t.TempDir()
-	configHome := filepath.Join(home, ".config")
-	moved := filepath.Join(home, "elsewhere")
-
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
-
-	if err := os.MkdirAll(filepath.Join(configHome, "trajectory-shipper"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := "config_version: 1\nstate_dir: " + moved + "\n"
-	if err := os.WriteFile(filepath.Join(configHome, "trajectory-shipper", "config.yaml"),
-		[]byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	warning, err := app.Pause(time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if warning != "" {
-		t.Errorf("warned on a configuration that resolves cleanly: %q", warning)
-	}
-	if !platform.Read(moved).Paused {
-		t.Fatal("pause was not written to the configured state directory")
-	}
-
-	wasPaused, warning, err := app.Resume()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !wasPaused {
-		t.Fatal("resume did not report the existing pause")
-	}
-	if warning != "" {
-		t.Errorf("warned on a configuration that resolves cleanly: %q", warning)
-	}
-	if platform.Read(moved).Paused {
-		t.Fatal("resume did not clear the configured pause state")
-	}
-}
-
-// The identity unit and the fingerprint document live in ONE state directory: they persist
-// together or not at all, which is what makes a rebuilt ephemeral host the SAME install.
-func TestOneResolvedStateDirectoryForEveryArtifact(t *testing.T) {
-	home := t.TempDir()
-	configHome := filepath.Join(home, ".config")
-	moved := filepath.Join(home, "moved-state")
-
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
-
-	if err := os.MkdirAll(filepath.Join(configHome, "trajectory-shipper"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := "config_version: 1\nstate_dir: " + moved + "\n"
-	if err := os.WriteFile(filepath.Join(configHome, "trajectory-shipper", "config.yaml"),
-		[]byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	eff, paths, err := app.ResolveEffective()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The two values have to agree: half the CLI reads one and the engine reads the other.
-	if paths.StateDir != moved {
-		t.Errorf("paths.StateDir = %q, want %q", paths.StateDir, moved)
-	}
-	if eff.StateDir != moved {
-		t.Errorf("eff.StateDir = %q, want %q", eff.StateDir, moved)
-	}
-	if paths.StateDir != eff.StateDir {
-		t.Errorf("the CLI and the engine would use different state directories: %q vs %q",
-			paths.StateDir, eff.StateDir)
+func assertPauseWarning(t *testing.T, warning, want string) {
+	t.Helper()
+	if want == "" {
+		assert.Empty(t, warning)
+	} else {
+		assert.Contains(t, warning, want)
 	}
 }

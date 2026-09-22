@@ -1,5 +1,5 @@
-// First contact: `local-dev` and `login` on a machine that has nothing, so these start from a
-// bare world rather than the seeded identity the rest of the tier uses.
+// First contact on a machine that has nothing: `local-dev`, `login`, and `update` on a dev build, which
+// must refuse because every release orders above a dev version. These start from a bare world.
 package e2e
 
 import (
@@ -8,174 +8,85 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	backend "github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
-func statePath(w *world) string {
-	return filepath.Join(w.State, "trajectory-shipper")
-}
-
-func userConfigPath(w *world) string {
-	return filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
-}
-
-func TestLocalDevMintsIdentityAndWritesNoConfig(t *testing.T) {
+// A virgin machine points status and run at login; local-dev then mints an identity, writes no config,
+// and a re-run keeps both the identity and the user's own config.
+func TestLocalDevMintsIdentityAndKeepsItOnRerun(t *testing.T) {
 	w := stageBareWorld(t)
+	before, err := runExpectingFailure(t, "status")
+	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
+	assertWaitsForEnrollment(t)
+	require.NoFileExists(t, filepath.Join(statePath(w), identity.FileName), "waiting for enrollment minted an identity")
 
 	out := run(t, "local-dev")
 
-	unit, err := identity.Load(statePath(w))
-	if err != nil {
-		t.Fatalf("no loadable identity after local-dev: %v", err)
-	}
-	if !strings.Contains(out, unit.InstallID.String()) {
-		t.Errorf("output does not name the identity:\n%s", out)
-	}
-	if _, err := os.Stat(userConfigPath(w)); !os.IsNotExist(err) {
-		t.Errorf("local-dev must not write a config file, stat: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(statePath(w), backend.EnrollmentFile)); !os.IsNotExist(err) {
-		t.Errorf("local-dev must not write an enrollment record, stat: %v", err)
-	}
-}
-
-func TestLocalDevRerunKeepsIdentityAndConfig(t *testing.T) {
-	w := stageBareWorld(t)
-
-	run(t, "local-dev")
 	first, err := identity.Load(statePath(w))
-	if err != nil {
-		t.Fatal(err)
-	}
-	own := []byte("config_version: 1\n# mine\n")
-	if err := os.MkdirAll(filepath.Dir(userConfigPath(w)), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(userConfigPath(w), own, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoErrorf(t, err, "no loadable identity after local-dev: %v", err)
+	assert.Containsf(t, out, first.InstallID.String(), "output does not name the identity:\n%s", out)
+	assert.NoFileExistsf(t, userConfigPath(w), "local-dev must not write a config file")
+	assert.NoFileExistsf(t, filepath.Join(statePath(w), backend.EnrollmentFile), "local-dev must not write an enrollment record")
+	after := run(t, "status")
+	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
 
+	own := []byte("config_version: 1\n# mine\n")
+	require.NoError(t, os.MkdirAll(filepath.Dir(userConfigPath(w)), 0o700))
+	require.NoError(t, os.WriteFile(userConfigPath(w), own, 0o600))
 	run(t, "local-dev")
 
 	second, err := identity.Load(statePath(w))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.InstallID != second.InstallID {
-		t.Errorf("re-run changed install_id: %s -> %s", first.InstallID, second.InstallID)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, first.InstallID, second.InstallID, "re-run changed install_id")
 	cfgAfter, err := os.ReadFile(userConfigPath(w))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(cfgAfter) != string(own) {
-		t.Errorf("re-run rewrote the user's own config file")
-	}
+	require.NoError(t, err)
+	assert.Equalf(t, string(own), string(cfgAfter), "re-run rewrote the user's own config file")
 }
 
-func TestLoginWithoutTokenOrServerFails(t *testing.T) {
-	w := stageBareWorld(t)
-
-	out, err := runExpectingFailure(t, "login")
-	if err == nil {
-		t.Fatalf("login with nothing succeeded:\n%s", out)
-	}
-	if !strings.Contains(err.Error(), "login <token>") {
-		t.Errorf("error does not show how to pass the token: %v", err)
-	}
-
-	out, err = runExpectingFailure(t, "login", "tsg1.payload.sig")
-	if err == nil {
-		t.Fatalf("login with a token and no server succeeded:\n%s", out)
-	}
-	if !strings.Contains(err.Error(), "--server") {
-		t.Errorf("error does not name the missing server: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(statePath(w), identity.FileName)); !os.IsNotExist(err) {
-		t.Errorf("a refused login minted an identity anyway, stat: %v", err)
-	}
-}
-
-func TestLocalDevRefusesLoggedInInstall(t *testing.T) {
-	w := stageBareWorld(t)
-
-	rec := backend.Enrollment{
-		InstallID:    testInstallID,
-		Organization: "acme",
-		Endpoint:     "https://cp.example",
-	}
-	if err := os.MkdirAll(statePath(w), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := rec.Save(statePath(w)); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runExpectingFailure(t, "local-dev")
-	if err == nil {
-		t.Fatalf("local-dev on a logged-in install succeeded:\n%s", out)
-	}
-	for _, want := range []string{"already logged in", "acme"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal does not mention %q: %v", want, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(statePath(w), identity.FileName)); !os.IsNotExist(err) {
-		t.Errorf("the refused local-dev minted an identity, stat: %v", err)
+// Each refusal names what to fix, and none mints an identity on the way out.
+func TestRefusalsNameTheFixAndMintNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enrolled bool
+		args     []string
+		want     []string
+	}{
+		{"login with nothing", false, []string{"login"}, []string{"login <token>"}},
+		{"login without a server", false, []string{"login", "tsg1.payload.sig"}, []string{"--server"}},
+		{"local-dev on a logged-in install", true, []string{"local-dev"}, []string{"already logged in", "acme"}},
+		// Every release orders above a dev version, so a dev build must refuse and name the override.
+		{"update on a dev build", false, []string{"update"}, []string{"dev build", "make build"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := stageBareWorld(t)
+			if tc.enrolled {
+				rec := backend.Enrollment{InstallID: testInstallID, Organization: "acme", Endpoint: "https://cp.example"}
+				require.NoError(t, os.MkdirAll(statePath(w), 0o700))
+				require.NoError(t, rec.Save(statePath(w)))
+			}
+			out, err := runExpectingFailure(t, tc.args...)
+			require.Errorf(t, err, "%v succeeded:\n%s", tc.args, out)
+			for _, want := range tc.want {
+				assert.Containsf(t, err.Error(), want, "refusal does not mention %q", want)
+			}
+			assert.NoFileExists(t, filepath.Join(statePath(w), identity.FileName), "the refusal minted an identity")
+		})
 	}
 }
 
 func TestLocalDevSurfacesUnreadableIdentity(t *testing.T) {
 	w := stageBareWorld(t)
-	if err := os.MkdirAll(statePath(w), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(statePath(w), identity.FileName), []byte("not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(statePath(w), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(statePath(w), identity.FileName), []byte("not json"), 0o600))
 
 	out, err := runExpectingFailure(t, "local-dev")
-	if err == nil {
-		t.Fatalf("local-dev over a corrupt identity succeeded:\n%s", out)
-	}
-	if !strings.Contains(err.Error(), "parse") {
-		t.Errorf("error does not surface the read failure: %v", err)
-	}
-	if strings.Contains(err.Error(), "refusing to mint") {
-		t.Errorf("error is Mint's overwrite refusal, not the unit's own failure: %v", err)
-	}
-}
-
-func TestRunOnceOnVirginMachineWaitsForLogin(t *testing.T) {
-	stageBareWorld(t)
-
-	out, err := runUntilCancelled(t, "run", "--once")
-	if err != nil {
-		t.Fatalf("cancelled wait failed: %v", err)
-	}
-	if !strings.Contains(out, "waiting for enrollment") || !strings.Contains(out, "quesma-shipper login") {
-		t.Errorf("the enrollment wait was not logged:\n%s", out)
-	}
-}
-
-func TestStatusBeforeAndAfterLocalDevSetup(t *testing.T) {
-	w := stageBareWorld(t)
-
-	before, err := runExpectingFailure(t, "status")
-	if err == nil || !strings.Contains(before, "not logged in") || !strings.Contains(before, "quesma-shipper login") {
-		t.Errorf("status on a virgin machine does not point at login (err %v):\n%s", err, before)
-	}
-
-	run(t, "local-dev")
-
-	after := run(t, "status")
-	if !strings.Contains(after, "shipper local") || !strings.Contains(after, "nothing is sent") {
-		t.Errorf("status after local-dev does not describe the local install and its destination:\n%s", after)
-	}
-	if _, err := identity.Load(statePath(w)); err != nil {
-		t.Fatal(err)
-	}
+	require.Errorf(t, err, "local-dev over a corrupt identity succeeded:\n%s", out)
+	assert.Containsf(t, err.Error(), "parse", "error does not surface the read failure: %v", err)
+	assert.NotContainsf(t, err.Error(), "refusing to mint", "error is Mint's overwrite refusal, not the unit's own failure: %v", err)
 }
 
 func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
@@ -184,15 +95,14 @@ func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
 	stageClaude(t, w, realUsername(t))
 
 	out := run(t, "preview")
-	if !strings.Contains(out, claudeSource) {
-		t.Fatalf("preview on a standalone install decided nothing:\n%s", out)
-	}
+	require.Containsf(t, out, claudeSource, "preview on a standalone install decided nothing:\n%s", out)
 
+	assertWaitsForEnrollment(t)
+}
+
+func assertWaitsForEnrollment(t *testing.T) {
+	t.Helper()
 	out, err := runUntilCancelled(t, "run", "--once")
-	if err != nil {
-		t.Fatalf("cancelled wait failed: %v", err)
-	}
-	if !strings.Contains(out, "waiting for enrollment") || !strings.Contains(out, "quesma-shipper login") {
-		t.Errorf("the enrollment wait was not logged:\n%s", out)
-	}
+	require.NoErrorf(t, err, "cancelled wait failed: %v", err)
+	assert.Truef(t, strings.Contains(out, "waiting for enrollment") && strings.Contains(out, "quesma-shipper login"), "the enrollment wait was not logged:\n%s", out)
 }

@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"encoding/json"
@@ -10,59 +10,60 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
+	"github.com/stretchr/testify/require"
 )
 
-// BenchmarkScrubSynthetic is the portable harness a change can be iterated against;
-// BenchmarkScrubRealData measures the truth. Two shapes load different parts of the ladder:
-// transcript-1MiB is many short lines, so per-line cost dominates, while bigvalue-8MiB is one
-// line whose payload sits in a single string, so the per-value matchers do.
+// BenchmarkScrubSynthetic is the portable harness; BenchmarkScrubRealData measures the truth.
+// transcript-1MiB is many short lines, bigvalue-8MiB one line whose payload is a single string.
 func BenchmarkScrubSynthetic(b *testing.B) {
-	cfg := transforms.DefaultConfig()
-	cfg.Username = "devuser"
-	s, err := transforms.New(cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
+	benchmarkSynthetic(b, syntheticTranscript(1<<20), syntheticBigValue(8<<20, 20260817, randCommandOutput))
+}
 
+func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
+	s := scrubberAs(b, "devuser")
 	cases := []struct {
 		name    string
 		payload []byte
-	}{
-		{"transcript-1MiB", syntheticTranscript(1 << 20)},
-		{"bigvalue-8MiB", syntheticBigValue(8 << 20)},
-	}
-
+	}{{"transcript-1MiB", transcript}, {"bigvalue-8MiB", bigValue}}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			b.SetBytes(int64(len(tc.payload)))
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				res, err := s.Scrub(tc.payload, transforms.Hint{Family: "claude-code", JSONL: true})
-				if err != nil {
-					b.Fatal(err)
-				}
-				if len(res.Out) == 0 {
-					b.Fatal("empty output")
-				}
+				res, err := s.Scrub(tc.payload, Hint{Family: "claude-code", JSONL: true})
+				require.NoError(b, err)
+				require.NotEqual(b, 0, len(res.Out), "empty output")
 			}
 		})
 	}
 }
 
-// syntheticTranscript builds JSONL lines shaped like a Claude Code transcript, with planted
-// secrets at roughly the density real transcripts show.
-func syntheticTranscript(size int) []byte {
-	rng := rand.New(rand.NewSource(20260816))
+// syntheticJSONL encodes line(rng, i) until size bytes, from a fixed seed.
+func syntheticJSONL(size int, seed int64, line func(rng *rand.Rand, i int) map[string]any) []byte {
+	rng := rand.New(rand.NewSource(seed))
 	var b strings.Builder
 	b.Grow(size + 4096)
-
+	encoder := json.NewEncoder(&b)
 	for i := 0; b.Len() < size; i++ {
-		var line map[string]any
+		if err := encoder.Encode(line(rng, i)); err != nil {
+			panic(err)
+		}
+	}
+	return []byte(b.String())
+}
+
+// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
+func plantAWSSecret(rng *rand.Rand, line map[string]any) {
+	line["message"].(map[string]any)["content"] = "export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
+}
+
+// syntheticTranscript is shaped like a Claude Code transcript, with planted secrets at roughly real density.
+func syntheticTranscript(size int) []byte {
+	return syntheticJSONL(size, 20260816, func(rng *rand.Rand, i int) map[string]any {
 		switch i % 5 {
 		case 0, 2:
-			line = map[string]any{
+			return map[string]any{
 				"parentUuid":  randUUID(rng),
 				"isSidechain": false,
 				"userType":    "external",
@@ -71,86 +72,46 @@ func syntheticTranscript(size int) []byte {
 				"version":     "1.0.60",
 				"type":        "assistant",
 				"message": map[string]any{
-					"id":    "msg_01" + randToken(rng, 22),
-					"role":  "assistant",
-					"model": "claude-opus-4",
-					"content": []any{
-						map[string]any{"type": "text", "text": randProse(rng, 200+rng.Intn(600))},
-					},
-					"usage": map[string]any{"input_tokens": 4211, "output_tokens": 118},
+					"id":      "msg_01" + randString(rng, tokenAlphabet, 22),
+					"role":    "assistant",
+					"model":   "claude-opus-4",
+					"content": []any{map[string]any{"type": "text", "text": randProse(rng, 200+rng.Intn(600))}},
+					"usage":   map[string]any{"input_tokens": 4211, "output_tokens": 118},
 				},
 				"uuid":      randUUID(rng),
 				"timestamp": "2026-08-16T09:12:44.117Z",
 			}
 		case 1, 3:
-			line = map[string]any{
-				"parentUuid": randUUID(rng),
-				"cwd":        "/Users/devuser/git/trajectory-shipper",
-				"sessionId":  randUUID(rng),
-				"type":       "user",
-				"message": map[string]any{
-					"role": "user",
-					"content": []any{
-						map[string]any{
-							"type":        "tool_result",
-							"tool_use_id": "toolu_01" + randToken(rng, 22),
-							"content":     randCommandOutput(rng, 300+rng.Intn(900)),
-						},
-					},
-				},
-				"toolUseResult": map[string]any{
-					"stdout":      randCommandOutput(rng, 200+rng.Intn(400)),
-					"stderr":      "",
-					"tool_use_id": "toolu_01" + randToken(rng, 22),
-				},
-				"uuid":      randUUID(rng),
-				"timestamp": "2026-08-16T09:12:45.002Z",
-			}
+			return syntheticToolResult(rng, randCommandOutput)
 		default:
-			line = map[string]any{
+			line := map[string]any{
 				"parentUuid": randUUID(rng),
 				"cwd":        "/Users/devuser/git/trajectory-shipper",
 				"sessionId":  randUUID(rng),
 				"type":       "user",
-				"message": map[string]any{
-					"role":    "user",
-					"content": randProse(rng, 120+rng.Intn(300)),
-				},
-				"uuid":      randUUID(rng),
-				"timestamp": "2026-08-16T09:12:46.551Z",
+				"message":    map[string]any{"role": "user", "content": randProse(rng, 120+rng.Intn(300))},
+				"uuid":       randUUID(rng),
+				"timestamp":  "2026-08-16T09:12:46.551Z",
 			}
 			if i%37 == 0 {
-				// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
-				line["message"].(map[string]any)["content"] =
-					"export AWS_SECRET_ACCESS_KEY=" + randToken(rng, 40) + " && ./deploy.sh"
+				plantAWSSecret(rng, line)
 			}
+			return line
 		}
-		enc, err := json.Marshal(line)
-		if err != nil {
-			panic(err)
-		}
-		b.Write(enc)
-		b.WriteByte('\n')
-	}
-	return []byte(b.String())
+	})
 }
 
-// syntheticBigValue is one record whose tool result holds the whole payload: the shape a
-// spilled build log or a big file read takes.
-func syntheticBigValue(size int) []byte {
-	rng := rand.New(rand.NewSource(20260817))
-	body := randCommandOutput(rng, size)
+// syntheticBigValue is one record whose tool result holds the payload, as a spilled build log does.
+func syntheticBigValue(size int, seed int64, output func(*rand.Rand, int) string) []byte {
+	rng := rand.New(rand.NewSource(seed))
+	body := output(rng, size)
 	line, err := json.Marshal(map[string]any{
-		"type":      "user",
-		"uuid":      randUUID(rng),
-		"sessionId": randUUID(rng),
-		"cwd":       "/Users/devuser/git/trajectory-shipper",
-		"toolUseResult": map[string]any{
-			"stdout":      body,
-			"stderr":      "",
-			"tool_use_id": "toolu_01" + randToken(rng, 22),
-		},
-		"timestamp": "2026-08-16T09:13:02.900Z",
+		"type":          "user",
+		"uuid":          randUUID(rng),
+		"sessionId":     randUUID(rng),
+		"cwd":           "/Users/devuser/git/trajectory-shipper",
+		"toolUseResult": map[string]any{"stdout": body, "stderr": "", "tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22)},
+		"timestamp":     "2026-08-16T09:13:02.900Z",
 	})
 	if err != nil {
 		panic(err)
@@ -158,27 +119,89 @@ func syntheticBigValue(size int) []byte {
 	return append(line, '\n')
 }
 
-const hexDigits = "0123456789abcdef"
+// Both corpora draw fields in the same order, preserving their seeded byte streams.
+func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) map[string]any {
+	return map[string]any{
+		"parentUuid": randUUID(rng),
+		"cwd":        "/Users/devuser/git/trajectory-shipper",
+		"sessionId":  randUUID(rng),
+		"type":       "user",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22),
+					"content":     output(rng, 300+rng.Intn(900)),
+				},
+			},
+		},
+		"toolUseResult": map[string]any{
+			"stdout":      output(rng, 200+rng.Intn(400)),
+			"stderr":      "",
+			"tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22),
+		},
+		"uuid":      randUUID(rng),
+		"timestamp": "2026-08-16T09:12:45.002Z",
+	}
+}
 
-func randUUID(rng *rand.Rand) string {
+// BenchmarkScrubSyntheticAt adds '@', which the tracked series lacks, so the costly email rule fires.
+func BenchmarkScrubSyntheticAt(b *testing.B) {
+	benchmarkSynthetic(b, syntheticTranscriptAt(1<<20), syntheticBigValue(8<<20, 20260819, randCommandOutputAt))
+}
+
+// randCommandOutputAt carries tool output's '@' shapes, mostly NOT emails, which cost the rule the most.
+func randCommandOutputAt(rng *rand.Rand, n int) string {
 	var sb strings.Builder
-	for i, n := range []int{8, 4, 4, 4, 12} {
-		if i > 0 {
-			sb.WriteByte('-')
-		}
-		for j := 0; j < n; j++ {
-			sb.WriteByte(hexDigits[rng.Intn(16)])
+	sb.Grow(n + 128)
+	for sb.Len() < n {
+		switch rng.Intn(10) {
+		case 0:
+			fmt.Fprintf(&sb, "npm WARN deprecated @quesma/%s@%d.%d.%d: use @quesma/%s instead\n",
+				proseWords[rng.Intn(len(proseWords))], rng.Intn(9), rng.Intn(20), rng.Intn(20),
+				proseWords[rng.Intn(len(proseWords))])
+		case 1:
+			fmt.Fprintf(&sb, "commit %s\nAuthor: Dev User <devuser@example.com>\n", randString(rng, hexDigits, 40))
+		case 2:
+			fmt.Fprintf(&sb, "  @param {%s} %s - %s\n", proseWords[rng.Intn(len(proseWords))],
+				proseWords[rng.Intn(len(proseWords))], randProse(rng, 40))
+		case 3:
+			fmt.Fprintf(&sb, "ssh devuser@build-%02d.internal.example: %s\n", rng.Intn(40),
+				randProse(rng, 40))
+		case 4:
+			fmt.Fprintf(&sb, "@decorator(name=\"%s\")\ndef %s(self):\n", proseWords[rng.Intn(len(proseWords))],
+				proseWords[rng.Intn(len(proseWords))])
+		default:
+			sb.WriteString(randCommandOutput(rng, 120+rng.Intn(240)))
 		}
 	}
 	return sb.String()
 }
 
+func syntheticTranscriptAt(size int) []byte {
+	return syntheticJSONL(size, 20260818, func(rng *rand.Rand, i int) map[string]any {
+		line := syntheticToolResult(rng, randCommandOutputAt)
+		if i%37 == 0 {
+			plantAWSSecret(rng, line)
+		}
+		return line
+	})
+}
+
+const hexDigits = "0123456789abcdef"
+
+func randUUID(rng *rand.Rand) string {
+	hex := randString(rng, hexDigits, 32)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hex[:8], hex[8:12], hex[12:16], hex[16:20], hex[20:])
+}
+
 const tokenAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-func randToken(rng *rand.Rand, n int) string {
+func randString(rng *rand.Rand, alphabet string, n int) string {
 	var sb strings.Builder
 	for i := 0; i < n; i++ {
-		sb.WriteByte(tokenAlphabet[rng.Intn(len(tokenAlphabet))])
+		sb.WriteByte(alphabet[rng.Intn(len(alphabet))])
 	}
 	return sb.String()
 }
@@ -200,8 +223,7 @@ func randProse(rng *rand.Rand, n int) string {
 	return sb.String()
 }
 
-// randCommandOutput imitates tool output: paths, hex digests, quoted fragments and the
-// occasional long token, which is what the candidate scanner actually meets.
+// randCommandOutput imitates tool output: paths, hex digests, quoted fragments, the odd long token.
 func randCommandOutput(rng *rand.Rand, n int) string {
 	var sb strings.Builder
 	sb.Grow(n + 128)
@@ -212,11 +234,11 @@ func randCommandOutput(rng *rand.Rand, n int) string {
 				proseWords[rng.Intn(len(proseWords))], rng.Intn(900)+1, rng.Intn(80)+1,
 				randProse(rng, 40))
 		case 1:
-			fmt.Fprintf(&sb, "%s  refs/heads/%s\n", randHex(rng, 40),
+			fmt.Fprintf(&sb, "%s  refs/heads/%s\n", randString(rng, hexDigits, 40),
 				proseWords[rng.Intn(len(proseWords))])
 		case 2:
 			fmt.Fprintf(&sb, "  \"%s\": \"%s\",\n", proseWords[rng.Intn(len(proseWords))],
-				randToken(rng, 8+rng.Intn(30)))
+				randString(rng, tokenAlphabet, 8+rng.Intn(30)))
 		case 3:
 			fmt.Fprintf(&sb, "ok  \tgithub.com/QuesmaOrg/quesma-shipper/internal/%s\t%d.%03ds\n",
 				proseWords[rng.Intn(len(proseWords))], rng.Intn(9), rng.Intn(999))
@@ -228,27 +250,14 @@ func randCommandOutput(rng *rand.Rand, n int) string {
 	return sb.String()
 }
 
-func randHex(rng *rand.Rand, n int) string {
-	var sb strings.Builder
-	for i := 0; i < n; i++ {
-		sb.WriteByte(hexDigits[rng.Intn(16)])
-	}
-	return sb.String()
-}
-
-// benchRealDataCap bounds how much of the tree one iteration scrubs: enough to dominate any
-// fixed cost, small enough to keep a run coffee-length.
+// benchRealDataCap bounds one iteration: enough to dominate fixed costs, short enough for coffee.
 const benchRealDataCap = 256 << 20
 
-// BenchmarkScrubRealData is the measurement that counts: a real transcript tree, whose value
-// lengths, secret density and prose no generator reproduces. It skips unless SCRUB_BENCH_DIR
-// names a directory of .jsonl files, so CI never depends on private data.
+// BenchmarkScrubRealData is the measurement that counts, over a real transcript tree no generator
+// reproduces. Run it serially, as a shared machine moves the number more than most changes do:
 //
-//	SCRUB_BENCH_DIR=$HOME/.claude/projects go test ./internal/scrub/ \
+//	SCRUB_BENCH_DIR=$HOME/.claude/projects go test ./internal/transforms/ \
 //	    -bench BenchmarkScrubRealData -benchmem -run '^$' -benchtime 1x
-//
-// Run it serially: it is minutes long, and a benchmark sharing the machine moves the number
-// more than most changes do.
 func BenchmarkScrubRealData(b *testing.B) {
 	root := os.Getenv("SCRUB_BENCH_DIR")
 	if root == "" {
@@ -280,21 +289,12 @@ func BenchmarkScrubRealData(b *testing.B) {
 		total += len(raw)
 		return nil
 	})
-	if err != nil {
-		b.Fatalf("load %s: %v", root, err)
-	}
-	if total == 0 {
-		b.Fatalf("no .jsonl files under %s", root)
-	}
+	require.NoErrorf(b, err, "load %s: %v", root, err)
+	require.NotEqualf(b, 0, total, "no .jsonl files under %s", root)
 	b.Logf("real corpus: %d files, %.1f MiB", len(files), float64(total)/(1<<20))
 
-	cfg := transforms.DefaultConfig()
-	cfg.Username = "devuser"
-	s, err := transforms.New(cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-	hint := transforms.Hint{Family: "claude-code", JSONL: true}
+	s := scrubberAs(b, "devuser")
+	hint := Hint{Family: "claude-code", JSONL: true}
 	b.SetBytes(int64(total))
 	b.ReportAllocs()
 	for b.Loop() {

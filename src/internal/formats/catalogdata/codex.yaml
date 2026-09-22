@@ -1,12 +1,4 @@
-# Codex (CLI + desktop + IDE extension, one store) — the cleanest format in the
-# landscape: a uniform {timestamp, type, payload} envelope on every line, and the
-# only surveyed agent that natively records the git remote.
-#
-# Scope is v1 row: rollout JSONL including compressed and archived
-# rollouts, plus the name index. Deferred to v1.1: the index databases
-# (state_5 / memories_1 / goals_1) — capturing a database is enricher work.
-#
-# No TTL deletion of rollouts, unlike Claude Code's 30-day reaper.
+# Codex CLI, desktop and IDE share a rollout store with no TTL deletion.
 spec_version: 1
 family: codex
 display_name: Codex
@@ -20,24 +12,11 @@ sources:
       client-side.
     gather: file_glob
     artifact_class: trajectory
-    roots:
+    roots: &codex_roots
       - $CODEX_HOME
       - ~/.codex
     require_subdir: sessions
-    # A hard ceiling on what will be READ, checked against the stat before the file is
-    # opened. 512 MiB, and the number comes from a user's machine rather than from ours.
-    #
-    # Our corpus had a largest Codex rollout of 0.2 MB, so the first version of this cap was
-    # 256 MiB and looked generous by three orders of magnitude. The first real install it met
-    # had a 146 MB rollout that shipped and a 367 MB one that did not — ordinary work, not a
-    # defect. Codex writes full tool output and file contents into the rollout, so long
-    # sessions get genuinely large.
-    #
-    # This is not headroom, it is a known boundary: at 512 MiB the pipeline holds roughly two
-    # gigabytes in flight, which is why the daemon's soft memory limit moved with it. A family
-    # that can legitimately produce files this size is the argument for streaming the read,
-    # hash, redact and seal path instead of buffering it — the cap is what keeps the daemon
-    # alive until that exists.
+    # Real rollouts reached 367 MB; this cap admits them but may hold ~2 GB until collection streams.
     max_file_bytes: 536870912
     include:
       - "sessions/**/*.jsonl"
@@ -56,9 +35,7 @@ sources:
       rename-plus-replace, never deletion.
     gather: compressed_file
     artifact_class: trajectory
-    roots:
-      - $CODEX_HOME
-      - ~/.codex
+    roots: *codex_roots
     require_subdir: sessions
     include:
       - "sessions/**/*.jsonl.zst"
@@ -71,9 +48,7 @@ sources:
     description: Account and raw provider usage snapshots each collection interval.
     gather: account
     scrub: false
-    roots:
-      - $CODEX_HOME
-      - ~/.codex
+    roots: *codex_roots
     artifact_class: context
     max_file_bytes: 8388608
     emit: account

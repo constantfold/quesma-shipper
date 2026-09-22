@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"slices"
 
 	"gopkg.in/yaml.v3"
@@ -18,7 +19,6 @@ import (
 	catalogdata "github.com/QuesmaOrg/quesma-shipper/internal/formats/catalogdata"
 )
 
-// Spec is one catalog file.
 type Spec struct {
 	SpecVersion int      `yaml:"spec_version"`
 	Family      string   `yaml:"family"`
@@ -41,13 +41,10 @@ type Source struct {
 	Sniff         *Sniff          `yaml:"sniff"`
 	Enrichers     map[string]bool `yaml:"enrichers"`
 	Scrub         *bool           `yaml:"scrub"`
-
-	// Emit, CWDProbe and GitRead belong to the sidecar primitive. Remote normalisation is not
-	// configurable: NormaliseRemote strips userinfo unconditionally.
+	// Emit, CWDProbe and GitRead belong to the sidecar primitive.
 	Emit     string    `yaml:"emit"`
 	CWDProbe *CWDProbe `yaml:"cwd_probe"`
 	GitRead  *GitRead  `yaml:"git_read"`
-
 	// Family is copied down from the containing spec so a Source travels alone.
 	Family string `yaml:"-"`
 }
@@ -71,14 +68,12 @@ type CWDProbe struct {
 	ScanBytes int64    `yaml:"scan_bytes"`
 }
 
-// GitRead is the equally bounded .git handling.
 type GitRead struct {
 	WalkUp           bool     `yaml:"walk_up"`
 	FollowGitdirFile bool     `yaml:"follow_gitdir_file"`
 	Take             []string `yaml:"take"`
 }
 
-// Compiled is the whole parsed catalog.
 type Compiled struct {
 	Specs   []Spec
 	byID    map[string]Source
@@ -87,18 +82,13 @@ type Compiled struct {
 
 // Load parses and validates every embedded catalog file at process start, so a build whose catalog does not satisfy its own schema fails loudly.
 func Load() (*Compiled, error) {
-	names, err := catalogdata.Files()
-	if err != nil {
-		return nil, err
-	}
-
+	names, _ := fs.Glob(catalogdata.FS, "*.yaml")
 	c := &Compiled{byID: map[string]Source{}}
 	for _, name := range names {
-		raw, err := catalogdata.Read(name)
+		raw, err := catalogdata.FS.ReadFile(name)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("catalog: read %s: %w", name, err)
 		}
-
 		var asAny any
 		if err := yaml.Unmarshal(raw, &asAny); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
@@ -106,14 +96,12 @@ func Load() (*Compiled, error) {
 		if err := formats.Validate(formats.SourceSpec, asAny); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
 		}
-
 		var spec Spec
 		dec := yaml.NewDecoder(bytes.NewReader(raw))
 		dec.KnownFields(true)
 		if err := dec.Decode(&spec); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
 		}
-
 		for i := range spec.Sources {
 			spec.Sources[i].Family = spec.Family
 			s := spec.Sources[i]
@@ -161,17 +149,13 @@ func SpecFingerprint(s Source) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Resolved is a compiled source with config applied and roots expanded. Defined here rather than in the
-// config package that builds it, so discovery and the loop never import the layered merge.
+// Resolved is a compiled source with config applied; it lives here so discovery never imports the config merge.
 type Resolved struct {
 	Source
-
 	// Root is the first candidate that expanded, exists and satisfied require_subdir; empty means the agent is not installed here.
 	Root string
-
 	// RootUnresolvedReason explains an empty Root, so agent_absent stays distinguishable from a misconfiguration.
 	RootUnresolvedReason string
-
-	Enabled         bool
-	SpecFingerprint string
+	Enabled              bool
+	SpecFingerprint      string
 }

@@ -3,6 +3,8 @@ package common
 import (
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHomebrewCaskRoot(t *testing.T) {
@@ -20,8 +22,6 @@ func TestHomebrewCaskRoot(t *testing.T) {
 		{"/opt/homebrew/Caskroom/quesma-shipper/0.1.0/other", ""},
 		{"Caskroom/quesma-shipper/0.1.0/quesma-shipper", ""},
 	} {
-		if got := HomebrewCaskRoot(tc.path); got != tc.root {
-			t.Errorf("HomebrewCaskRoot(%q) = %q, want %q", tc.path, got, tc.root)
-		}
+		assert.Equal(t, HomebrewCaskRoot(tc.path), tc.root)
 	}
 }

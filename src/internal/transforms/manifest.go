@@ -2,20 +2,16 @@ package transforms
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// ManifestVersion is the wire-contract version; downstream hard-errors on an unknown
-// value rather than reading it partially.
+// ManifestVersion is the wire-contract version; downstream hard-errors on an unknown value.
 const ManifestVersion = 1
 
-// Manifest is the first tar entry of every mirror object, and the only place the native
-// path exists on the wire. Field names and shapes mirror manifest.schema.json, which is
-// the authority: it is validated on seal and on open, so the two cannot drift silently.
+// Manifest is every object's first tar entry, the only wire carrier of the native path; schema-validated.
 type Manifest struct {
 	ManifestVersion int `json:"manifest_version"`
 
@@ -28,8 +24,7 @@ type Manifest struct {
 	Gather        string `json:"gather"`
 	ArtifactClass string `json:"artifact_class"`
 
-	// SourceHash covers the raw pre-redaction bytes, ShippedHash the archived ones. One
-	// hash cannot do both: redaction changes bytes, so the shipped hash is not an identity.
+	// SourceHash covers the raw pre-redaction bytes, ShippedHash the archived ones, which are no identity.
 	SourceHash  string `json:"source_hash"`
 	ShippedHash string `json:"shipped_hash"`
 
@@ -48,8 +43,7 @@ type Manifest struct {
 	ConfigExpired bool   `json:"config_expired,omitempty"`
 	SealedAt      string `json:"sealed_at"`
 
-	// RunID joins the object to the crash journal, audit entries and heartbeat of the
-	// process that sealed it.
+	// RunID joins the object to the crash journal, audit entries and heartbeat of its process.
 	RunID string `json:"run_id,omitempty"`
 
 	Derived          bool          `json:"derived,omitempty"`
@@ -59,17 +53,14 @@ type Manifest struct {
 	EnrichMismatches int           `json:"enrich_mismatches,omitempty"`
 	DBProvenance     *DBProvenance `json:"db_provenance,omitempty"`
 
-	// What an ok object could not enrich, without which a partial derived object is
-	// byte-identical here to a complete one. Only line decode errors are loss: those lines
-	// never reached the join (the torn final line is excluded).
+	// What an ok derived object could not enrich; only line decode errors are loss.
 	EnrichRepeats          int `json:"enrich_repeats,omitempty"`
 	EnrichTail             int `json:"enrich_tail,omitempty"`
 	EnrichAmbiguous        int `json:"enrich_ambiguous,omitempty"`
 	EnrichLineDecodeErrors int `json:"enrich_line_decode_errors,omitempty"`
 }
 
-// RedactionSummary is rule-id and count granularity, never byte ranges: positions would
-// fingerprint where and how large each secret was.
+// RedactionSummary is rule-id and count granularity, never byte ranges, which fingerprint each secret.
 type RedactionSummary struct {
 	Density  float64        `json:"density"`
 	RuleHits map[string]int `json:"rule_hits,omitempty"`
@@ -82,9 +73,7 @@ type Encryption struct {
 	RecipientKeyIDs []string `json:"recipient_key_ids"`
 }
 
-// Client identifies the build that sealed the object, as separate facts rather than one
-// encoded version string, so grouping by build is a comparison and not a substring match.
-// All optional but Version: a build with no VCS stamping has nothing truthful for Commit.
+// Client identifies the sealing build as separate facts, so grouping by build is a comparison.
 type Client struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit,omitempty"`
@@ -99,8 +88,7 @@ type EnricherRef struct {
 	Version int    `json:"version"`
 }
 
-// DBProvenance records what an enricher read from a local agent database. The rows never
-// ship, so this is the only account of where derived fields came from.
+// DBProvenance records what an enricher read from a local agent database.
 type DBProvenance struct {
 	DBPath     string   `json:"db_path,omitempty"`
 	ReadMethod string   `json:"read_method,omitempty"`
@@ -108,8 +96,7 @@ type DBProvenance struct {
 	RowsRead   int      `json:"rows_read,omitempty"`
 }
 
-// Encode serializes a manifest and validates it against the schema, so one that would
-// fail downstream validation never reaches a bucket.
+// Encode serializes a manifest and validates it, so one downstream would reject never ships.
 func (m Manifest) Encode() ([]byte, error) {
 	if m.ManifestVersion == 0 {
 		m.ManifestVersion = ManifestVersion
@@ -118,7 +105,7 @@ func (m Manifest) Encode() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seal: encode manifest: %w", err)
 	}
-	if err := validateManifestBytes(raw); err != nil {
+	if err := formats.ValidateRaw(formats.Manifest, raw, "seal: manifest"); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -126,7 +113,7 @@ func (m Manifest) Encode() ([]byte, error) {
 
 // DecodeManifest parses and validates a manifest.
 func DecodeManifest(raw []byte) (Manifest, error) {
-	if err := validateManifestBytes(raw); err != nil {
+	if err := formats.ValidateRaw(formats.Manifest, raw, "seal: manifest"); err != nil {
 		return Manifest{}, err
 	}
 	var m Manifest
@@ -134,26 +121,12 @@ func DecodeManifest(raw []byte) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("seal: decode manifest: %w", err)
 	}
 	if m.ManifestVersion != ManifestVersion {
-		return Manifest{}, fmt.Errorf("seal: manifest_version %d, this client speaks %d",
-			m.ManifestVersion, ManifestVersion)
+		return Manifest{}, fmt.Errorf("seal: manifest_version %d, this client speaks %d", m.ManifestVersion, ManifestVersion)
 	}
 	return m, nil
 }
 
-func validateManifestBytes(raw []byte) error {
-	err := formats.ValidateRaw(formats.Manifest, raw)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, formats.ErrNotJSON):
-		return fmt.Errorf("seal: manifest is %w", err)
-	}
-	return fmt.Errorf("seal: manifest does not satisfy its schema: %w", err)
-}
-
-// ObjectMetadata is the plaintext metadata attached to a PUT, duplicated out of the
-// manifest so a consumer can dedupe with a HEAD instead of a ranged GET and a decrypt.
-// The native path is deliberately absent: it travels only inside the age ciphertext.
+// ObjectMetadata is the plaintext PUT metadata a consumer dedupes on with a HEAD; never the path.
 func (m Manifest) ObjectMetadata() map[string]string {
 	md := map[string]string{
 		"manifest-version": fmt.Sprint(m.ManifestVersion),
@@ -162,17 +135,13 @@ func (m Manifest) ObjectMetadata() map[string]string {
 		"shipped-hash":     m.ShippedHash,
 		"artifact-class":   m.ArtifactClass,
 	}
-	if m.AgentVersion != "" {
-		md["agent-version"] = m.AgentVersion
-	}
-	if m.ShapeSniff != "" {
-		md["shape-sniff"] = m.ShapeSniff
+	for k, v := range map[string]string{"agent-version": m.AgentVersion, "shape-sniff": m.ShapeSniff, "enrich-status": m.EnrichStatus} {
+		if v != "" {
+			md[k] = v
+		}
 	}
 	if m.Derived {
 		md["derived"] = "true"
-	}
-	if m.EnrichStatus != "" {
-		md["enrich-status"] = m.EnrichStatus
 	}
 	return md
 }

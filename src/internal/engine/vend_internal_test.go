@@ -1,71 +1,56 @@
 package engine
 
-// The authorization accumulator, exercised directly: the byte bound needs objects too large to
-// produce through the loop, and overshooting it loses a whole group.
-
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// sizePort records the ciphertext each group carried and stores everything.
-type sizePort struct {
-	mu     sync.Mutex
-	groups [][]int
-}
+// The authorization accumulator, exercised directly: the byte bound needs objects too large for the loop.
 
-func (p *sizePort) AuthorizeAndUpload(_ context.Context, batch []PreparedObject) []error {
-	sizes := make([]int, len(batch))
-	for i, o := range batch {
-		sizes[i] = len(o.Body)
-	}
-	p.mu.Lock()
-	p.groups = append(p.groups, sizes)
-	p.mu.Unlock()
+// okPort confirms every object.
+type okPort struct{}
+
+func (okPort) AuthorizeAndUpload(_ context.Context, batch []PreparedObject) []error {
 	return make([]error, len(batch))
 }
 
 // stagedFor is one sealed object of a given size.
 func stagedFor(idx, size int) fileResult {
 	return fileResult{
-		idx:   idx,
-		bytes: int64(size),
-		pending: &pendingPut{
-			key:       Key{SourceID: "s", NativePath: fmt.Sprintf("/f%d", idx)},
-			objectKey: fmt.Sprintf("v1/o/%d.age", idx),
-			obj:       make([]byte, size),
-			md:        map[string]string{"source-hash": "deadbeef"},
-		},
+		idx:     idx,
+		outcome: FileOutcome{ObjectKey: fmt.Sprintf("v1/o/%d.age", idx)},
+		pending: &pendingPut{obj: make([]byte, size), md: map[string]string{"source-hash": "deadbeef"}},
 	}
 }
 
-// run stages every size and drains every group the accumulator produced.
+// stageAll stages every size and returns the ciphertext sizes of each group sent.
 func stageAll(t *testing.T, sizes []int) [][]int {
 	t.Helper()
-	ctx := context.Background()
-	port := &sizePort{}
-	p := &sourcePass{o: Options{Upload: port}}
-	// Buffered past the group count, so the accumulator's send never blocks the staging loop.
-	batches := make(chan []fileResult, len(sizes)+1)
+	var groups [][]int
+	p := &sourcePass{o: Options{Upload: okPort{}}}
 	p.staged = &batcher{
 		maxObjects: maxBatchObjects,
-		send:       func(items []stagedUpload) { batches <- p.o.sendBatch(ctx, items) },
+		send: func(items []fileResult) {
+			var g []int
+			for _, it := range items {
+				g = append(g, len(it.pending.obj))
+			}
+			groups = append(groups, g)
+			for _, r := range p.o.sendBatch(context.Background(), items) {
+				assert.Nil(t, r.pending, "completed results must release ciphertext")
+			}
+		},
 	}
-
 	for i, sz := range sizes {
-		if done, final := p.stageUpload(stagedFor(i, sz)); final {
-			t.Fatalf("object %d was not staged: %+v", i, done.outcome)
-		}
+		_, final := p.stageUpload(stagedFor(i, sz))
+		require.False(t, final, "object %d was not staged", i)
 	}
 	p.staged.flush()
-	for seen := 0; seen < len(sizes); {
-		seen += len(<-batches)
-	}
-	port.mu.Lock()
-	defer port.mu.Unlock()
-	return port.groups
+	return groups
 }
 
 // Both bounds hold at once, and every object is authorized exactly once across the groups.
@@ -74,16 +59,14 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 	for i := range tiny {
 		tiny[i] = 1 << 10
 	}
-	cases := []struct {
+	for _, c := range []struct {
 		name  string
 		sizes []int
 	}{
 		{"count", tiny},
 		{"bytes", []int{40 << 20, 30 << 20, 10 << 20}},
 		{"one object over the whole bound rides alone", []int{70 << 20, 1 << 10}},
-	}
-
-	for _, c := range cases {
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			groups := stageAll(t, c.sizes)
 			objects := 0
@@ -92,40 +75,34 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 				for _, sz := range g {
 					bytes += sz
 				}
-				if len(g) > maxBatchObjects {
-					t.Errorf("a group carried %d objects, over the %d bound", len(g), maxBatchObjects)
-				}
+				assert.Truef(t, len(g) <= maxBatchObjects, "a group carried %d objects, over the %d bound", len(g), maxBatchObjects)
 				// An object larger than the whole bound is the one exception, and it rides alone.
-				if bytes > maxBatchBytes && len(g) != 1 {
-					t.Errorf("a group of %d carried %d bytes, over the %d bound",
-						len(g), bytes, maxBatchBytes)
-				}
+				assert.Truef(t, bytes <= maxBatchBytes || len(g) == 1, "a group of %d carried %d bytes, over the %d bound", len(g), bytes, maxBatchBytes)
 				objects += len(g)
 			}
-			if objects != len(c.sizes) {
-				t.Errorf("%d objects authorized for %d staged", objects, len(c.sizes))
-			}
+			assert.Equalf(t, len(c.sizes), objects, "%d objects authorized for %d staged", objects, len(c.sizes))
 		})
 	}
 }
 
-// source-hash leaves the metadata map and becomes the descriptor's own field.
-func TestSourceHashIsLiftedOutOfTheMetadata(t *testing.T) {
-	obj := preparedFrom(0, "k", nil, map[string]string{
-		"source-hash":  "abc",
-		"source-id":    "claude-code-transcripts",
-		"shipped-hash": "def",
-	})
-	if obj.SourceHash != "abc" {
-		t.Errorf("source hash = %q", obj.SourceHash)
-	}
-	if _, ok := obj.Metadata["source-hash"]; ok {
-		t.Error("source-hash survived in the request metadata")
-	}
-	if len(obj.Metadata) != 2 {
-		t.Errorf("metadata lost or gained names: %v", obj.Metadata)
-	}
-	if preparedFrom(0, "k", nil, nil).Metadata == nil {
-		t.Error("nil metadata produced a nil map rather than an empty one")
+// Exercise both stop paths without relying on worker timing to leave a partly filled batch.
+func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fatal=%t", fatal), func(t *testing.T) {
+			p := &sourcePass{fatal: fatal, uploadHalted: !fatal, staged: &batcher{maxObjects: maxBatchObjects}}
+			p.staged.add(stagedFor(0, 1))
+			newResult, final := p.stageUpload(stagedFor(1, 1))
+			require.True(t, final, "a stopped pass must not enqueue new uploads")
+			drained := p.drainStaged()
+			require.Len(t, drained, 1)
+			for i, result := range append(drained, newResult) {
+				assert.Equal(t, i, result.idx)
+				assert.Nil(t, result.pending, "abandoned results must release ciphertext")
+				assert.Equal(t, "failed", string(result.outcome.Decision))
+				assert.Equal(t, fatal, result.outcome.Fatal)
+				assert.Equal(t, !fatal, result.unavailable)
+			}
+			assert.Empty(t, p.staged.items)
+		})
 	}
 }

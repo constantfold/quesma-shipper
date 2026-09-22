@@ -17,7 +17,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// FileName is the log's name inside the state directory.
 const FileName = "audit.log"
 
 // Decision is aliased from the contract layer: one spelling for the engine, the CLI and this log.
@@ -31,7 +30,6 @@ const (
 	DecisionFailed    = formats.DecisionFailed
 )
 
-// Entry is one log line.
 type Entry struct {
 	At       time.Time `json:"at"`
 	RunID    string    `json:"run_id,omitempty"`
@@ -50,20 +48,17 @@ type Entry struct {
 	ObjectKey     string `json:"object_key,omitempty"`
 	ConfigVersion int    `json:"config_version,omitempty"`
 
-	// Reason explains a skip, a park, a failure or a rejection, and marks a shipped entry that sent
-	// no bytes because the control plane answered that the archive already held the object.
+	// Reason explains a skip, park, failure or rejection, or a shipped entry the archive already held.
 	Reason string `json:"reason,omitempty"`
 }
 
-// Log appends entries to a file.
 type Log struct {
 	mu    sync.Mutex
 	path  string
 	runID string
 }
 
-// SetRunID makes every later append carry the process's run id, correlating audit entries with
-// the crash journal and the heartbeat.
+// SetRunID correlates later entries with the crash journal and the heartbeat.
 func (l *Log) SetRunID(id string) { l.runID = id }
 
 // Open prepares the log. The directory is created if needed.
@@ -77,8 +72,11 @@ func Open(stateDir string) (*Log, error) {
 // Path is where the log lives, for `status` and `doctor`.
 func (l *Log) Path() string { return l.path }
 
-// Append writes one entry, the one place in the shipper that appends rather than replacing: a rewritable audit log is not one.
+// Append records one decision. A nil log disables auditing, as in preview mode.
 func (l *Log) Append(e Entry) error {
+	if l == nil {
+		return nil
+	}
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
@@ -113,8 +111,7 @@ func (l *Log) Append(e Entry) error {
 // sanitize enforces the never-record list structurally: Reason is the only free text, so it is flattened and truncated.
 func sanitize(e Entry) Entry {
 	const maxReason = 500
-	e.Reason = strings.ReplaceAll(e.Reason, "\n", " ")
-	e.Reason = strings.ReplaceAll(e.Reason, "\r", " ")
+	e.Reason = strings.NewReplacer("\n", " ", "\r", " ").Replace(e.Reason)
 	if len(e.Reason) > maxReason {
 		e.Reason = e.Reason[:maxReason] + "…(truncated)"
 	}
@@ -125,34 +122,28 @@ func sanitize(e Entry) Entry {
 	return e
 }
 
-// Tail returns the last n entries, newest last.
+// Tail returns the last n entries, newest last, reading from the end (see rotate.go).
 func Tail(path string, n int) ([]Entry, error) {
-	// From the END. See rotate.go.
 	raw, err := readTail(path, n)
-	if err != nil {
-		// errors.Is rather than os.IsNotExist: safeio wraps, and os.IsNotExist does not unwrap.
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
 		return nil, fmt.Errorf("auditlog: read: %w", err)
 	}
 
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
-	}
 	if n > 0 && len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
 
 	out := make([]Entry, 0, len(lines))
 	for _, line := range lines {
+		// A malformed line is skipped: a torn last line from a crash must not make the whole log unreadable.
 		var e Entry
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			// A malformed line is skipped: a torn last line from a crash must not make the whole log unreadable.
-			continue
+		if json.Unmarshal([]byte(line), &e) == nil {
+			out = append(out, e)
 		}
-		out = append(out, e)
 	}
 	return out, nil
 }

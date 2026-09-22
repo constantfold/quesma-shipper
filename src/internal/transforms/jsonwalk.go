@@ -11,8 +11,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// maxDepth bounds recursion in the JSON walk. Lines beyond it fall back to the raw
-// scanner; 256 is 25 times deeper than the deepest observed transcript record.
+// maxDepth, 25 times the deepest observed record, sends deeper lines to the raw scanner.
 const maxDepth = 256
 
 var (
@@ -22,22 +21,16 @@ var (
 	errInvalidEdit     = errors.New("invalid JSON source edit")
 )
 
-var decoderOptions = []jsontext.Options{
-	jsontext.AllowDuplicateNames(true),
-	jsontext.AllowInvalidUTF8(true),
-}
+var decoderOptions = []jsontext.Options{jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)}
 
-// jsonWalker validates, decodes, and records source edits in one token pass. The
-// bytes.Buffer lets jsontext borrow directly from the original line rather than copy
-// it into the decoder's streaming buffer.
+// jsonWalker validates, decodes and records source edits in one token pass; src lets jsontext borrow the line.
 type jsonWalker struct {
 	s      *Scrubber
 	family string
 	scan   *packs.ValueScan
 
-	dec *jsontext.Decoder
-	src bytes.Buffer
-
+	dec   *jsontext.Decoder
+	src   bytes.Buffer
 	edits []replacementSpan
 
 	redacted int
@@ -45,11 +38,8 @@ type jsonWalker struct {
 }
 
 func (w *jsonWalker) reset(s *Scrubber, family string, scan *packs.ValueScan, line []byte) {
-	w.s = s
-	w.family = family
-	w.scan = scan
-	w.edits = w.edits[:0]
-	w.redacted = 0
+	w.s, w.family, w.scan = s, family, scan
+	w.edits, w.redacted = w.edits[:0], 0
 	if w.hits == nil {
 		w.hits = map[string]int{}
 	} else {
@@ -86,7 +76,12 @@ func (w *jsonWalker) walk(depth int, key, path string) error {
 	case '[':
 		return w.walkArray(depth, path)
 	case '"':
-		return w.walkString(key, path)
+		raw, rawStart, text, err := w.readString()
+		if err != nil {
+			return err
+		}
+		w.addPlan(raw, rawStart, text, w.s.planValue(text, key, path, w.family, w.scan))
+		return nil
 	default:
 		_, err := w.dec.ReadValue()
 		return err
@@ -105,7 +100,7 @@ func (w *jsonWalker) walkObject(depth int, path string) error {
 		}
 
 		field := joinFieldPath(path, key)
-		plan := w.s.planValue(key, "", FieldPath(field), w.family, w.scan)
+		plan := w.s.planValue(key, "", field, w.family, w.scan)
 		w.addPlan(raw, rawStart, key, plan)
 		if len(plan.spans) > 0 {
 			field = joinFieldPath(path, plan.apply(key))
@@ -133,16 +128,6 @@ func (w *jsonWalker) walkArray(depth int, path string) error {
 	return err
 }
 
-func (w *jsonWalker) walkString(key, path string) error {
-	raw, rawStart, text, err := w.readString()
-	if err != nil {
-		return err
-	}
-	w.addPlan(raw, rawStart, text,
-		w.s.planValue(text, key, FieldPath(path), w.family, w.scan))
-	return nil
-}
-
 func (w *jsonWalker) readString() (raw []byte, rawStart int, text string, err error) {
 	raw, err = w.dec.ReadValue()
 	if err != nil {
@@ -151,12 +136,12 @@ func (w *jsonWalker) readString() (raw []byte, rawStart int, text string, err er
 	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
 		return nil, 0, "", errStringToken
 	}
-	body := raw[1 : len(raw)-1]
-	if bytes.IndexByte(body, '\\') < 0 && utf8.Valid(body) {
-		return raw, int(w.dec.InputOffset()) - len(raw), string(body), nil
+	rawStart = int(w.dec.InputOffset()) - len(raw)
+	if body := raw[1 : len(raw)-1]; bytes.IndexByte(body, '\\') < 0 && utf8.Valid(body) {
+		return raw, rawStart, string(body), nil
 	}
 	decoded, _ := jsontext.AppendUnquote(nil, raw)
-	return raw, int(w.dec.InputOffset()) - len(raw), string(decoded), nil
+	return raw, rawStart, string(decoded), nil
 }
 
 func joinFieldPath(parent, child string) string {
@@ -170,9 +155,7 @@ func (w *jsonWalker) addPlan(raw []byte, rawStart int, decoded string, plan valu
 	if len(plan.spans) == 0 {
 		return
 	}
-	w.edits = append(w.edits, replacementSpan{
-		Start: rawStart, End: rawStart + len(raw), Replacement: plan.apply(decoded),
-	})
+	w.edits = append(w.edits, replacementSpan{Start: rawStart, End: rawStart + len(raw), Replacement: plan.apply(decoded)})
 	w.redacted += plan.redacted
 	for id, count := range plan.hits {
 		w.hits[id] += count

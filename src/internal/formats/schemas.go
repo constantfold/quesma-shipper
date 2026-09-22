@@ -7,16 +7,11 @@ package formats
 import (
 	"bytes"
 	"embed"
-	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
-
-// ErrNotJSON marks a document the parser refused, as distinct from one the schema refused, so a
-// caller can name the document its own way in front of it.
-var ErrNotJSON = errors.New("not valid JSON")
 
 //go:embed *.schema.json
 var FS embed.FS
@@ -28,9 +23,6 @@ const (
 	SourceSpec       = "source-spec.schema.json"
 )
 
-// All lists every embedded schema, so tests can assert the set is complete.
-var All = []string{FingerprintState, Manifest, SourceSpec}
-
 var (
 	mu       sync.Mutex
 	compiled = map[string]*jsonschema.Schema{}
@@ -40,7 +32,6 @@ var (
 func Compile(name string) (*jsonschema.Schema, error) {
 	mu.Lock()
 	defer mu.Unlock()
-
 	if s, ok := compiled[name]; ok {
 		return s, nil
 	}
@@ -53,7 +44,6 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schemas: parse %s: %w", name, err)
 	}
-
 	c := jsonschema.NewCompiler()
 	// Registered under the bare file name so callers pass a file name, not the document's $id.
 	if err := c.AddResource(name, doc); err != nil {
@@ -63,18 +53,20 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schemas: compile %s: %w", name, err)
 	}
-
 	compiled[name] = s
 	return s, nil
 }
 
-// ValidateRaw parses raw and checks it against the named schema.
-func ValidateRaw(name string, raw []byte) error {
+// ValidateRaw parses and validates a document, using label to identify it in errors.
+func ValidateRaw(name string, raw []byte, label string) error {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrNotJSON, err)
+		return fmt.Errorf("%s is not valid JSON: %w", label, err)
 	}
-	return Validate(name, doc)
+	if err := Validate(name, doc); err != nil {
+		return fmt.Errorf("%s does not satisfy its schema: %w", label, err)
+	}
+	return nil
 }
 
 // Validate checks an already-decoded document against the named schema.

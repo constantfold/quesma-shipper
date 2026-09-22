@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,61 +15,56 @@ import (
 
 func doctorCmd(build app.Build) *cobra.Command {
 	var asJSON, verbose bool
-	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Check collecting and sending, explain anything wrong",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
-			rep := app.Diagnose(cmd.Context(), build, verbose || asJSON)
-			issues, fails := rep.Issues()
-			if asJSON {
-				enc := json.NewEncoder(out)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(toDoctorJSON(build, rep, fails, issues)); err != nil {
-					return err
-				}
-			} else {
-				p := paletteFor(out)
-				if st, err := app.CurrentStatus(build); err == nil {
-					printHeader(out, p, st, time.Now())
-				}
-				for _, line := range updateLines(build, rep.Update, p, verbose) {
-					fmt.Fprintln(out, line)
-				}
-				fmt.Fprintln(out)
-				renderSections(out, p, rep.Sections)
-				renderVerdict(out, p, fails, rep.AgentsCollecting, issues)
-				if !verbose {
-					fmt.Fprintf(out, "\n%s %s\n", styled(p.dim, "More:", p.reset), styled(p.cyan, app.Name+" doctor --all", p.reset))
-				}
+	cmd := verb("doctor", "Check collecting and sending, explain anything wrong", func(cmd *cobra.Command) error {
+		out := cmd.OutOrStdout()
+		rep := app.Diagnose(cmd.Context(), build, verbose || asJSON)
+		issues, fails := rep.Issues()
+		if asJSON {
+			if err := writeJSON(out, toDoctorJSON(build, rep, fails, issues)); err != nil {
+				return err
 			}
-			if fails > 0 {
-				return errSilent{code: 1}
+		} else {
+			p := paletteFor(out)
+			if st, err := app.CurrentStatus(build); err == nil {
+				printHeader(out, p, st, time.Now())
 			}
-			return nil
-		},
-	}
+			printUpdate(out, build, rep.Update, p, verbose)
+			fmt.Fprintln(out)
+			renderSections(out, p, rep.Sections)
+			renderVerdict(out, p, fails, rep.AgentsCollecting, issues)
+			if !verbose {
+				fmt.Fprintf(out, "\n%s\n", more(p, app.Name+" doctor --all"))
+			}
+		}
+		if fails > 0 {
+			return errSilent{code: 1}
+		}
+		return nil
+	})
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON, always with the technical sections")
 	_ = cmd.Flags().MarkHidden("json")
 	cmd.Flags().BoolVar(&verbose, "all", false, "Add the technical sections")
 	return cmd
 }
 
-func updateLines(build app.Build, upd app.UpdateStatus, p palette, verbose bool) []string {
-	var lines []string
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func printUpdate(w io.Writer, build app.Build, upd app.UpdateStatus, p palette, verbose bool) {
 	if verbose {
-		lines = append(lines, styled(p.dim, "Version "+build.Version, p.reset))
+		fmt.Fprintln(w, styled(p.dim, "Version "+build.Version, p.reset))
 	}
 	if upd.State == "available" {
-		lines = append(lines, styled(p.yellow+p.bold, "Update", p.reset)+" "+upd.Detail)
+		fmt.Fprintln(w, styled(p.yellow+p.bold, "Update", p.reset)+" "+upd.Detail)
 		if upd.Fix != "" {
-			lines = append(lines, "  → "+p.names("`"+upd.Fix+"`", ""))
+			fmt.Fprintln(w, "  → "+p.names("`"+upd.Fix+"`", ""))
 		}
 	} else if verbose {
-		lines = append(lines, styled(p.dim, "Update "+upd.Detail, p.reset))
+		fmt.Fprintln(w, styled(p.dim, "Update "+upd.Detail, p.reset))
 	}
-	return lines
 }
 
 func renderVerdict(w io.Writer, p palette, fails, agents int, issues []string) {
@@ -133,12 +129,12 @@ type rowJSON struct {
 }
 
 func toDoctorJSON(build app.Build, rep *app.Report, fails int, issues []string) doctorJSON {
-	out := doctorJSON{
-		SchemaVersion: 1, ClientVersion: build.Version,
+	out := doctorJSON{SchemaVersion: 1, ClientVersion: build.Version,
 		Update:           updateJSON{Status: rep.Update.State, Latest: rep.Update.Latest, Detail: rep.Update.Detail},
 		AgentsCollecting: rep.AgentsCollecting, FilesFound: rep.FilesFound,
-		Problems: fails, Attention: len(issues) - fails, Issues: plainAll(issues),
-		Verdict: verdict(fails, len(issues)-fails),
+		Problems: fails, Attention: len(issues) - fails, Verdict: verdict(fails, len(issues)-fails)}
+	for _, issue := range issues {
+		out.Issues = append(out.Issues, app.Plain(issue))
 	}
 	if !rep.Update.Published.IsZero() {
 		out.Update.Published = rep.Update.Published.Format(time.RFC3339)
@@ -149,29 +145,11 @@ func toDoctorJSON(build app.Build, rep *app.Report, fails int, issues []string) 
 	for _, sec := range rep.Sections {
 		s := sectionJSON{Title: sec.Title}
 		for _, r := range sec.Rows {
-			s.Rows = append(s.Rows, rowJSON{Severity: severityName(r.Sev), Label: strings.TrimSpace(r.Head()), Detail: r.Detail, Fix: app.Plain(r.Fix)})
+			s.Rows = append(s.Rows, rowJSON{Severity: cmp.Or(severityNames[r.Sev], "info"), Label: strings.TrimSpace(r.Head()), Detail: r.Detail, Fix: app.Plain(r.Fix)})
 		}
 		out.Sections = append(out.Sections, s)
 	}
 	return out
 }
 
-func plainAll(in []string) []string {
-	out := make([]string, len(in))
-	for i, s := range in {
-		out[i] = app.Plain(s)
-	}
-	return out
-}
-
-func severityName(s app.Severity) string {
-	switch s {
-	case app.SevOK:
-		return "ok"
-	case app.SevWarn:
-		return "warn"
-	case app.SevFail:
-		return "fail"
-	}
-	return "info"
-}
+var severityNames = map[app.Severity]string{app.SevOK: "ok", app.SevWarn: "warn", app.SevFail: "fail"}

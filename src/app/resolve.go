@@ -12,15 +12,13 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-// ResolveEffective resolves every local layer plus whatever remote layer is already on disk. No
-// network call: a read-only verb must explain the config in force without a round-trip.
+// ResolveEffective uses only what is on disk, so a read-only verb never makes a network call.
 func ResolveEffective() (*config.Effective, config.Paths, error) {
 	eff, paths, _, err := resolve(context.Background(), true)
 	return eff, paths, err
 }
 
-// ResolveOnline refreshes the remote layer first, then resolves. A refresh that fails falls back
-// to the cached config and reports why; collection continues either way.
+// ResolveOnline refreshes the remote layer first, falling back to the cached config if that fails.
 func ResolveOnline(ctx context.Context) (*config.Effective, config.Paths, controlplane.Remote, error) {
 	return resolve(ctx, false)
 }
@@ -41,12 +39,14 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		return nil, paths, controlplane.Remote{}, err
 	}
 
-	// Known BEFORE the remote layer is fetched, because the enrollment record and the config cache
-	// live in it; only local layers may set state_dir, so the remote layer cannot move it after.
-	paths.StateDir = stateDirFrom(layers, paths.StateDir)
+	// Only local layers may set state_dir, which must be known before the remote fetch; the last one wins, as in Resolve.
+	for _, ld := range layers {
+		if ld.Doc != nil && ld.Doc.StateDir != nil && *ld.Doc.StateDir != "" {
+			paths.StateDir = *ld.Doc.StateDir
+		}
+	}
 
-	// A MISSING record means standalone, a complete configuration. Anything else is refused, not
-	// swallowed: swallowing silently downgrades an enrolled install to "no backend".
+	// An unusable record is refused, or an enrolled install would silently downgrade to standalone.
 	enrollment, err := controlplane.LoadEnrollment(paths.StateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, paths, controlplane.Remote{}, fmt.Errorf(
@@ -54,45 +54,19 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 				"Fix the file or log in again with `quesma-shipper login`; collecting without it would ship "+
 				"under different credentials than the ones this install was granted", err)
 	}
-	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{
-		Enrollment: enrollment,
-		StateDir:   paths.StateDir,
-		Now:        time.Now(),
-		Offline:    offline,
-	})
+	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{Enrollment: enrollment, StateDir: paths.StateDir,
+		Now: time.Now(), Offline: offline})
 
 	if remote.Doc != nil {
-		// Fetched or read back from the cache; either way it came from the enrolled control plane.
-		layers = append(layers, config.LayeredDocument{
-			Layer: config.LayerRemote,
-			Doc:   remote.Doc,
-		})
+		layers = append(layers, config.LayeredDocument{Layer: config.LayerRemote, Doc: remote.Doc})
 	}
 
-	eff, err := config.Resolve(config.Input{
-		Catalog:       compiled,
-		Layers:        layers,
-		ConfigExpired: remote.Expired,
-		Env:           env,
-		StateDir:      paths.StateDir,
-	})
+	eff, err := config.Resolve(config.Input{Catalog: compiled, Layers: layers, ConfigExpired: remote.Expired,
+		Env: env, StateDir: paths.StateDir})
 	if err != nil {
 		return nil, paths, remote, err
 	}
-	// paths.StateDir now means "the state directory in force": the identity unit and the
-	// fingerprint document persist together or not at all.
+	// The identity unit and the fingerprint document persist together in the directory in force.
 	paths.StateDir = eff.StateDir
 	return eff, paths, remote, nil
-}
-
-// stateDirFrom returns the state directory the layers set, or the default. Layers arrive in
-// precedence order, lowest first, so the last one that mentions it wins, as Resolve does.
-func stateDirFrom(layers []config.LayeredDocument, def string) string {
-	out := def
-	for _, ld := range layers {
-		if ld.Doc != nil && ld.Doc.StateDir != nil && *ld.Doc.StateDir != "" {
-			out = *ld.Doc.StateDir
-		}
-	}
-	return out
 }

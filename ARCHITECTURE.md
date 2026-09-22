@@ -17,7 +17,7 @@ quesma-shipper/
     cmd/quesma-shipper/   main
     app/                  the facade: resolve config into a run, flush it — the one public package
     packaging/            install, update, service lifecycle; thin current-OS dispatch
-      common/             TUF verification, re-exec, shared service types and run markers
+      common/             TUF verification, re-exec, shared service types
       macos/              app/pkg assets, launchd, app-bundle update and removal
       linux/              systemd user service
       windows/            Inno Setup assets and per-user Task Scheduler integration
@@ -48,6 +48,41 @@ quesma-shipper/
 Paths in this document are relative to the repository root. The Go module begins at `src/`,
 so Go import paths omit that filesystem prefix.
 
+## Reading a collection run
+
+Start at `app/flush.go`, which turns resolved policy into `engine.Options`. The engine
+then owns this sequence:
+
+```
+config.Resolve → app.Runtime.Flush → engine.Run
+  sources.Discover → sourcePass.run → prepareFile → authorizeAndUpload → commit
+                                      scrub → seal
+  staged raw units → enrichSource → scrub → seal → upload → commit
+  report → heartbeat
+```
+
+The main files name the decisions they own:
+
+| Concern | Files under `src/` |
+| --- | --- |
+| Configuration order, merge, validation, roots | `internal/config/{resolve,merge,validate,roots}.go` |
+| Discovery, traversal, lazy reads, format probes | `internal/sources/{gather,walk,sniff_file}.go` |
+| SQLite read fallbacks and scoped, filtered queries | `internal/sources/sqliteread/sqliteread.go` |
+| Run policy and per-source collection | `internal/engine/{engine,collect}.go` |
+| Admission and concurrency | `internal/engine/pool.go` |
+| Ordered outcomes and durable commits | `internal/engine/{outcome,commitbuffer}.go` |
+| State ownership and disk representation | `internal/engine/{state,state_wire}.go` |
+| Scrub orchestration and replacement plans | `internal/transforms/{scrub,redaction}.go` |
+| Cursor alignment, evidence ranking, argument comparison | `internal/transforms/cursorjoin/{align,match,args}.go` |
+| Tick judgement and failure persistence | `app/{judge,failure_record}.go` |
+| Diagnostic agent summaries, source details, history | `app/diagnose_{agents,sources,history}.go` |
+
+`sources.Discover` dispatches to the compiled collectors. Enrichers use an ID-to-implementation
+map populated by the app and shared with diagnostics. Raw and derived files both produce a
+`fileResult` that carries its ciphertext and the fingerprint to commit; only the source
+coordinator commits it, after the destination confirms the write, and clears the ciphertext.
+The audit logger accepts nil as disabled, allowing preview to use the same pipeline.
+
 Import direction follows the table below: **every internal edge is declared, package by
 package.** Go's compiler bans cycles, not wrong-direction edges: `transforms → engine`
 would compile, so the table is the reference for what direction is intended.
@@ -58,7 +93,7 @@ would compile, so the table is the reference for what direction is intended.
 | `src/cmd/quesma-shipper` | `src/app`, `src/internal/cli`, `src/internal/platform` |
 | `src/e2e` | — |
 | `src/internal/cli` | `src/app`, `src/internal/config`, `src/internal/controlplane`, `src/internal/engine`, `src/internal/formats`, `src/internal/identity`, `src/internal/legal`, `src/internal/platform`, `src/internal/platform/auditlog`, `src/internal/platform/crashjournal`, `src/internal/sources`, `src/packaging` |
-| `src/internal/config` | `src/internal/platform`, `src/internal/sources`, `src/internal/transforms`, `src/internal/transforms/packs` |
+| `src/internal/config` | `src/internal/platform`, `src/internal/sources`, `src/internal/transforms`, `src/internal/transforms/packs`, `src/internal/upload` |
 | `src/internal/controlplane` | `src/internal/config`, `src/internal/formats`, `src/internal/platform` |
 | `src/internal/engine` | `src/internal/formats`, `src/internal/identity`, `src/internal/platform`, `src/internal/platform/auditlog`, `src/internal/sources`, `src/internal/transforms` |
 | `src/internal/formats` | — |
@@ -74,7 +109,7 @@ would compile, so the table is the reference for what direction is intended.
 | `src/internal/transforms/cursorjoin` | `src/internal/sources/sqliteread`, `src/internal/transforms` |
 | `src/internal/transforms/packs` | — |
 | `src/internal/upload` | — |
-| `src/packaging` | `src/packaging/common`, and the current OS package (`src/packaging/macos` or `src/packaging/linux`) |
+| `src/packaging` | `src/internal/platform`, `src/packaging/common`, and the current OS package (`src/packaging/macos` or `src/packaging/linux`) |
 | `src/packaging/common` | `src/internal/platform` |
 | `src/packaging/macos` | `src/internal/platform`, `src/packaging/common` |
 | `src/packaging/linux` | `src/internal/platform`, `src/packaging/common` |
@@ -89,7 +124,7 @@ Two edges deserve prose because they look like mistakes and are the design:
 
 - **`src/app` is the only package importing both `src/internal/controlplane` and
   `src/internal/upload`.** The engine
-  declares the port (`UploadPort`, `PreparedObject`, `PutResult`) and is handed an
+  declares the port (`UploadPort`, `PreparedObject`) and is handed an
   implementation; the ticket, the URL and every wire type stop in `src/app/`, which is why the
   loop cannot learn that a control plane exists.
 - **`src/internal/controlplane → src/internal/config`**: the served document is config's format to parse; the

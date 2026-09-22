@@ -1,5 +1,5 @@
-// Shared service lifecycle for per-user agents. Platform packages own the actual supervisor;
-// common owns the input contract and the last-run state used to detect a silent agent.
+// Shared service lifecycle for per-user agents: platform packages own the actual supervisor,
+// common owns the input contract and the reported status.
 package common
 
 import (
@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 // Kind is the supervision mechanism in use on this host.
@@ -21,10 +20,8 @@ const (
 	KindLaunchd     Kind = "launchd"
 	KindSystemd     Kind = "systemd-user"
 	KindWindowsTask Kind = "windows-task"
-
 	// KindCron is the non-systemd Linux fallback: the client prints a crontab line, never edits one.
 	KindCron Kind = "cron"
-
 	// KindUnsupported means no supervision here; `quesma-shipper run` still works in the foreground.
 	KindUnsupported Kind = "unsupported"
 )
@@ -33,23 +30,16 @@ const (
 type Spec struct {
 	// Executable is the absolute path to the binary; a relative path or a moving symlink breaks.
 	Executable string
-
 	// Args is the verb the agent runs: `run`, so the flock and the schedule live in one process.
 	Args []string
-
 	// Home and StateDir go into the agent's environment; launchd hands an agent almost none.
 	Home     string
 	StateDir string
-
 	// LogDir is where stdout/stderr go; discarded output makes "it never runs" undiagnosable.
 	LogDir string
-
-	// Tick is the configured collection cadence. launchd and systemd ignore it because the loop
-	// keeps its own ticker, but the cron fallback IS the ticker. Zero means the 15-minute default.
+	// Tick matters only to the cron fallback, which IS the ticker; zero means 15 minutes.
 	Tick time.Duration
-
-	// StopTimeout is how long the supervisor waits after SIGTERM before killing. It comes from
-	// configuration because it has to outlast the drain deadline; a killed drain looks clean.
+	// StopTimeout must outlast the drain deadline: a drain killed after SIGTERM looks clean.
 	StopTimeout time.Duration
 }
 
@@ -67,6 +57,12 @@ func ServiceSpecFor(exe, stateDir string, stopTimeout, tick time.Duration) (Spec
 // EntryMode keeps the per-user service entry private.
 const EntryMode = 0o600
 
+// The Windows runner sets SupervisedEnv, and restarts the child when it exits with SupervisorRestartExitCode.
+const (
+	SupervisedEnv             = "SHIPPER_SUPERVISED"
+	SupervisorRestartExitCode = 75
+)
+
 // ExitTimeout is the kill window shared by service renderers and shutdown logic.
 func ExitTimeout(spec Spec) time.Duration {
 	if spec.StopTimeout <= 0 {
@@ -78,34 +74,25 @@ func ExitTimeout(spec Spec) time.Duration {
 // Status is what `status` and `doctor` report.
 type Status struct {
 	Kind Kind
-
 	// Installed means the unit or plist file exists on disk.
 	Installed bool
-
 	// Loaded means the supervisor picked it up; written-but-never-loaded is the common failure.
 	Loaded bool
-
 	// Path is the unit or plist file.
 	Path string
-
 	// Program is set by supervisors whose entries are not represented by a readable file.
 	Program string
-
 	// LastRun is when the loop last completed a flush; zero on a loaded agent is the alarm.
 	LastRun time.Time
-
 	// Detail explains the state in a sentence, including whatever the supervisor said.
 	Detail string
 }
 
-// ErrRoot is returned when install is attempted as root.
-var ErrRoot = errors.New("supervise: refusing to install as root: this is a per-user agent, " +
-	"and running as root would resolve ~ to root's home and read the wrong user's files")
-
 // ValidateInstall checks the invariants shared by every platform service installer.
 func ValidateInstall(spec Spec) error {
 	if os.Geteuid() == 0 {
-		return ErrRoot
+		return errors.New("supervise: refusing to install as root: this is a per-user agent, " +
+			"and running as root would resolve ~ to root's home and read the wrong user's files")
 	}
 	if spec.Executable == "" {
 		return errors.New("supervise: no executable path")
@@ -118,31 +105,10 @@ func ValidateInstall(spec Spec) error {
 }
 
 // ErrCronManual signals that the caller must print the hint rather than claim an install.
-var ErrCronManual = errors.New("supervise: this host has no systemd --user; " +
-	"add the printed crontab line yourself")
+var ErrCronManual = errors.New("supervise: this host has no systemd --user; add the printed crontab line yourself")
 
-// RunMarker is the file the loop touches after each completed flush.
-const RunMarker = "last_run"
-
-// RecordRun stamps the marker after every flush, including one that shipped nothing: the
-// fingerprint document only advances on collection, so it cannot show a quiet install is alive.
-func RecordRun(stateDir string, at time.Time) error {
-	return platform.WriteAtomic(filepath.Join(stateDir, RunMarker),
-		[]byte(at.UTC().Format(time.RFC3339)+"\n"), 0o644)
-}
-
-// LastRun reads the marker. Zero time means never.
-func LastRun(stateDir string) time.Time {
-	raw, _, err := platform.ReadWhole(filepath.Join(stateDir, RunMarker), 128)
-	if err != nil {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
+// ErrTaskDeleteUnverified marks an unconfirmed Windows task delete; it must not block removal.
+var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")
 
 // CronHint is the non-systemd fallback, a line the operator adds manually.
 func CronHint(spec Spec) string {
@@ -193,8 +159,11 @@ func ServiceProgram(st Status) string {
 	return ""
 }
 
-func RemoveState(stateDir string) error {
-	return os.RemoveAll(stateDir)
+// XMLText escapes s for the XML service entries: the LaunchAgent plist and the Task Scheduler task.
+func XMLText(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
 }
 
 // CurrentExecutable is this binary's real path, behind any package-installed symlink.
@@ -207,4 +176,26 @@ func CurrentExecutable() (string, error) {
 		exe = resolved
 	}
 	return exe, nil
+}
+
+const BrewUninstall = "brew uninstall --cask quesmaorg/tap/quesma-shipper"
+
+// HomebrewCaskRoot recognizes the installed payload, including custom Homebrew prefixes.
+func HomebrewCaskRoot(executable string) string {
+	if !filepath.IsAbs(executable) || filepath.Base(executable) != "quesma-shipper" {
+		return ""
+	}
+	root := filepath.Dir(filepath.Dir(executable))
+	if filepath.Base(root) != "quesma-shipper" || filepath.Base(filepath.Dir(root)) != "Caskroom" {
+		return ""
+	}
+	return root
+}
+
+func HomebrewManaged() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	exe, err := CurrentExecutable()
+	return err == nil && HomebrewCaskRoot(exe) != ""
 }

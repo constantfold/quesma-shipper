@@ -1,8 +1,8 @@
 package engine
 
 // The write path: sealed objects are authorized in bounded groups and PUT with short-lived
-// tickets. The port is DECLARED here, never imported, so the loop cannot know a control plane
-// exists. Nothing here is conditional: the local fingerprint document alone says what shipped.
+// tickets. The port is declared here, never imported, so the loop cannot know a control plane
+// exists. The local fingerprint document alone says what shipped.
 
 import (
 	"context"
@@ -15,26 +15,24 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 )
 
-// maxBatchObjects and maxBatchBytes bound one authorization group: the protocol's declared limits
-// and a memory bound at once. The concurrent pass may set a lower object bound (see pool.go).
+// One authorization group's bounds: the protocol's declared limits and a memory bound at once.
 const (
 	maxBatchObjects = 32
 	maxBatchBytes   = 64 << 20
 )
 
 // batcher accumulates sealed objects and sends a group once one more would breach either bound.
-// maxObjects differs per path; the byte bound is the protocol's and is the same for both.
 type batcher struct {
 	maxObjects int
-	send       func([]stagedUpload)
+	send       func([]fileResult)
 
-	items []stagedUpload
+	items []fileResult
 	bytes int64
 }
 
-func (b *batcher) add(it stagedUpload, size int64) {
-	// Sent BEFORE the append: a group past the declared ciphertext limit is refused whole.
-	// No object-count check here: the post-append flush keeps the count strictly below the cap.
+func (b *batcher) add(it fileResult) {
+	size := int64(len(it.pending.obj))
+	// Sent before the append: a group past the declared ciphertext limit is refused whole.
 	if len(b.items) > 0 && b.bytes+size > maxBatchBytes {
 		b.flush()
 	}
@@ -51,177 +49,117 @@ func (b *batcher) flush() {
 	}
 }
 
-// take empties the accumulator without sending, for a run that has stopped uploading.
-func (b *batcher) take() []stagedUpload {
+// take hands off the batch; later appends cannot reuse its backing array.
+func (b *batcher) take() []fileResult {
 	items := b.items
 	b.items, b.bytes = nil, 0
 	return items
 }
 
-func (b *batcher) len() int { return len(b.items) }
-
-// PreparedObject is one sealed object offered for authorization. Body is the exact ciphertext PUT,
-// so its length is the size the ticket is signed for.
+// PreparedObject is one sealed object offered for authorization; Body is the exact ciphertext PUT.
 type PreparedObject struct {
-	// ObjectID pairs the object with its ticket, unique within the group and meaningless outside.
-	ObjectID string
+	ObjectID string // pairs the object with its ticket, unique within the group only
 	Key      string
 	Body     []byte
 
 	// SourceHash is the manifest's raw pre-redaction digest, never a checksum of Body.
 	SourceHash string
 
-	// Metadata holds unprefixed plaintext names, source-hash excluded: hashes and versions only,
-	// never the path, which stays inside the ciphertext.
+	// Metadata holds plaintext hashes and versions, never the path, which stays inside the ciphertext.
 	Metadata map[string]string
 }
 
-// UploadPort is the write path: one call authorizes a bounded batch and PUTs each member.
-// Implementations validate every ticket against the prepared key before sending bytes, and return
-// one result per input object in input order; nil means the PUT was confirmed, ErrAlreadyPresent
-// means the control plane answered that the store already holds it.
+// UploadPort validates each ticket before sending bytes and returns one verdict per object, in order.
 type UploadPort interface {
 	AuthorizeAndUpload(ctx context.Context, batch []PreparedObject) []error
 }
 
 var (
-	// ErrUploadUnavailable is an authorization the control plane would not serve now. It must NEVER
-	// wrap formats.ErrCredentialsRefused: this install is waiting, not revoked.
+	// ErrUploadUnavailable means this install is waiting, not revoked: never wrap ErrCredentialsRefused.
 	ErrUploadUnavailable = errors.New("engine: upload authorization is unavailable")
 
-	// ErrTicketExpired is the one verdict worth a second authorization inside a single run.
+	// ErrTicketExpired is the only verdict worth a second authorization inside a single run.
 	ErrTicketExpired = errors.New("engine: upload ticket had expired")
 
-	// ErrAlreadyPresent commits the fingerprint like a confirmed PUT but marks the audit line, so an
-	// operator can tell a commit resting on the plane's word from one this machine sent.
+	// ErrAlreadyPresent commits like a confirmed PUT, but the audit line says no bytes were sent.
 	ErrAlreadyPresent = errors.New("engine: the archive already held this object under the same source hash")
 )
 
-// stagedUpload is a prepared object waiting for its authorization group; the accumulator that
-// holds these lives on the loop goroutine alone, which is why it needs no lock.
-type stagedUpload struct {
-	res     fileResult
-	pending *pendingPut
-}
-
-// sendBatch authorizes one bounded group and turns each verdict into a file result, on a batch
-// goroutine: everything it touches arrived by value or by handover.
-func (o Options) sendBatch(ctx context.Context, items []stagedUpload) []fileResult {
+// sendBatch authorizes one group and turns each verdict into a file result, on a batch goroutine.
+func (o Options) sendBatch(ctx context.Context, items []fileResult) []fileResult {
 	outcomes := o.authorizeAndUpload(ctx, items)
-	res := make([]fileResult, len(items))
 	for i, it := range items {
-		res[i] = o.applyUploadOutcome(it, outcomes[i])
+		items[i] = applyUploadOutcome(it, outcomes[i])
 	}
-	return res
+	return items
 }
 
-// preparedFrom builds one descriptor from a sealed object and its manifest metadata. source-hash
-// is lifted into its own field, and md is consumed here, so it is edited in place.
-func preparedFrom(idx int, key string, body []byte, md map[string]string) PreparedObject {
-	if md == nil {
-		md = map[string]string{}
-	}
-	hash := md["source-hash"]
-	delete(md, "source-hash")
-	return PreparedObject{
-		ObjectID:   strconv.Itoa(idx),
-		Key:        key,
-		Body:       body,
-		SourceHash: hash,
-		Metadata:   md,
-	}
-}
-
-// authorizeAndUpload spends one group, with at most ONE reauthorization for expired tickets: a
-// second expiry means the clock or the lease is wrong, and retrying only stalls everything else.
-func (o Options) authorizeAndUpload(ctx context.Context, items []stagedUpload) []error {
+// authorizeAndUpload reauthorizes expired tickets once; a second expiry means a wrong clock or lease.
+func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []error {
 	batch := make([]PreparedObject, len(items))
 	for i, it := range items {
-		batch[i] = preparedFrom(i, it.pending.objectKey, it.pending.obj, it.pending.md)
+		// source-hash moves out of the metadata into its own field; md is consumed here.
+		md := it.pending.md
+		hash := md["source-hash"]
+		delete(md, "source-hash")
+		batch[i] = PreparedObject{ObjectID: strconv.Itoa(i), Key: it.outcome.ObjectKey, Body: it.pending.obj, SourceHash: hash, Metadata: md}
 	}
-	outcomes := o.Upload.AuthorizeAndUpload(ctx, batch)
-	if len(outcomes) != len(batch) {
-		// One verdict for the whole group: a port-contract violation carries no per-object detail.
-		return slices.Repeat([]error{fmt.Errorf(
-			"engine: the upload port answered %d outcomes for %d objects", len(outcomes), len(batch))},
-			len(batch))
+	upload := func(objects []PreparedObject, description string) []error {
+		outcomes := o.Upload.AuthorizeAndUpload(ctx, objects)
+		if len(outcomes) != len(objects) {
+			return slices.Repeat([]error{fmt.Errorf("engine: the upload port answered %d outcomes for %d %s",
+				len(outcomes), len(objects), description)}, len(objects))
+		}
+		return outcomes
 	}
+	outcomes := upload(batch, "objects")
 
 	var expired []int
+	var again []PreparedObject
 	for i, oc := range outcomes {
 		if errors.Is(oc, ErrTicketExpired) {
-			expired = append(expired, i)
+			obj := batch[i]
+			obj.ObjectID = strconv.Itoa(len(again))
+			expired, again = append(expired, i), append(again, obj)
 		}
 	}
-	if len(expired) == 0 {
+	if len(again) == 0 {
 		return outcomes
 	}
-
-	again := make([]PreparedObject, len(expired))
-	for i, at := range expired {
-		again[i] = batch[at]
-		again[i].ObjectID = strconv.Itoa(i)
-	}
-	second := o.Upload.AuthorizeAndUpload(ctx, again)
-	if len(second) != len(again) {
-		err := fmt.Errorf("engine: the upload port answered %d outcomes for %d reauthorized objects",
-			len(second), len(again))
-		for _, at := range expired {
-			outcomes[at] = err
-		}
-		return outcomes
-	}
-	// Whatever the second attempt says is final, expiry included: there is no third.
-	for i, at := range expired {
-		outcomes[at] = second[i]
+	// Whatever the second attempt says is final, expiry included.
+	for i, oc := range upload(again, "reauthorized objects") {
+		outcomes[expired[i]] = oc
 	}
 	return outcomes
 }
 
-// stopsRun reports the two verdicts that end a run's uploads rather than one file. Never conflate
-// them: a refusal kills the install, while unavailability stops only this run's uploads.
+// stopsRun reports the verdicts that end a run's uploads: a refusal, or an unavailable control plane.
 func stopsRun(err error) bool {
 	return errors.Is(err, formats.ErrCredentialsRefused) || errors.Is(err, ErrUploadUnavailable)
 }
 
 const alreadyPresentReason = "no bytes sent: the control plane answered that the archive already holds this object"
 
-// applyUploadOutcome is the verdict-to-decision map. No park branch: a failed upload persists
-// nothing, so the next run re-prepares the same key and a backoff would only delay recovery.
-func (o Options) applyUploadOutcome(it stagedUpload, oc error) (r fileResult) {
-	r = it.res
+// applyUploadOutcome maps a verdict to a decision; a failed upload neither commits nor parks.
+func applyUploadOutcome(it fileResult, oc error) fileResult {
+	r := it
+	r.pending = nil
 	out := &r.outcome
 
-	// No stored-size cross-check here: upload.ValidateTicket is what refuses a length mismatch.
+	// No stored-size cross-check here: upload.ValidateTicket refuses a length mismatch.
 	present := errors.Is(oc, ErrAlreadyPresent)
 	if oc != nil && !present {
-		out.Decision = auditlog.DecisionFailed
-		out.Reason = oc.Error()
-		out.Fatal = errors.Is(oc, formats.ErrCredentialsRefused)
+		out.Decision, out.Reason = auditlog.DecisionFailed, oc.Error()
+		// Derived refusals stop the enricher group without setting the raw pass's latch.
+		out.Fatal = !out.Derived && errors.Is(oc, formats.ErrCredentialsRefused)
 		r.unavailable = errors.Is(oc, ErrUploadUnavailable)
 		return r
 	}
-
-	// The fingerprint commits only what this machine read and sent; upload progress stays local.
-	r.intent = intent{kind: intentShipped, key: it.pending.key, fp: it.pending.next}
+	next := it.pending.next // copied, so the commit does not keep the ciphertext alive
+	r.commit = &next
 	out.Decision = auditlog.DecisionShipped
 	if present {
 		out.Reason = alreadyPresentReason
-	}
-	return r
-}
-
-// abandon is a sealed object the pass will not send. Nothing commits, so the next run prepares it
-// again; callers reach here only with one of the two latches set.
-func (p *sourcePass) abandon(it stagedUpload) (r fileResult) {
-	r = it.res
-	r.outcome.Decision = auditlog.DecisionFailed
-	r.outcome.Fatal = p.fatal
-	// The non-fatal case must be marked as a halt, so fold suppresses its duplicates too.
-	r.unavailable = !p.fatal
-	r.outcome.Reason = "not attempted: " + p.haltReason
-	if p.fatal {
-		r.outcome.Reason = "not attempted: this install's credentials were refused"
 	}
 	return r
 }

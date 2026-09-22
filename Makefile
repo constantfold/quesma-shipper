@@ -31,17 +31,14 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 win
 .PHONY: dist
 dist: ## Cross-compile the shipper for every supported platform into bin/dist
 	@for p in $(PLATFORMS); do \
-		os=$$(echo $$p | cut -d/ -f1); arch=$$(echo $$p | cut -d/ -f2); \
+		os=$${p%/*}; arch=$${p#*/}; \
 		out=$(DIST)/quesma-shipper-$$os-$$arch; case $$os in windows) out=$$out.exe ;; esac; \
 		echo "building $$out"; \
 		(cd $(MODULE) && CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 			go build -trimpath -ldflags "$(LDFLAGS) -s -w" -o ../$$out ./cmd/quesma-shipper) || exit 1; \
-	done
-	@for arch in amd64 arm64; do \
-		out=$(DIST)/quesma-shipper-windows-$$arch-supervisor.exe; \
-		echo "building $$out"; \
+		[ $$os != windows ] || { out=$(DIST)/quesma-shipper-windows-$$arch-supervisor.exe; echo "building $$out"; \
 		(cd $(MODULE) && CGO_ENABLED=0 GOOS=windows GOARCH=$$arch \
-			go build -trimpath -ldflags "-s -w -H windowsgui" -o ../$$out ./cmd/quesma-shipper-supervisor) || exit 1; \
+			go build -trimpath -ldflags "-s -w -H windowsgui" -o ../$$out ./cmd/quesma-shipper-supervisor) || exit 1; }; \
 	done
 	@echo "built $(DIST)/ ($(VERSION))"
 
@@ -62,21 +59,10 @@ clean: ## Remove build and coverage output
 
 .PHONY: doctor
 doctor: ## Check the tools this repository's targets need
-	@ok=1; \
-	printf '%-10s %-8s %s\n' TOOL STATUS NEEDED-FOR; \
-	check() { \
-	  if command -v "$$1" >/dev/null 2>&1; then \
-	    printf '%-10s %-8s %s\n' "$$1" "ok" "$$3"; \
-	  else \
-	    printf '%-10s %-8s %s  — %s\n' "$$1" "MISSING" "$$3" "$$4"; \
-	    [ "$$2" = required ] && ok=0; \
-	  fi; \
-	}; \
-	check go required "building and testing the client" "https://go.dev/dl"; \
-	check claude optional "make cover-review" "https://claude.com/claude-code"; \
-	echo; \
-	if [ "$$ok" = 1 ]; then echo "ready"; \
-	else echo "install what is marked MISSING, then run make doctor again"; exit 1; fi
+	@command -v go >/dev/null && echo "go      ok  (required: building and testing)" || \
+		{ echo "go      MISSING (required): https://go.dev/dl"; exit 1; }
+	@command -v claude >/dev/null && echo "claude  ok  (optional: make cover-review)" || \
+		echo "claude  missing (optional, for make cover-review): https://claude.com/claude-code"
 
 # ---------------------------------------------------------------------------- test and coverage
 
@@ -88,28 +74,18 @@ test: ## Run the unit suite
 race: ## Run the unit suite under the race detector
 	cd $(MODULE) && go test -race $(PKG)
 
-# The full local tier measures the shipped binary through a latency-shaped MinIO path. The HTTP
-# protocol peer only verifies device signatures and issues presigned tickets; it models no control
-# plane product. The full corpus is intentionally manual because it costs minutes.
+# Both tiers measure the shipped binary against a latency-shaped MinIO; the full corpus costs minutes, so it is manual.
+PERF_SKIP = docker info >/dev/null 2>&1 || { [ -z "$$CI" ] || { echo "docker is not available in CI"; exit 1; }; echo "docker is not available; skipping $@"; exit 0; }
+
 .PHONY: perf
 perf: ## Run the full local performance tier (needs Docker)
-	@if ! docker info >/dev/null 2>&1; then \
-		echo "docker is not available; skipping the perf tier"; \
-		exit 0; \
-	fi
-	cd $(MODULE) && go vet -tags perf ./perf/
-	cd $(MODULE) && go test -tags perf -count=1 -timeout 30m -v ./perf/
+	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && \
+		go test -tags perf -count=1 -timeout 30m -v ./perf/
 
-# The same instruments and budgets on the PR-sized corpus. The extra three tests prove that the
-# proxy and resource observations used by the measured scenarios are live.
+# The PR-sized corpus, plus the three tests proving the proxy and resource instruments are live.
 .PHONY: perf-smoke
 perf-smoke: ## Run the CI-sized performance tier (needs Docker)
-	@if ! docker info >/dev/null 2>&1; then \
-		echo "docker is not available; skipping the perf smoke tier"; \
-		exit 0; \
-	fi
-	cd $(MODULE) && go vet -tags perf ./perf/
-	cd $(MODULE) && go test -tags perf -count=1 -timeout 10m -v -run \
+	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && go test -tags perf -count=1 -timeout 10m -v -run \
 		'^(TestSmokeTier|TestTheStoreIsReachableOnlyThroughTheProxy|TestASyncAgainstABogusEndpointFailsWithoutFallingBack|TestTheHarnessObservesAChildRun)$$' \
 		./perf/
 
@@ -200,22 +176,19 @@ LICENSE_OSES := linux darwin windows
 .PHONY: licenses-check
 licenses-check: ## Fail on a non-permissive dependency, or when the embedded notices are stale
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-	cd $(MODULE) && GOTOOLCHAIN=$$(go env GOVERSION) GOBIN=$$tmp/bin go install $(GOLICENSES) 2>/dev/null; \
-	for os in $(LICENSE_OSES); do \
-		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses check ./cmd/quesma-shipper \
-			--allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,Unlicense 2>/dev/null || exit 1; \
-	done; cd ..; \
 	$(MAKE) --no-print-directory licenses LEGAL_DIR=$$tmp/legal >/dev/null || exit 1; \
 	if ! diff -r -q -x '*.go' -x references $$tmp/legal $(LEGAL_DIR) >/dev/null; then \
 		diff -r -x '*.go' -x references $$tmp/legal $(LEGAL_DIR) | head -20; \
 		echo "embedded notices are stale: run make licenses and commit"; exit 1; fi
 
 .PHONY: licenses
-licenses: ## Regenerate the embedded notices: LICENSE and NOTICE copies, third-party texts and the package,license inventory for every target OS (references/ is hand-maintained; no versions, so a plain bump does not change it)
+licenses: ## Validate dependencies and regenerate embedded notices for all target OSes (references/ is hand-maintained)
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	mkdir -p $(LEGAL_DIR); \
 	cd $(MODULE) && GOTOOLCHAIN=$$(go env GOVERSION) GOBIN=$$tmp/bin go install $(GOLICENSES) 2>/dev/null; \
 	for os in $(LICENSE_OSES); do \
+		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses check ./cmd/quesma-shipper \
+			--allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,Unlicense 2>/dev/null || exit 1; \
 		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses save ./cmd/quesma-shipper --save_path $$tmp/save-$$os 2>/dev/null \
 			|| { echo "go-licenses save failed for $$os"; exit 1; }; \
 		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses report ./cmd/quesma-shipper 2>/dev/null > $$tmp/report-$$os.csv \

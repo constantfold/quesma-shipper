@@ -9,14 +9,27 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
-	"golang.org/x/sys/unix"
 )
 
-const macPackageTarget = "darwin/pkg"
+// UpdateTarget prefers the signed package when this binary runs from the app bundle.
+func UpdateTarget(release common.Release) string {
+	if _, ok := currentAppBundle(); ok {
+		return release.Targets["darwin/pkg"]
+	}
+	return common.BinaryTarget(release)
+}
 
-func appUpdateTarget(release common.Release) string { return release.Targets[macPackageTarget] }
+func ApplyTarget(raw []byte, version string) error {
+	app, ok := currentAppBundle()
+	if !ok {
+		return common.ApplyBinary(raw)
+	}
+	return applyAppPackage(raw, app, version)
+}
 
 func currentAppBundle() (string, bool) {
 	exe, err := common.CurrentExecutable()
@@ -41,19 +54,16 @@ func appForExecutable(exe string) (string, bool) {
 	if !ok || filepath.Base(app) != appName || filepath.Base(exe) != executableName {
 		return "", false
 	}
-	return app, bundleIdentifierOf(app) == bundleIdentifier
+	id, _ := plistValue(filepath.Join(app, "Contents", "Info.plist"), "CFBundleIdentifier")
+	return app, id == bundleIdentifier
 }
 
-func bundleIdentifierOf(app string) string {
-	plist := filepath.Join(app, "Contents", "Info.plist")
-	if _, err := os.Stat(plist); err != nil {
-		return ""
-	}
-	out, err := exec.Command("/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+func plistValue(plist, key string) (string, error) {
+	out, err := exec.Command("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist).CombinedOutput()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 // applyAppPackage swaps the bundle in whole: the staged one is validated before anything moves.
@@ -100,16 +110,12 @@ func validateAppBundle(app, version string) error {
 		return fmt.Errorf("update %s is not a directory", appName)
 	}
 	plist := filepath.Join(app, "Contents", "Info.plist")
-	checks := map[string]string{
-		"CFBundleIdentifier": bundleIdentifier,
-		releaseVersionField:  version,
-	}
-	for key, want := range checks {
-		out, err := exec.Command("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist).CombinedOutput()
+	for key, want := range map[string]string{"CFBundleIdentifier": bundleIdentifier, releaseVersionField: version} {
+		got, err := plistValue(plist, key)
 		if err != nil {
-			return fmt.Errorf("reading %s from update: %w: %s", key, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("reading %s from update: %w", key, err)
 		}
-		if got := strings.TrimSpace(string(out)); got != want {
+		if got != want {
 			return fmt.Errorf("update %s is %q, want %q", key, got, want)
 		}
 	}

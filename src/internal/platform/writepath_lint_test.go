@@ -1,39 +1,37 @@
 package platform_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // moduleRoot is derived rather than a hardcoded relative depth, which a directory move silently misdirects.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the test's working directory")
-		}
+		require.NotEqual(t, dir, parent, "no go.mod above the test's working directory")
 		dir = parent
 	}
 }
 
-// forEachModuleGoFile parses every non-test .go file in the module, skipping generated trees and
-// nested modules, and hands each to fn. It is the shared walk behind the module-wide lints here.
+// forEachModuleGoFile parses every non-test .go file in the module, skipping generated trees and nested modules.
 func forEachModuleGoFile(t *testing.T, fn func(rel string, file *ast.File, fset *token.FileSet)) {
 	t.Helper()
 	root := moduleRoot(t)
@@ -69,50 +67,28 @@ func forEachModuleGoFile(t *testing.T, fn func(rel string, file *ast.File, fset 
 		fn(filepath.ToSlash(rel), file, fset)
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
-// writeCapablePackages may open files for writing; everything else must route through safeio,
-// which is what keeps "the shipper never writes inside an agent's store" true. Each entry earns
-// its place by owning a specific durable artifact:
-//
-//	internal/engine/state.go    the fingerprint document
-//	packaging/{common,macos,linux,windows} the program, app bundle, and supervision entries
-//	internal/platform/auditlog  the append-only local log
-//	internal/platform/crashjournal    the append-only crash journal
-//	internal/sources/sqliteread scratch snapshots and cold copies of agent databases
-//
-// sqliteread weakens this lint, so it carries a compensating control rather than an exemption:
-// it may write only under the scratch directory it is given, asserted by
-// TestAReadNeverWritesBesideTheSource. The enricher packages that USE it stay off this list.
+// writeCapablePackages each own a durable artifact; everything else routes through safeio, so the shipper never
+// writes inside an agent's store. sqliteread may write only under its scratch dir (TestDeclaredReadContract).
 var writeCapablePackages = []string{
-	"internal/platform/auditlog",
-	"internal/platform/crashjournal",
-	"internal/sources/sqliteread",
-	"packaging/macos",
-	"packaging/linux",
-	"packaging/windows",
+	"internal/platform/auditlog",     // the append-only local log
+	"internal/platform/crashjournal", // the append-only crash journal
+	"internal/sources/sqliteread",    // scratch snapshots and cold copies of agent databases
+	"packaging/macos",                // the app bundle and the LaunchAgent
+	"packaging/linux",                // the systemd unit
+	"packaging/windows",              // the scheduled task definition
 }
 
-// writeCapableFiles is the FILE-granular half, for the merged platform package: a directory grant
-// would extend write rights to memstat and buildinfo, which have none and must stay that way.
-//
-//	safeio.go   the sanctioned write path itself
-//	engine/state.go  the fingerprint document (the engine dir itself has no blanket grant)
-//	pause.go    the pause-state flag it must be able to set and clear
-//	packaging/common/service.go  service state
-//	packaging/common/remove.go  the installed standalone executable
-//	packaging/common/selfupdate.go  the cross-supervisor self-update hop guard
+// writeCapableFiles is the file-granular half, so a grant to platform does not reach memstat or buildinfo.
 var writeCapableFiles = []string{
-	"internal/platform/safeio.go",
-	"internal/engine/state.go",
-	"packaging/common/service.go",
-	"packaging/common/remove.go",
-	"packaging/common/selfupdate.go",
-	"internal/platform/pause.go",
-	"internal/sources/ignore.go",
+	"internal/platform/safeio.go", // the sanctioned write path itself
+	"internal/platform/pause.go",  // the pause flag
+	"internal/engine/state.go",    // the fingerprint document
+	"internal/sources/ignore.go",  // the .notrajectories repository marker
+	"packaging/service.go",        // service state and the self-update hop guard
+	"packaging/common/remove.go",  // the installed standalone executable
 }
 
 // bannedWrites are the os-level calls that create or truncate a file.
@@ -134,67 +110,36 @@ var bannedWrites = map[string]string{
 
 // TestWritePathLint fails if a package outside the allow-list opens a file for writing: a lint, because Go cannot forbid an import.
 func TestWritePathLint(t *testing.T) {
-	var findings []string
 	forEachModuleGoFile(t, func(rel string, file *ast.File, fset *token.FileSet) {
-		if slices.Contains(writeCapablePackages, filepath.ToSlash(filepath.Dir(rel))) {
-			return
-		}
-		if slices.Contains(writeCapableFiles, rel) {
+		if slices.Contains(writeCapablePackages, path.Dir(rel)) || slices.Contains(writeCapableFiles, rel) {
 			return
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "os" && bannedWrites[sel.Sel.Name] != "" {
+					t.Errorf("%s:%d: os.%s outside the write allow-list — %s",
+						rel, fset.Position(sel.Pos()).Line, sel.Sel.Name, bannedWrites[sel.Sel.Name])
+				}
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkgIdent, ok := sel.X.(*ast.Ident)
-			if !ok || pkgIdent.Name != "os" {
-				return true
-			}
-			why, banned := bannedWrites[sel.Sel.Name]
-			if !banned {
-				return true
-			}
-			findings = append(findings, formatFinding(rel, fset.Position(call.Pos()).Line, sel.Sel.Name, why))
 			return true
 		})
 	})
-
-	for _, f := range findings {
-		t.Error(f)
-	}
-	if len(findings) > 0 {
+	if t.Failed() {
 		t.Logf("packages permitted to write: %s", strings.Join(writeCapablePackages, ", "))
 	}
 }
 
-func formatFinding(file string, line int, call, why string) string {
-	return fmt.Sprintf("%s:%d: os.%s outside the write allow-list — %s", file, line, call, why)
-}
+// bannedExec are the process spawners; os/exec is refused by import.
+var bannedExec = map[string]map[string]bool{"os": {"StartProcess": true}, "syscall": {"Exec": true, "ForkExec": true}}
 
-// bannedExec are the calls that create a process. os/exec wraps os.StartProcess, so its import is
-// banned outright; syscall's process spawners are named directly.
-var bannedExec = map[string]map[string]bool{
-	"os":      {"StartProcess": true},
-	"syscall": {"Exec": true, "ForkExec": true},
-}
-
-// TestNoExecOutsidePackaging: os/exec reads as malware to an auditor, so the collector's data path
-// only permits packaging processes and the macOS Keychain reader.
+// TestNoExecOutsidePackaging: os/exec reads as malware to an auditor, so only packaging and the Keychain reader spawn.
 func TestNoExecOutsidePackaging(t *testing.T) {
 	forEachModuleGoFile(t, func(rel string, file *ast.File, fset *token.FileSet) {
 		if rel == "packaging" || strings.HasPrefix(rel, "packaging/") || rel == "internal/sources/accounts_keychain_darwin.go" {
 			return
 		}
 		for _, imp := range file.Imports {
-			if imp.Path.Value == `"os/exec"` {
-				t.Errorf("%s:%d: imports os/exec: the data path must not spawn subprocesses (allowed only under packaging/ or in the macOS Keychain reader)",
-					rel, fset.Position(imp.Pos()).Line)
-			}
+			assert.NotEqual(t, `"os/exec"`, imp.Path.Value)
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)

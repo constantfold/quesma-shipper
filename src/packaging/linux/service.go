@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -17,19 +18,15 @@ import (
 type Spec = common.Spec
 type Status = common.Status
 
-// unitName is the systemd --user unit. A service, not a timer: the loop owns its own ticker,
-// and a fresh process per tick would contend for the flock and drop the backoff state.
+// unitName is a service, not a timer: a process per tick would contend for the flock and drop backoff state.
 const unitName = "trajectory-shipper.service"
 
 func systemdPath(home string) string {
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
-	}
+	configHome := cmp.Or(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config"))
 	return filepath.Join(configHome, "systemd", "user", unitName)
 }
 
-// hasSystemdUser reports whether this host has a systemd user instance; containers often do not.
+// Available reports whether this host has a systemd user instance; containers often do not.
 func Available() bool {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return false
@@ -37,26 +34,18 @@ func Available() bool {
 	// `systemctl --user` needs a running user instance; a container or session-less login has none.
 	if err := exec.Command("systemctl", "--user", "is-system-running").Run(); err != nil {
 		out, _ := exec.Command("systemctl", "--user", "show-environment").CombinedOutput()
-		if strings.Contains(string(out), "Failed to connect to bus") || len(out) == 0 {
-			return false
-		}
+		return len(out) > 0 && !strings.Contains(string(out), "Failed to connect to bus")
 	}
 	return true
 }
 
-// renderUnit builds the service unit: Restart=always so a death is not a stop, and
-// WantedBy=default.target so it starts on login.
+// renderUnit: Restart=always so a death is not a stop, WantedBy=default.target so it starts on login.
 func renderUnit(spec Spec) string {
-	// Quoted per argument: systemd splits ExecStart on whitespace, so a path with a space would
-	// become two arguments. The escaping it wants is C-style inside double quotes.
+	// Quoted per argument: systemd splits ExecStart on whitespace.
 	parts := make([]string, 0, len(spec.Args)+1)
 	for _, a := range append([]string{spec.Executable}, spec.Args...) {
 		parts = append(parts, systemdQuote(a))
 	}
-	cmd := strings.Join(parts, " ")
-
-	stop := common.ExitTimeout(spec)
-
 	var env strings.Builder
 	if spec.Home != "" {
 		fmt.Fprintf(&env, "Environment=HOME=%s\n", spec.Home)
@@ -89,46 +78,33 @@ StandardError=journal
 
 [Install]
 WantedBy=default.target
-`, cmd, env.String(), int(stop.Seconds()))
+`, strings.Join(parts, " "), env.String(), int(common.ExitTimeout(spec).Seconds()))
 }
 
-func InstallService(spec Spec) (Status, error) {
+func InstallService(spec Spec) error {
 	path := systemdPath(spec.Home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return Status{}, fmt.Errorf("supervise: %w", err)
+		return fmt.Errorf("supervise: %w", err)
 	}
 	// Atomic: systemd re-reads units on daemon-reload, and a torn unit fails to parse.
 	if err := platform.WriteAtomic(path, []byte(renderUnit(spec)), common.EntryMode); err != nil {
-		return Status{}, fmt.Errorf("supervise: write %s: %w", path, err)
+		return fmt.Errorf("supervise: write %s: %w", path, err)
 	}
-
-	st := Status{Kind: common.KindSystemd, Installed: true, Path: path}
 	if err := daemonReload(); err != nil {
-		st.Detail = "unit written but " + err.Error()
-		return st, fmt.Errorf("supervise: %w", err)
+		return fmt.Errorf("supervise: %w", err)
 	}
 	// enable then restart, not `enable --now`: start is a no-op and would keep the old binary.
 	for _, verb := range []string{"enable", "restart"} {
 		if out, err := exec.Command("systemctl", "--user", verb, unitName).CombinedOutput(); err != nil {
-			st.Detail = fmt.Sprintf("unit written but %s failed: %v: %s", verb, err, strings.TrimSpace(string(out)))
-			return st, fmt.Errorf("supervise: systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("supervise: systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
 		}
 	}
-	st.Loaded = true
-	st.Detail = "enabled and started"
-	if hint := lingerHint(context.Background()); hint != "" {
-		st.Detail += "; " + hint
-	}
-	return st, nil
+	return nil
 }
 
-// lingerHint is the session-less-box caveat: without linger a --user service stops with the
-// last session and never starts at boot. A hint, not enabled here; linger is the owner's call.
+// lingerHint warns that without linger a --user service stops with the last session; enabling it is the owner's call.
 func lingerHint(ctx context.Context) string {
-	user := os.Getenv("USER")
-	if user == "" {
-		user = "$USER"
-	}
+	user := cmp.Or(os.Getenv("USER"), "$USER")
 	out, err := exec.CommandContext(ctx, "loginctl", "show-user", user, "--property=Linger").Output()
 	if err == nil && strings.Contains(string(out), "Linger=yes") {
 		return ""
@@ -171,9 +147,8 @@ func ServiceState(ctx context.Context) Status {
 		return st
 	}
 	st.Path = systemdPath(home)
-	if _, err := os.Stat(st.Path); err == nil {
-		st.Installed = true
-	}
+	_, err = os.Stat(st.Path)
+	st.Installed = err == nil
 
 	active, _ := exec.CommandContext(ctx, "systemctl", "--user", "is-active", unitName).Output()
 	enabled, _ := exec.CommandContext(ctx, "systemctl", "--user", "is-enabled", unitName).Output()
@@ -190,7 +165,7 @@ func ServiceState(ctx context.Context) Status {
 		}
 	case st.Installed:
 		st.Detail = fmt.Sprintf("unit present but %s (%s): re-run the Quesma Shipper installer",
-			orUnknown(activeState), orUnknown(enabledState))
+			cmp.Or(activeState, "unknown"), cmp.Or(enabledState, "unknown"))
 	default:
 		st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
 	}
@@ -212,25 +187,12 @@ func RestartCommand() string {
 	return "systemctl --user restart " + unitName
 }
 
-func orUnknown(s string) string {
-	if s == "" {
-		return "unknown"
-	}
-	return s
-}
-
-// systemdQuote renders one ExecStart argument, bare when plainly safe. The risk is the percent
-// sign: systemd expands specifiers in unit files, so a path containing one has to double it.
+// systemdQuote C-quotes an unsafe argument and doubles "%", which systemd expands as a specifier.
 func systemdQuote(a string) string {
-	safe := a != ""
-	for _, r := range a {
-		if !(r == '/' || r == '.' || r == '-' || r == '_' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			safe = false
-			break
-		}
-	}
-	if safe {
+	if a != "" && strings.IndexFunc(a, func(r rune) bool {
+		return !(r == '/' || r == '.' || r == '-' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+	}) < 0 {
 		return a
 	}
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%")

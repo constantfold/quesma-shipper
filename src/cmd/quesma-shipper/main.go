@@ -13,16 +13,13 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// reportPanic is the defer's body, separated so a test can hand it a value. The stack goes to
-// stderr and no further, being the one diagnostic that can carry payload-derived strings; the fact
-// of the crash is persisted, so it outlives the terminal and rides the next heartbeat that ships.
+// reportPanic prints the stack to stderr only, since it can carry payload strings, and persists the fact.
 func reportPanic(errOut io.Writer, args []string, r any) {
 	fmt.Fprintf(errOut, "panic: %v\n\n%s", r, debug.Stack())
 	app.RecordPanic(verbOf(args), r)
 }
 
-// verbOf names the verb for a persisted panic. The first non-flag argument, so
-// `quesma-shipper -q sync` still reads as sync; "quesma-shipper" alone when there is none.
+// verbOf is the first non-flag argument, so `quesma-shipper -q sync` still reads as sync.
 func verbOf(args []string) string {
 	for _, a := range args[1:] {
 		if !strings.HasPrefix(a, "-") {

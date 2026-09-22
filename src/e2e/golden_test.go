@@ -7,20 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Goldens for the fields where the exact value is the point. What is pinned stays narrow, because a
-// golden nobody reads is worse than none: the object key is pinned and can be, being an HMAC over
-// the home-relative path, while the source digest is not, being taken before redaction over bytes
-// carrying the OS username. Only collected transcripts are recorded; the sidecar and heartbeat would
-// pin the environment rather than the behaviour.
-//
-// A golden diff is a claim that the output SHOULD have changed, and -update on a red test is how a
-// regression becomes a committed expectation. Read the diff before running `go test ./e2e -update`.
+// Goldens for collected transcripts, narrow on purpose: the key (an HMAC over the home-relative path)
+// is recorded, the source digest (over bytes carrying the OS username) is not. A golden diff claims
+// the output SHOULD change: read it before running `go test ./e2e -update`.
 var update = flag.Bool("update", false, "rewrite the golden files from this run")
 
 // The recorded layout of one object, in reading order.
@@ -47,8 +44,7 @@ type goldenObject struct {
 	EnrichStatus     string   `json:"enrich_status,omitempty"`
 	EnrichMismatches int      `json:"enrich_mismatches,omitempty"`
 
-	// enrich_status stays "ok" for the explained shortfalls, so without these an object short
-	// of some enrichment is indistinguishable here from one carrying all of it.
+	// enrich_status stays "ok" for the explained shortfalls; these tell them apart.
 	EnrichRepeats          int `json:"enrich_repeats,omitempty"`
 	EnrichTail             int `json:"enrich_tail,omitempty"`
 	EnrichAmbiguous        int `json:"enrich_ambiguous,omitempty"`
@@ -71,42 +67,14 @@ func TestGolden(t *testing.T) {
 		name  string
 		stage func(t *testing.T, w *world, username string)
 	}{
-		{
-			name: "claude-2026-07",
-			stage: func(t *testing.T, w *world, username string) {
-				stageClaude(t, w, username)
-			},
-		},
-		{
-			// On the record as a finding, not an endorsement: a session id with no hex letters is
-			// digits and dashes, which the card-pan rule eats, destroying the join key while the
-			// object still ships looking fine. Recording it makes a fix show up here as a diff.
-			name: "claude-2026-07-numeric-session",
-			stage: func(t *testing.T, w *world, username string) {
-				stageClaudeSession(t, w, username, numericSessionID)
-			},
-		},
-		{
-			name: "cursor-2026-07",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversation2026_07(), true)
-			},
-		},
-		{
-			// The drift case is a contract too: raw ships, the manifest says why.
-			name: "cursor-2026-07-no-store",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversation2026_07(), false)
-			},
-		},
-		{
-			// A store that deduplicated a re-run: the derived object ships, and the count of
-			// what it could not enrich ships with it.
-			name: "cursor-2026-07-repeat",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversationRepeat(), true)
-			},
-		},
+		{"claude-2026-07", func(t *testing.T, w *world, u string) { stageClaude(t, w, u) }},
+		// A finding, not an endorsement: the card-pan rule eats an all-digit session id; a fix shows here as a diff.
+		{"claude-2026-07-numeric-session", func(t *testing.T, w *world, u string) { stageClaudeSession(t, w, u, numericSessionID) }},
+		{"cursor-2026-07", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversation2026_07(), true) }},
+		// The drift case is a contract too: raw ships, the manifest says why.
+		{"cursor-2026-07-no-store", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversation2026_07(), false) }},
+		// A store that deduplicated a re-run: the derived object ships with what it could not enrich.
+		{"cursor-2026-07-repeat", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversationRepeat(), true) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := stageWorld(t)
@@ -115,7 +83,7 @@ func TestGolden(t *testing.T) {
 			runOneShot(t)
 
 			var got []goldenObject
-			var payloads = map[string][]byte{}
+			payloads := map[string][]byte{}
 			for _, o := range mirrorObjects(collect(t, w)) {
 				if !isTranscript(o) {
 					continue
@@ -124,9 +92,7 @@ func TestGolden(t *testing.T) {
 				got = append(got, g)
 				payloads[g.PayloadFile] = payload
 			}
-			if len(got) == 0 {
-				t.Fatal("nothing was collected; a golden of nothing proves nothing")
-			}
+			require.NotEqual(t, 0, len(got), "nothing was collected; a golden of nothing proves nothing")
 			compareGolden(t, tc.name, got, payloads)
 		})
 	}
@@ -158,8 +124,7 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 		EnrichAmbiguous:        o.Manifest.EnrichAmbiguous,
 		EnrichLineDecodeErrors: o.Manifest.EnrichLineDecodeErrors,
 	}
-	// The digest is over raw pre-redaction bytes that deliberately carry this machine's username,
-	// so only its presence can be pinned; that it moves with the source is the invariants' business.
+	// Over pre-redaction bytes carrying this machine's username, so only its presence is recorded.
 	if o.Manifest.SourceHash != "" {
 		g.SourceHash = "<SOURCE-HASH>"
 	}
@@ -178,25 +143,20 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 	if e := o.Manifest.Encryption; e != nil {
 		g.Recipients = e.RecipientKeyIDs
 	}
-	// One file per object, named for its source and key so a listing is readable and stable, with
-	// the payload's real extension so a reader can open it with ordinary transcript tools.
-	stem := g.SourceID + "-" + keyStem(o.Key)[:12]
+	// One file per object, named for its source and key, with the payload's real extension.
+	kind := "-"
 	if g.Derived {
-		stem = g.SourceID + "-derived-" + keyStem(o.Key)[:12]
+		kind = "-derived-"
 	}
-	g.PayloadFile = stem + ".jsonl"
+	stem := strings.TrimSuffix(o.Key[strings.LastIndex(o.Key, "/")+1:], ".age")
+	g.PayloadFile = g.SourceID + kind + stem[:12] + ".jsonl"
 	return g, payload
 }
 
-// The harness's temp directories and the account the tests run as; without this a golden records
-// the runner.
+// The harness's temp directories and the account the tests run as, which a golden must not record.
 func scrubEnvironment(b []byte, w *world, username string) []byte {
 	s := string(b)
-	for from, to := range map[string]string{
-		w.Home:   "<HOME>",
-		w.State:  "<STATE>",
-		w.Config: "<CONFIG>",
-	} {
+	for from, to := range map[string]string{w.Home: "<HOME>", w.State: "<STATE>", w.Config: "<CONFIG>"} {
 		s = strings.ReplaceAll(s, from, to)
 	}
 	if len(username) >= 2 {
@@ -205,82 +165,34 @@ func scrubEnvironment(b []byte, w *world, username string) []byte {
 	return []byte(s)
 }
 
-func keyStem(key string) string {
-	name := key[strings.LastIndex(key, "/")+1:]
-	return strings.TrimSuffix(name, ".age")
-}
-
-// Payloads live beside the manifest record as their own files, so a redaction change reads as a
-// text diff rather than a hash that moved.
+// Payloads are files of their own, so a redaction change reads as a text diff.
 func compareGolden(t *testing.T, name string, got []goldenObject, payloads map[string][]byte) {
 	t.Helper()
 	dir := filepath.Join("testdata", "golden", name)
 	indexPath := filepath.Join(dir, "objects.json")
 
 	encoded, err := json.MarshalIndent(got, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	encoded = append(encoded, '\n')
 
 	if *update {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(dir, "payloads"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(indexPath, encoded, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.RemoveAll(dir))
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "payloads"), 0o755))
+		require.NoError(t, os.WriteFile(indexPath, encoded, 0o644))
 		for file, body := range payloads {
-			if err := os.WriteFile(filepath.Join(dir, "payloads", file), body, 0o644); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "payloads", file), body, 0o644))
 		}
 		t.Logf("wrote %s", dir)
 		return
 	}
 
 	want, err := os.ReadFile(indexPath)
-	if err != nil {
-		t.Fatalf("no golden for %s: %v\nrun: go test ./e2e -update", name, err)
-	}
-	if string(want) != string(encoded) {
-		t.Errorf("%s: the manifest record changed.\n%s", name, firstDifference(string(want), string(encoded)))
-	}
+	require.NoErrorf(t, err, "no golden for %s: %v\nrun: go test ./e2e -update", name, err)
+	assert.Equal(t, string(want), string(encoded), "golden index %s", indexPath)
 	for file, body := range payloads {
 		wantBody, err := os.ReadFile(filepath.Join(dir, "payloads", file))
-		if err != nil {
-			t.Errorf("no golden payload %s: %v", file, err)
-			continue
-		}
-		if string(wantBody) != string(body) {
-			t.Errorf("%s/%s: the shipped payload changed.\n%s", name, file,
-				firstDifference(string(wantBody), string(body)))
+		if assert.NoErrorf(t, err, "no golden payload %s", file) {
+			assert.Equal(t, string(wantBody), string(body), "golden payload %s", file)
 		}
 	}
-}
-
-// The first line that moved, with a hint: a diff a reader has to eyeball is a diff that gets
-// skipped, and a skipped diff plus -update is how a regression becomes the expectation.
-func firstDifference(want, got string) string {
-	wantLines := strings.Split(want, "\n")
-	gotLines := strings.Split(got, "\n")
-	for i := 0; i < len(wantLines) || i < len(gotLines); i++ {
-		var w, g string
-		if i < len(wantLines) {
-			w = wantLines[i]
-		}
-		if i < len(gotLines) {
-			g = gotLines[i]
-		}
-		if w != g {
-			return "line " + strconv.Itoa(i+1) + ":\n  want: " + strings.TrimSpace(w) +
-				"\n  got:  " + strings.TrimSpace(g) +
-				"\n\nIf the vendor changed shape, add a fixture generation beside this one." +
-				"\nIf the shipper changed on purpose, read the whole diff, then -update."
-		}
-	}
-	return "(no line differs; check trailing whitespace)"
 }

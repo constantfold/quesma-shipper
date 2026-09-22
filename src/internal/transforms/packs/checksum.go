@@ -5,9 +5,8 @@ import (
 	"strings"
 )
 
-// Checksum-verified matchers exist because their shapes are otherwise far too common: eleven
-// digits is a date or an id, eleven digits with a valid PESEL check digit is an identity
-// number. These are the only rules allowed to be precise; everything else is tuned for recall.
+// Checksum-verified matchers exist because their shapes are otherwise far too common: eleven digits
+// is an id, eleven with a valid PESEL check digit an identity number. Everything else favours recall.
 
 func digitsOnly(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -18,7 +17,7 @@ func digitsOnly(s string) string {
 	}, s)
 }
 
-// luhnValid implements the Luhn check used by payment card numbers; d must be digits only.
+// luhnValid is the payment card Luhn check; d must be digits only.
 func luhnValid(d string) bool {
 	sum := 0
 	double := false
@@ -36,9 +35,7 @@ func luhnValid(d string) bool {
 	return sum%10 == 0
 }
 
-// panValid decides whether a digit run is plausibly a payment card number, not merely Luhn-valid:
-// Luhn alone passes roughly one in ten random digit runs. Three structural gates come first: card
-// grouping, a real PAN length (13-16 or 19), and the issuer range, which carries most precision.
+// panValid checks grouping, PAN length and issuer range before Luhn, which alone passes one run in ten.
 func panValid(s string) bool {
 	groups := []int{0}
 	sep := byte(0)
@@ -56,7 +53,9 @@ func panValid(s string) bool {
 		groups = append(groups, 0)
 	}
 
-	if len(groups) > 1 && !groupingIsCardShaped(groups) {
+	// Card groupings: 4-4-4-4, amex 4-6-5, and 4-4-4-4-3.
+	if len(groups) > 1 && !slices.Equal(groups, []int{4, 4, 4, 4}) && !slices.Equal(groups, []int{4, 6, 5}) &&
+		!slices.Equal(groups, []int{4, 4, 4, 4, 3}) {
 		return false
 	}
 
@@ -85,12 +84,6 @@ func panValid(s string) bool {
 	}
 
 	return luhnValid(d)
-}
-
-func groupingIsCardShaped(groups []int) bool {
-	return slices.Equal(groups, []int{4, 4, 4, 4}) ||
-		slices.Equal(groups, []int{4, 6, 5}) ||
-		slices.Equal(groups, []int{4, 4, 4, 4, 3})
 }
 
 // peselValid implements the Polish national identity number check digit.
@@ -127,8 +120,7 @@ func ibanValid(s string) bool {
 	if len(v) < 15 || len(v) > 34 {
 		return false
 	}
-	// Move the first four characters to the end, letters as two-digit numbers (A=10 to
-	// Z=35), streaming mod 97 since the number is far wider than any integer type.
+	// The first four characters move to the end, letters count as 10-35, and mod 97 streams.
 	rearranged := v[4:] + v[:4]
 	rem := 0
 	for i := 0; i < len(rearranged); i++ {

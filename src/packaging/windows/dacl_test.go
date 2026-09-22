@@ -3,6 +3,9 @@ package windows
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -12,8 +15,7 @@ const (
 	sidInteractive        = "S-1-5-4"
 )
 
-// The masks an ACL listing reports: ReadAndExecute, the generic read/execute an inherit-only entry
-// carries, Modify and FullControl.
+// The masks an ACL listing reports: ReadAndExecute, inherit-only generic read/execute, Modify, FullControl.
 const (
 	maskReadExecute        = 0x001200A9
 	maskGenericReadExecute = 0xA0000000
@@ -21,8 +23,7 @@ const (
 	maskFullControl        = 0x001F01FF
 )
 
-// The fixtures below are the DACLs of real directories, so a rule change has to argue with the
-// paths users actually pick.
+// The first fixtures are real directories' DACLs, so a rule change has to argue with the paths users pick.
 func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -38,8 +39,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			},
 		},
 		{
-			// CREATOR OWNER holds GENERIC_ALL here, but inherit-only and on a directory only an
-			// elevated administrator can create in: neither half is a finding.
+			// CREATOR OWNER's GENERIC_ALL is inherit-only, on a directory only an administrator can create in.
 			name: `C:\Program Files`,
 			aces: []ace{
 				{SID: sidUsers, Mask: maskGenericReadExecute, Allow: true, InheritOnly: true},
@@ -49,8 +49,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			},
 		},
 		{
-			// AppendData on a directory is CreateDirectories: this is why any user can mkdir at C:\,
-			// and why a hand-made shared folder there is the wrong install target.
+			// AppendData on a directory is CreateDirectories, which is why any user can mkdir at C:\.
 			name: `C:\`,
 			aces: []ace{
 				{SID: sidAuthenticatedUsers, Mask: fileAppendData, Allow: true},
@@ -60,8 +59,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			want: []string{sidAuthenticatedUsers},
 		},
 		{
-			// INTERACTIVE matches every logged-on account, so Modify here is write access for
-			// whoever else uses the machine.
+			// INTERACTIVE matches every logged-on account.
 			name: `C:\Users\Public`,
 			aces: []ace{
 				{SID: sidCreatorOwner, Mask: maskFullControl, Allow: true},
@@ -75,46 +73,33 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			aces: []ace{{SID: sidEveryone, Mask: genericAll, Allow: true}},
 			want: []string{sidEveryone},
 		},
+		{
+			name: "denied and read-only access",
+			aces: []ace{
+				{SID: sidUsers, Mask: maskFullControl, Allow: false},
+				{SID: sidUsers, Mask: maskReadExecute, Allow: true},
+				{SID: sidInteractive, Mask: maskGenericReadExecute, Allow: true},
+			},
+		},
+		{
+			// A case-sensitive SID comparison would report the installer as a threat to their own directory.
+			name: "the installer in lower case",
+			aces: []ace{{SID: strings.ToLower(sidInstaller), Mask: maskFullControl, Allow: true}},
+		},
+		{
+			name: "each trustee reported once",
+			aces: []ace{
+				{SID: sidUsers, Mask: fileWriteData, Allow: true},
+				{SID: sidUsers, Mask: standardWriteOwner, Allow: true},
+				{SID: sidInteractive, Mask: maskModify, Allow: true},
+			},
+			want: []string{sidUsers, sidInteractive},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := untrustedWriters(tc.aces, sidInstaller)
-			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("untrustedWriters() = %v, want %v", got, tc.want)
-			}
+			require.Equalf(t, strings.Join(tc.want, ","), strings.Join(got, ","), "untrustedWriters() = %v, want %v", got, tc.want)
 		})
-	}
-}
-
-func TestUntrustedWritersIgnoresDeniedAndReadOnlyAccess(t *testing.T) {
-	aces := []ace{
-		{SID: sidUsers, Mask: maskFullControl, Allow: false},
-		{SID: sidUsers, Mask: maskReadExecute, Allow: true},
-		{SID: sidInteractive, Mask: maskGenericReadExecute, Allow: true},
-	}
-	if got := untrustedWriters(aces, sidInstaller); len(got) != 0 {
-		t.Fatalf("untrustedWriters() = %v, want none", got)
-	}
-}
-
-// A SID string comparison that is not case-insensitive would report the installing user as a
-// threat to their own directory.
-func TestUntrustedWritersAcceptsTheInstallerInEitherCase(t *testing.T) {
-	aces := []ace{{SID: strings.ToLower(sidInstaller), Mask: maskFullControl, Allow: true}}
-	if got := untrustedWriters(aces, sidInstaller); len(got) != 0 {
-		t.Fatalf("untrustedWriters() = %v, want none", got)
-	}
-}
-
-func TestUntrustedWritersReportsEachTrusteeOnce(t *testing.T) {
-	aces := []ace{
-		{SID: sidUsers, Mask: fileWriteData, Allow: true},
-		{SID: sidUsers, Mask: standardWriteOwner, Allow: true},
-		{SID: sidInteractive, Mask: maskModify, Allow: true},
-	}
-	want := []string{sidUsers, sidInteractive}
-	got := untrustedWriters(aces, sidInstaller)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("untrustedWriters() = %v, want %v", got, want)
 	}
 }
 
@@ -128,14 +113,8 @@ func TestWriteMaskCoversTheCompositeRights(t *testing.T) {
 		"TakeOwnership":  standardWriteOwner,
 		"ChangePermsDAC": standardWriteDAC,
 	} {
-		if mask&writeMask == 0 {
-			t.Errorf("%s (%#08x) does not intersect writeMask", name, mask)
-		}
+		assert.NotEqualf(t, uint32(0), mask&writeMask, "%s (%#08x) does not intersect writeMask", name, mask)
 	}
-	if maskReadExecute&writeMask != 0 {
-		t.Errorf("ReadAndExecute (%#08x) intersects writeMask", maskReadExecute)
-	}
-	if maskGenericReadExecute&writeMask != 0 {
-		t.Errorf("GENERIC_READ|GENERIC_EXECUTE (%#08x) intersects writeMask", maskGenericReadExecute)
-	}
+	assert.Truef(t, maskReadExecute&writeMask == 0, "ReadAndExecute (%#08x) intersects writeMask", maskReadExecute)
+	assert.Truef(t, maskGenericReadExecute&writeMask == 0, "GENERIC_READ|GENERIC_EXECUTE (%#08x) intersects writeMask", maskGenericReadExecute)
 }

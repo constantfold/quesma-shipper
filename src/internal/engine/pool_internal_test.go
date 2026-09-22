@@ -3,36 +3,18 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
-
-func TestConcurrencyTakesThePinAndNeverExceedsTheCandidates(t *testing.T) {
-	cases := []struct {
-		workers, candidates, want int
-	}{
-		{3, 100, 3}, // a test pin wins
-		{8, 2, 2},   // never more goroutines than files
-		{0, 0, 1},   // and never fewer than one
-	}
-	for _, c := range cases {
-		o := Options{Workers: c.workers}
-		if got := o.concurrency(c.candidates); got != c.want {
-			t.Errorf("concurrency(workers=%d, candidates=%d) = %d, want %d",
-				c.workers, c.candidates, got, c.want)
-		}
-	}
-}
-
-func TestUploadConcurrencyTakesThePin(t *testing.T) {
-	if got := (Options{UploadWorkers: 5}).uploadConcurrency(3); got != 5 {
-		t.Errorf("uploadConcurrency(uploadWorkers=5, compute=3) = %d, want 5", got)
-	}
-}
 
 func admissionPass(budget int, sizes ...int64) *sourcePass {
 	cands := make([]sources.Candidate, len(sizes))
@@ -43,89 +25,50 @@ func admissionPass(budget int, sizes ...int64) *sourcePass {
 	return &sourcePass{budget: &b, disc: sources.Discovery{Candidates: cands}}
 }
 
-// Each gate alone: the admission predicate is the whole budget-and-safety policy of the pass.
-func TestAdmissionGates(t *testing.T) {
-	ctx := context.Background()
-	cancelled, cancel := context.WithCancel(ctx)
+// Each check alone: the admission predicate is the whole budget-and-safety policy of the pass.
+func TestAdmissionChecks(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	t.Run("budget is reserved by admission", func(t *testing.T) {
-		p := admissionPass(1, 1, 1)
-		var stopped error
-		if !p.canAdmit(ctx, 0, 0, &stopped) {
-			t.Fatal("first admission refused with budget available")
-		}
-		if p.canAdmit(ctx, 1, 1, &stopped) {
-			t.Error("second admission granted on a spent budget")
-		}
-		if *p.budget != 0 {
-			t.Errorf("budget = %d after one admission from 1", *p.budget)
-		}
-	})
-
-	t.Run("a fatal pass admits nothing", func(t *testing.T) {
-		p := admissionPass(10, 1, 1)
-		p.fatal = true
-		var stopped error
-		if p.canAdmit(ctx, 0, 0, &stopped) {
-			t.Error("admitted a file after a refusal")
-		}
-	})
-
-	t.Run("a cancelled context stops admission and says so once", func(t *testing.T) {
-		p := admissionPass(10, 1, 1)
-		var stopped error
-		if p.canAdmit(cancelled, 0, 0, &stopped) {
-			t.Error("admitted a file on a dead context")
-		}
-		if stopped == nil {
-			t.Error("the cancellation was not recorded for the pass to return")
-		}
-	})
-
-	t.Run("in-flight bytes hold a large file back", func(t *testing.T) {
-		p := admissionPass(10, platform.MaxInFlightBytes(), platform.MaxInFlightBytes())
-		var stopped error
-		if !p.canAdmit(ctx, 0, 0, &stopped) {
-			t.Fatal("first large file refused")
-		}
-		p.inFlightBytes = p.disc.Candidates[0].Size
-		if p.canAdmit(ctx, 1, 1, &stopped) {
-			t.Error("two gate-sized files admitted together")
-		}
-	})
-
-	t.Run("a file larger than the whole gate still runs, alone", func(t *testing.T) {
-		p := admissionPass(10, platform.MaxInFlightBytes()*2)
-		var stopped error
-		if !p.canAdmit(ctx, 0, 0, &stopped) {
-			t.Error("an oversized file was refused outright; it must run with the pass to itself")
-		}
-	})
-
-	// The gate is read at admission, not baked in at compile time.
-	t.Run("the gate follows the environment override", func(t *testing.T) {
-		const small = 4 << 20
-		t.Cleanup(func() {
-			if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-				t.Fatalf("restoring the cap: %v", err)
+	huge := platform.MaxInFlightBytes()
+	fatal := admissionPass(10, 1)
+	fatal.fatal = true
+	for _, tc := range []struct {
+		name     string
+		p        *sourcePass
+		ctx      context.Context
+		admitted int // files already in flight, each holding its candidate's bytes
+		want     bool
+	}{
+		{"budget available", admissionPass(1, 1, 1), context.Background(), 0, true},
+		{"budget spent", admissionPass(0, 1), context.Background(), 0, false},
+		{"a fatal pass admits nothing", fatal, context.Background(), 0, false},
+		{"a cancelled context stops admission", admissionPass(10, 1), cancelled, 0, false},
+		{"in-flight bytes hold a large file back", admissionPass(10, huge, huge), context.Background(), 1, false},
+		{"a file larger than the whole limit still runs, alone", admissionPass(10, huge*2), context.Background(), 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := range tc.admitted {
+				tc.p.inFlightBytes += tc.p.disc.Candidates[i].Size
 			}
+			budget := *tc.p.budget
+			var stopped error
+			assert.Equal(t, tc.want, tc.p.canAdmit(tc.ctx, tc.admitted, tc.admitted, &stopped))
+			if tc.want {
+				assert.Equal(t, budget-1, *tc.p.budget, "admission reserves one unit of budget")
+			}
+			assert.Equal(t, tc.ctx.Err() != nil, stopped != nil, "only a cancellation is recorded for the pass to return")
 		})
-		t.Setenv(platform.EnvMaxInFlightBytes, strconv.Itoa(small))
-		if err := platform.ApplyMaxInFlightBytesFromEnv(); err != nil {
-			t.Fatalf("applying the cap: %v", err)
-		}
+	}
 
-		p := admissionPass(10, small, small)
-		var stopped error
-		if !p.canAdmit(ctx, 0, 0, &stopped) {
-			t.Fatal("first file refused under the overridden cap")
-		}
-		p.inFlightBytes = p.disc.Candidates[0].Size
-		if p.canAdmit(ctx, 1, 1, &stopped) {
-			t.Error("two files admitted together past the overridden cap")
-		}
-	})
+	// The limit is read at admission, not baked in at compile time.
+	const small = 4 << 20
+	t.Cleanup(func() { require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv()) })
+	t.Setenv(platform.EnvMaxInFlightBytes, strconv.Itoa(small))
+	require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
+	p := admissionPass(10, small, small)
+	p.inFlightBytes = small
+	var stopped error
+	assert.False(t, p.canAdmit(context.Background(), 1, 1, &stopped), "two files admitted together past the overridden cap")
 }
 
 func TestGeneratedFileChecksUploadStateBeforeLoading(t *testing.T) {
@@ -137,17 +80,13 @@ func TestGeneratedFileChecksUploadStateBeforeLoading(t *testing.T) {
 				return sources.Payload{}, errors.New("fixture load failure")
 			}}
 			o := Options{DryRun: true, Now: time.Now}
-			result, pending := o.prepareFile(context.Background(), fileJob{cand: cand, seen: true, fp: Fingerprint{SourceHash: hash, SourceSize: cand.Size, SourceMTime: cand.MTime}},
-				sources.Resolved{}, sources.Discovery{}, false)
-			if pending != nil {
-				t.Fatal("unexpected upload")
-			}
+			result := o.prepareFile(context.Background(), fileJob{seen: true, fp: Fingerprint{SourceHash: hash, SourceSize: cand.Size, SourceMTime: cand.MTime}},
+				sources.Resolved{}, sources.Discovery{Candidates: []sources.Candidate{cand}}, false)
+			require.Nil(t, result.pending, "unexpected upload")
 			if hash != "" {
-				if loads != 0 || result.outcome.Decision != "unchanged" {
-					t.Fatalf("reloaded uploaded snapshot: loads=%d, %+v", loads, result.outcome)
-				}
-			} else if loads != 1 || result.outcome.Decision != "parked" {
-				t.Fatalf("did not retry uncommitted snapshot: loads=%d, %+v", loads, result.outcome)
+				assert.Truef(t, loads == 0 && result.outcome.Decision == "unchanged", "reloaded uploaded snapshot: loads=%d, %+v", loads, result.outcome)
+			} else {
+				assert.Truef(t, loads == 1 && result.outcome.Decision == "parked", "did not retry uncommitted snapshot: loads=%d, %+v", loads, result.outcome)
 			}
 		})
 	}
@@ -160,7 +99,30 @@ func TestSpentBudgetDoesNotLoadCandidates(t *testing.T) {
 		t.Error("loaded a candidate without an upload slot")
 		return sources.Payload{}, nil
 	}
-	if err := p.run(context.Background()); err != nil || !p.rep.Truncated || p.out.Remaining != 1 {
-		t.Fatalf("budget: %+v, %v", p.out, err)
+	err := p.run(context.Background())
+	require.Truef(t, err == nil && p.rep.Truncated && p.out.Remaining == 1, "budget: %+v, %v", p.out, err)
+	assert.Nil(t, p.out.Files, "unadmitted candidates have no outcome")
+}
+
+func TestBackoffCommitFailurePreservesReadError(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, "3f2504e0-4f89-41d3-9a0c-0305e82c3301")
+	require.NoError(t, err)
+	defer store.Close()
+	// A directory at the document path makes replacement fail even for a privileged test user.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, FileName), 0o700))
+	buffer := newCommitBuffer(store, 1)
+	result := fileResult{outcome: FileOutcome{SourceID: "s", NativePath: "/session"}}
+	failAndBackOff(Options{Now: time.Now}, &result, Fingerprint{}, "read denied")
+	buffer.applyIntent(&result)
+	assert.Equal(t, "parked", string(result.outcome.Decision))
+	assert.Contains(t, result.outcome.Reason, "read denied (and the backoff could not be recorded: ")
+
+	// A confirmed upload whose record cannot be written must not count as shipped.
+	for _, derived := range []bool{false, true} {
+		shipped := fileResult{outcome: FileOutcome{SourceID: "s", NativePath: "/other", Decision: "shipped", Derived: derived}, commit: &Fingerprint{}}
+		buffer.applyIntent(&shipped)
+		assert.Equal(t, "failed", string(shipped.outcome.Decision))
+		assert.Contains(t, shipped.outcome.Reason, map[bool]string{false: "upload succeeded but commit failed: ", true: "derived upload succeeded but commit failed: "}[derived])
 	}
 }

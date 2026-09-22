@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Also the keys in the results file, and append-only: a rename is a silently reset series.
@@ -30,11 +32,15 @@ const (
 	scrubGuardScenario       = "smoke-scrub-guard"
 )
 
-// Names the file the rows are appended to; CI points it at the workspace so the upload finds it.
-const resultsEnv = "SHIPPER_PERF_RESULTS"
+const (
+	// Names the file the rows are appended to; CI points it at the workspace so the upload finds it.
+	resultsEnv = "SHIPPER_PERF_RESULTS"
 
-// One scenario's row. Fields a scenario does not measure stay zero, and names are append-only:
-// a renamed field silently resets the history for whatever reads this later.
+	// Not GITHUB_SHA: on a pull_request that is the ephemeral merge commit no repository keeps.
+	shaEnv = "SHIPPER_PERF_GIT_SHA"
+)
+
+// One scenario's row; unmeasured fields stay zero, and a renamed field silently resets the history.
 type perfResult struct {
 	Scenario   string    `json:"scenario"`
 	RecordedAt time.Time `json:"recorded_at"`
@@ -66,50 +72,48 @@ type perfResult struct {
 	MemoryBudgetBytes int64   `json:"memory_budget_bytes,omitempty"`
 	CPUSeconds        float64 `json:"cpu_seconds"`
 
-	// Omitted like MemoryBudgetBytes: a scenario that did not gate on CPU reads absent, not zero.
+	// Omitted like MemoryBudgetBytes: a scenario that did not check CPU reads absent, not zero.
 	CPUBudgetSeconds float64 `json:"cpu_budget_seconds,omitempty"`
 
 	ExitStatus string `json:"exit_status"`
 }
 
+var (
+	resultsOnce sync.Once
+	resultsFile string
+	shaOnce     sync.Once
+	sha         string
+)
+
 // Provenance is filled in here: a scenario knows what it measured, not which commit it runs on.
 func recordResult(t *testing.T, r perfResult) {
 	t.Helper()
-	if r.Scenario == "" {
-		t.Fatalf("a result row with no scenario name: nothing downstream can key on it")
-	}
-	if r.RecordedAt.IsZero() {
-		r.RecordedAt = time.Now().UTC()
-	}
+	require.NotEmpty(t, r.Scenario, "a result row with no scenario name: nothing downstream can key on it")
+	r.RecordedAt = time.Now().UTC()
 	r.GitSHA = gitSHA(t)
-	r.GOOS, r.GOARCH = runtime.GOOS, runtime.GOARCH
-	r.GoVersion = runtime.Version()
-
+	r.GOOS, r.GOARCH, r.GoVersion = runtime.GOOS, runtime.GOARCH, runtime.Version()
 	line, err := json.Marshal(r)
-	if err != nil {
-		t.Fatalf("marshal the result for %s: %v", r.Scenario, err)
-	}
+	require.NoErrorf(t, err, "marshal the result for %s", r.Scenario)
 
-	path := resultsPath(t)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatalf("open the results file %s: %v", path, err)
-	}
+	// Resolved once and said out loud: a results file nobody can find is no results file.
+	resultsOnce.Do(func() {
+		if resultsFile = os.Getenv(resultsEnv); resultsFile == "" {
+			resultsFile = filepath.Join(resultsDir(), "results.ndjson")
+		}
+		require.NoErrorf(t, os.MkdirAll(filepath.Dir(resultsFile), 0o700), "create the results directory for %s", resultsFile)
+		t.Logf("results: appending to %s (%s overrides it)", resultsFile, resultsEnv)
+	})
+	f, err := os.OpenFile(resultsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	require.NoErrorf(t, err, "open the results file %s", resultsFile)
 	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		t.Fatalf("append to the results file %s: %v", path, err)
-	}
+	_, err = f.Write(append(line, '\n'))
+	require.NoErrorf(t, err, "append to the results file %s", resultsFile)
 
 	t.Logf("result %s: best %.3fs over %d reps, %d up / %d down bytes, %d S3 requests, "+
 		"%d objects, peak %d bytes (%s), %.2f cpu seconds, %s",
 		r.Scenario, r.BestSeconds, len(r.RepSeconds), r.ProxiedBytesUp, r.ProxiedBytesDown,
 		r.S3Requests, r.Objects, r.PeakRSSBytes, r.PeakRSSSource, r.CPUSeconds, r.ExitStatus)
 }
-
-var (
-	resultsOnce sync.Once
-	resultsFile string
-)
 
 // Where this tier writes what it wants kept: the rows and the forensic files beside them.
 func resultsDir() string {
@@ -119,39 +123,12 @@ func resultsDir() string {
 	return filepath.Join(os.TempDir(), "trajectory-shipper-perf")
 }
 
-// Resolves the file once and says where it is: a results file nobody can find is no results file.
-func resultsPath(t *testing.T) string {
-	t.Helper()
-	resultsOnce.Do(func() {
-		resultsFile = os.Getenv(resultsEnv)
-		if resultsFile == "" {
-			resultsFile = filepath.Join(resultsDir(), "results.ndjson")
-		}
-		if err := os.MkdirAll(filepath.Dir(resultsFile), 0o700); err != nil {
-			t.Fatalf("create the results directory for %s: %v", resultsFile, err)
-		}
-		t.Logf("results: appending to %s (%s overrides it)", resultsFile, resultsEnv)
-	})
-	return resultsFile
-}
-
-var (
-	shaOnce sync.Once
-	sha     string
-)
-
-// Its own variable rather than GITHUB_SHA: on a pull_request that is the ephemeral
-// refs/pull/N/merge commit, so every PR row would be keyed to an object no repository keeps.
-const shaEnv = "SHIPPER_PERF_GIT_SHA"
-
-// What CI named, else GITHUB_SHA, else git. "unknown" rather than a failed tier, said out loud
-// once: such a row is still forensics, but it is worthless as a trend point.
+// What CI named, else GITHUB_SHA, else git; "unknown" rather than a failed tier.
 func gitSHA(t *testing.T) string {
 	t.Helper()
 	shaOnce.Do(func() {
 		for _, name := range []string{shaEnv, "GITHUB_SHA"} {
-			if env := strings.TrimSpace(os.Getenv(name)); env != "" {
-				sha = env
+			if sha = strings.TrimSpace(os.Getenv(name)); sha != "" {
 				return
 			}
 		}

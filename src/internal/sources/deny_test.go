@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testHome = "/home/u"
@@ -13,93 +16,51 @@ const testHome = "/home/u"
 // MatchTree licenses a walk to skip a directory, so only a "<root>/**" rule may answer yes.
 func TestMatchTreeOnlyAnswersForWholeTrees(t *testing.T) {
 	d := New(testHome)
-
-	for _, dir := range []string{
-		testHome + "/.ssh",
-		testHome + "/.ssh/keys",
-		testHome + "/Library/Keychains",
+	for dir, tree := range map[string]bool{
+		"/.ssh": true, "/.ssh/keys": true, "/Library/Keychains": true,
+		// Denied as a path by a basename or exact rule, but their contents are not.
+		"/proj/.env": false, "/proj/release.key": false, "/.netrc": false, "/proj": false,
 	} {
-		if denied, _ := d.MatchTree(dir); !denied {
-			t.Errorf("%s is a denied tree", dir)
-		}
+		denied, pat := d.MatchTree(testHome + dir)
+		assert.Equalf(t, tree, denied, "%s (pattern %q)", dir, pat)
 	}
-	for _, dir := range []string{
-		// Denied as a path by a basename rule, but its contents are not.
-		testHome + "/proj/.env",
-		testHome + "/proj/release.key",
-		// Denied as a path exactly, same reasoning.
-		testHome + "/.netrc",
-		testHome + "/proj",
-	} {
-		if denied, pat := d.MatchTree(dir); denied {
-			t.Errorf("%s was pruned as a tree by %q, which denies only the path itself", dir, pat)
-		}
-	}
-}
-
-// realTempDir resolves its own symlinks, so a test comparing given and resolved forms is not measuring /var -> /private/var.
-func realTempDir(t *testing.T) string {
-	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dir
 }
 
 func TestMatchPairChecksBothForms(t *testing.T) {
 	home := realTempDir(t)
-	mkdir := func(p string) {
-		t.Helper()
-		if err := os.MkdirAll(p, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mkdir(filepath.Join(home, ".ssh"))
-	mkdir(filepath.Join(home, "work"))
 	secret := filepath.Join(home, ".ssh", "id_secret")
 	plain := filepath.Join(home, "work", "notes.jsonl")
-	for _, p := range []string{secret, plain} {
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A benign name that resolves into the denied tree.
+	writeFile(t, secret, "x")
+	writeFile(t, plain, "x")
+	// A benign name that resolves into the denied tree, and a denied location pointing at a harmless file.
 	intoDenied := filepath.Join(home, "work", "notes-link.jsonl")
+	outOfDenied := filepath.Join(home, ".ssh", "link.jsonl")
 	if err := os.Symlink(secret, intoDenied); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	// And the other direction: a denied location pointing at a harmless file.
-	outOfDenied := filepath.Join(home, ".ssh", "link.jsonl")
-	if err := os.Symlink(plain, outOfDenied); err != nil {
-		t.Fatal(err)
-	}
-
+	require.NoError(t, os.Symlink(plain, outOfDenied))
 	d := New(home)
 
-	if denied, pat := d.MatchPair(intoDenied, secret); !denied {
-		t.Error("a path resolving into the denied tree must be denied")
-	} else if !strings.HasSuffix(pat, "/.ssh/**") {
-		t.Errorf("reported %q, expected the ssh subtree pattern", pat)
+	for _, tc := range []struct {
+		given, resolved string
+		denied          bool
+	}{
+		{intoDenied, secret, true},
+		// Without the resolved form only the literal path is checked, and it is clean.
+		{intoDenied, "", false},
+		{outOfDenied, plain, true},
+		{plain, plain, false},
+	} {
+		denied, pat := d.MatchPair(tc.given, tc.resolved)
+		assert.Equalf(t, tc.denied, denied, "MatchPair(%s, %s) = %q", tc.given, tc.resolved, pat)
 	}
-	if denied, _ := d.MatchPair(intoDenied, ""); denied {
-		t.Error("without the resolved form only the literal path is checked, and it is clean")
-	}
-	if denied, _ := d.MatchPair(outOfDenied, plain); !denied {
-		t.Error("a denied location is denied whatever it points at")
-	}
-	if denied, _ := d.MatchPair(plain, plain); denied {
-		t.Error("an ordinary file must not be denied")
-	}
+	_, pat := d.MatchPair(intoDenied, secret)
+	assert.True(t, strings.HasSuffix(pat, "/.ssh/**"), pat)
 
 	// Match resolves for itself and must reach the same verdicts.
-	for _, p := range []string{intoDenied, outOfDenied, secret} {
-		if denied, _ := d.Match(p); !denied {
-			t.Errorf("Match(%s) should be denied", p)
-		}
-	}
-	if denied, _ := d.Match(plain); denied {
-		t.Errorf("Match(%s) should be allowed", plain)
+	for p, denied := range map[string]bool{intoDenied: true, outOfDenied: true, secret: true, plain: false} {
+		got, _ := d.Match(p)
+		assert.Equal(t, denied, got, p)
 	}
 }
 
@@ -108,63 +69,36 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 	type row struct{ path, want string }
 	corpus := []row{
 		// Denied roots, and the root itself.
-		{"~/.ssh", "~/.ssh/**"},
-		{"~/.ssh/config", "~/.ssh/**"},
-		{"~/.ssh/nested/deeper/key", "~/.ssh/**"},
-		{"~/.aws/credentials", "~/.aws/**"},
-		{"~/.gnupg/pubring.kbx", "~/.gnupg/**"},
-		{"~/.kube/config", "~/.kube/**"},
-		{"~/.azure/msal_token_cache.json", "~/.azure/**"},
-		{"~/.config/gh/hosts.yml", "~/.config/gh/**"},
-		{"~/.config/gcloud", "~/.config/gcloud/**"},
+		{"~/.ssh", "~/.ssh/**"}, {"~/.ssh/config", "~/.ssh/**"}, {"~/.ssh/nested/deeper/key", "~/.ssh/**"},
+		{"~/.aws/credentials", "~/.aws/**"}, {"~/.gnupg/pubring.kbx", "~/.gnupg/**"},
+		{"~/.kube/config", "~/.kube/**"}, {"~/.azure/msal_token_cache.json", "~/.azure/**"},
+		{"~/.config/gh/hosts.yml", "~/.config/gh/**"}, {"~/.config/gcloud", "~/.config/gcloud/**"},
 		{"~/Library/Keychains/login.keychain-db", "~/Library/Keychains/**"},
 		// Inside a denied tree AND matching an earlier pattern: the earlier one is reported, both directions.
-		{"~/.ssh/id_rsa", "~/.ssh/**"},
-		{"~/Library/Keychains/x.pem", "**/*.pem"},
+		{"~/.ssh/id_rsa", "~/.ssh/**"}, {"~/Library/Keychains/x.pem", "**/*.pem"},
 		{"~/Library/Keychains/login.key", "**/*.key"},
 		// Near misses on the roots.
-		{"~/.sshfoo/config", ""},
-		{"~/.ssh_backup", ""},
-		{"~/.config/ghost/notes.jsonl", ""},
+		{"~/.sshfoo/config", ""}, {"~/.ssh_backup", ""}, {"~/.config/ghost/notes.jsonl", ""},
 		// Exact files, and things next to them.
-		{"~/.netrc", "~/.netrc"},
-		{"~/.netrcx", ""},
-		{"~/x/.netrc", ""},
-		{"~/.npmrc", "~/.npmrc"},
-		{"~/.pypirc", "~/.pypirc"},
-		{"~/.git-credentials", "~/.git-credentials"},
-		{"~/.claude.json", "~/.claude.json"},
-		{"~/.claude.json.bak", ""},
-		{"~/.claude/.credentials.json", "~/.claude/.credentials.json"},
-		{"~/.claude/projects/p/a.jsonl", ""},
-		{"~/.docker/config.json", "~/.docker/config.json"},
-		{"~/.docker/daemon.json", ""},
+		{"~/.netrc", "~/.netrc"}, {"~/.netrcx", ""}, {"~/x/.netrc", ""}, {"~/.npmrc", "~/.npmrc"},
+		{"~/.pypirc", "~/.pypirc"}, {"~/.git-credentials", "~/.git-credentials"},
+		{"~/.claude.json", "~/.claude.json"}, {"~/.claude.json.bak", ""},
+		{"~/.claude/.credentials.json", "~/.claude/.credentials.json"}, {"~/.claude/projects/p/a.jsonl", ""},
+		{"~/.docker/config.json", "~/.docker/config.json"}, {"~/.docker/daemon.json", ""},
 		{"~/.codex/auth.json", "~/.codex/auth.json"},
 		{"~/.config/opencode/auth.json", "~/.config/opencode/auth.json"},
 		{"~/.local/share/opencode/auth.json", "~/.local/share/opencode/auth.json"},
 		// Basenames, anywhere, and their near misses.
-		{"~/proj/.env", "**/.env"},
-		{"~/proj/.envy", ""},
-		{"~/proj/.env.local", "**/.env.*"},
-		{"~/proj/.env.", "**/.env.*"},
-		{"~/proj/env", ""},
-		{"~/proj/id_rsa", "**/id_rsa"},
-		{"~/proj/id_rsa.pub", ""},
-		{"~/proj/id_ed25519", "**/id_ed25519"},
-		{"~/proj/deep/nest/.env", "**/.env"},
-		{"/srv/shared/.env", "**/.env"},
-		{"/.env", "**/.env"},
+		{"~/proj/.env", "**/.env"}, {"~/proj/.envy", ""}, {"~/proj/.env.local", "**/.env.*"},
+		{"~/proj/.env.", "**/.env.*"}, {"~/proj/env", ""}, {"~/proj/id_rsa", "**/id_rsa"},
+		{"~/proj/id_rsa.pub", ""}, {"~/proj/id_ed25519", "**/id_ed25519"}, {"~/proj/deep/nest/.env", "**/.env"},
+		{"/srv/shared/.env", "**/.env"}, {"/.env", "**/.env"},
 		// Extension rules.
-		{"~/proj/server.pem", "**/*.pem"},
-		{"~/proj/server.pem.old", ""},
-		{"~/proj/.pem", "**/*.pem"},
-		{"~/proj/bundle.p12", "**/*.p12"},
-		{"~/proj/private.key", "**/*.key"},
-		{"~/proj/keyfile", ""},
+		{"~/proj/server.pem", "**/*.pem"}, {"~/proj/server.pem.old", ""}, {"~/proj/.pem", "**/*.pem"},
+		{"~/proj/bundle.p12", "**/*.p12"}, {"~/proj/private.key", "**/*.key"}, {"~/proj/keyfile", ""},
 		// Ordinary files that must stay collectable.
-		{"~/.claude/projects/p/session.jsonl", ""},
-		{"/var/log/app.log", ""},
-		{"/", ""},
+		{"~/.claude/CLAUDE.md", ""}, {"~/.codex/sessions/2026/r.jsonl", ""}, {"~/work/project/src/db.go", ""},
+		{"/var/log/app.log", ""}, {"/", ""},
 	}
 
 	if runtime.GOOS == "windows" {
@@ -179,26 +113,27 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 			row{"$APPDATA/GitHub CLI/hosts.yml", "$APPDATA/GitHub CLI/**"})
 	}
 
-	exp := func(s string) string {
-		if s == "" {
-			return ""
+	for _, home := range []string{testHome, t.TempDir()} {
+		exp := func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return normalize(os.ExpandEnv(strings.Replace(s, "~", home, 1)))
 		}
-		return normalize(os.ExpandEnv(strings.Replace(s, "~", testHome, 1)))
-	}
-	d := New(testHome)
-	reported := map[string]bool{}
-	for _, row := range corpus {
-		path, want := exp(row.path), exp(row.want)
-		reported[want] = true
-		ok, pat := d.matchCandidate(path)
-		if ok != (want != "") || pat != want {
-			t.Errorf("%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
+		d := New(home)
+		reported := map[string]bool{}
+		for _, row := range corpus {
+			path, want := exp(row.path), exp(row.want)
+			reported[want] = true
+			ok, pat := d.matchCandidate(path)
+			assert.Truef(t, ok == (want != "") && pat == want, "%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
+			ok, pat = d.Match(path)
+			assert.Equal(t, want != "", ok, path)
+			assert.Equal(t, want, pat, path)
 		}
-	}
-	// A new compiled pattern needs a path that reports against it, or the corpus stops covering the list.
-	for _, pat := range d.Patterns() {
-		if !reported[pat] {
-			t.Errorf("no corpus path is reported against %q: add one", pat)
+		// A new compiled pattern needs a path that reports against it, or the corpus stops covering the list.
+		for _, pat := range d.Patterns() {
+			assert.Truef(t, reported[pat], "no corpus path is reported against %q: add one", pat)
 		}
 	}
 }

@@ -4,10 +4,7 @@ package crashjournal
 
 import "os"
 
-// Signal 0 is not portable here: os.Process.Signal refuses everything but Kill on Windows, so the
-// POSIX probe would call every pid dead and every concurrent run a crash. os.FindProcess opens a
-// handle instead, and fails when the process is gone. Errs toward alive, which suppresses a report,
-// rather than toward dead, which would invent one.
+// Windows refuses signal 0, so os.FindProcess's handle is the probe; it errs toward alive, which never invents a crash.
 func alive(pid int) bool {
 	if pid <= 0 {
 		return false

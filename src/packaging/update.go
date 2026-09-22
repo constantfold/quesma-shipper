@@ -9,7 +9,6 @@ import (
 )
 
 type UpdateOptions = common.Options
-type UpdateResult = common.Result
 
 const BrewUninstall = common.BrewUninstall
 
@@ -19,7 +18,7 @@ func CheckUpdate(ctx context.Context, o UpdateOptions) (string, time.Time, bool,
 	return common.Check(ctx, o)
 }
 
-func Update(ctx context.Context, o UpdateOptions) (UpdateResult, error) {
+func Update(ctx context.Context, o UpdateOptions) (common.Result, error) {
 	return common.Update(ctx, o, updateTarget, applyTarget)
 }
 

@@ -1,7 +1,6 @@
-package upload
-
 // The PUT itself: one request per ticket, HTTP 200 the only success. No retry loop lives here:
 // a failed PUT commits nothing and the next run reauthorizes.
+package upload
 
 import (
 	"bytes"
@@ -18,27 +17,19 @@ import (
 	"time"
 )
 
-// Timeouts for the presigned data path, per phase and never one overall http.Client.Timeout:
-// that one covers the body upload too, so no single value both allows a 256 MiB object on a slow
-// link and catches a stall. ResponseHeaderTimeout, the stall catcher, starts after the body.
+// Per-phase timeouts: no single Client.Timeout both allows 256 MiB on a slow link and catches a stall.
 const (
 	dialTimeout           = 10 * time.Second
 	tlsTimeout            = 10 * time.Second
-	responseHeaderTimeout = 60 * time.Second
+	responseHeaderTimeout = 60 * time.Second // the stall catcher, starting after the body
 	idleTimeout           = 90 * time.Second
 	expectContinueTimeout = 5 * time.Second
+	operationOverhead     = 90 * time.Second
+	minThroughput         = 64 << 10 // bytes per second
+	maxOperation          = 30 * time.Minute
 )
 
-// The whole-operation bound scales with the body, from a kilobyte heartbeat to a huge transcript.
-// minThroughput is pessimistic on purpose; being wrong that way costs a retry on the next run.
-const (
-	operationOverhead = 90 * time.Second
-	minThroughput     = 64 << 10 // bytes per second
-	maxOperation      = 30 * time.Minute
-)
-
-// maxDiagnosticBytes is how much of a failure body becomes a diagnostic, maxDrainBytes how much
-// more is read to keep the connection reusable. A bounded read is the only read.
+// A failure body is read this far for the diagnostic, then drained further to keep the connection reusable.
 const (
 	maxDiagnosticBytes = 4 << 10
 	maxDrainBytes      = 64 << 10
@@ -48,8 +39,7 @@ const (
 // ErrRedirect is any 3xx: a presigned signature covers one origin and path, so none is followed.
 var ErrRedirect = errors.New("upload: the object store redirected and presigned tickets are never followed")
 
-// StatusError is a PUT that answered something other than 200. Reason is the store's own text,
-// sanitized; the URL and its query never reach it.
+// StatusError is a PUT that answered something other than 200; Reason is the store's sanitized text, never the URL.
 type StatusError struct {
 	Status int
 	Reason string
@@ -62,13 +52,11 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("upload: object store answered HTTP %d: %s", e.Status, e.Reason)
 }
 
-// Uploader holds the bounded client, one per run so the pool is reused. The transport is not
-// configurable: every setting on it is a way back to the unbounded hang it exists to prevent.
+// Uploader's transport is not configurable: every setting is a way back to the unbounded hang it prevents.
 type Uploader struct {
 	client *http.Client
 }
 
-// New builds the uploader.
 func New() *Uploader {
 	return &Uploader{client: &http.Client{
 		Transport: &http.Transport{
@@ -91,7 +79,6 @@ func New() *Uploader {
 
 // Upload spends one ticket ValidateTicket accepted, re-deriving no URL and no header of its own.
 func (u *Uploader) Upload(ctx context.Context, ticket Ticket, body []byte) error {
-	// Whole-operation deadline, scaled by body size and capped.
 	d := operationOverhead + time.Duration(len(body)/minThroughput)*time.Second
 	ctx, cancel := context.WithTimeout(ctx, min(d, maxOperation))
 	defer cancel()
@@ -147,8 +134,5 @@ func sanitizeReason(body string) string {
 		return r
 	}, strings.TrimSpace(body))
 	oneLine := []rune(strings.Join(strings.Fields(cleaned), " "))
-	if len(oneLine) > maxReasonRunes {
-		oneLine = oneLine[:maxReasonRunes]
-	}
-	return string(oneLine)
+	return string(oneLine[:min(len(oneLine), maxReasonRunes)])
 }

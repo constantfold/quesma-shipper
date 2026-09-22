@@ -1,26 +1,17 @@
 # Release downloads
 
-This document describes the public release repository at `updates.quesma.dev` and its friendly
-download endpoints. It is both an operator guide and a statement of the trust boundary for people
-downloading Quesma Shipper.
-
-The TUF repository and the `/download/` endpoints are both live. They are the supported way to
-install Quesma Shipper, and they are the links the installation instructions use.
+The public release repository at `updates.quesma.dev` and its friendly download endpoints, which
+the installation instructions link to: an operator guide and the trust boundary for downloaders.
 
 ## Public release repository
 
 Release artifacts and [The Update Framework (TUF)](https://theupdateframework.io/) metadata are
-stored in a public Cloudflare R2 bucket exposed through `https://updates.quesma.dev`. Public bucket
-access does not provide a directory listing, so a `404` at the origin or at `/targets/` is expected.
+stored in a public Cloudflare R2 bucket exposed through `https://updates.quesma.dev`. There is no
+directory listing, so a `404` at the origin or at `/targets/` is expected. The stable entry points
+are `metadata/1.root.json`, the initial offline-signed root of trust, and `metadata/timestamp.json`.
 
-The stable public entry points are:
-
-- `https://updates.quesma.dev/metadata/1.root.json` — the initial offline-signed root of trust.
-- `https://updates.quesma.dev/metadata/timestamp.json` — the current timestamp metadata.
-
-The timestamp identifies the versioned snapshot, the snapshot identifies the versioned targets
-metadata, and the targets metadata contains the length and SHA-256 hash of each released file. With
-consistent snapshots enabled, their public URLs have these forms:
+The timestamp names the versioned snapshot, the snapshot names the versioned targets metadata, and
+the targets metadata holds each released file's length and SHA-256. With consistent snapshots:
 
 ```text
 https://updates.quesma.dev/metadata/<version>.snapshot.json
@@ -28,17 +19,12 @@ https://updates.quesma.dev/metadata/<version>.targets.json
 https://updates.quesma.dev/targets/<sha256>.<target-name>
 ```
 
-`release.json` is itself a TUF target. It records the release version and maps platform identifiers
-such as `linux/amd64` to target names. Consumers should use that manifest instead of assuming that a
-binary's logical name never changes.
-
-The hash-addressed target URLs are immutable but not stable aliases: a new artifact has a new hash
-and therefore a new URL. They are appropriate for the updater and diagnostics, but not for a
-permanent link in the README.
+`release.json` is itself a TUF target. It records the release version and maps platform
+identifiers such as `linux/amd64` to target names; consumers should use it rather than assume a
+binary's name never changes. Hash-addressed target URLs are immutable, so a new artifact has a new
+URL: they suit the updater and diagnostics, not a permanent link.
 
 ## Friendly download URLs
-
-The public, stable download URLs will be:
 
 ```text
 https://updates.quesma.dev/download/quesma-shipper-macos-universal.pkg
@@ -51,40 +37,30 @@ https://updates.quesma.dev/download/QuesmaShipperSetup-arm64.exe
 ```
 
 Each endpoint resolves `timestamp.json`, the referenced snapshot and targets metadata, and
-`release.json`, then returns a temporary redirect to the current hash-addressed target. The Worker
-does not copy, rename, overwrite, or delete any TUF object. No Worker deployment is needed for an
-ordinary Shipper release.
+`release.json`, then returns a `302` to the current hash-addressed target. A `301` could leave
+browsers and caches pointing at an older release. The Worker never copies, renames, overwrites,
+or deletes a TUF object, and an ordinary release needs no Worker deployment.
 
-The release publisher sets `Content-Disposition` HTTP metadata on every R2 target, using its
-unhashed TUF target name. Browsers therefore save a redirected download as, for example,
-`quesma-shipper-macos-universal.pkg` instead of including the consistent-snapshot hash. Setting the
-header on the Worker's redirect is not sufficient: the browser chooses the filename from the final
-R2 response.
-
-Use a `302` response and do not cache it permanently. A `301` can leave browsers and intermediate
-caches pointing at an older release.
+The release publisher sets `Content-Disposition` on every R2 target to its unhashed TUF target
+name, because the browser takes the saved filename from the final R2 response, not the redirect.
 
 ## Trust boundary
 
-The installed updater verifies the TUF signatures, expiry, rollback protection, target length, and
-target hash against the root embedded in the binary. That remains the authenticated update path.
+The installed updater verifies TUF signatures, expiry, rollback protection, target length, and
+target hash against the root embedded in the binary. That is the authenticated update path.
 
-The Worker below parses public TUF metadata for discovery, but it does **not** verify its signatures.
-A browser following its redirect is not a TUF client. Manual downloads therefore trust HTTPS, the
-Cloudflare configuration, and any platform-specific code signing. The macOS package is signed and
-notarized. The Linux and Windows release jobs do not currently apply an operating-system code
-signature; their binaries become authenticated when a TUF client verifies them.
+The Worker parses public TUF metadata for discovery but does **not** verify its signatures, and a
+browser following its redirect is not a TUF client. Manual downloads therefore trust HTTPS, the
+Cloudflare configuration, and any platform code signing: the macOS package is signed and
+notarized, while Linux and Windows binaries currently carry no operating-system signature and are
+authenticated only when a TUF client verifies them. Never call a manual browser download "TUF
+verified"; that guarantee needs an installer that embeds the trusted root and runs the full TUF
+client workflow.
 
-Do not describe a manual browser download as “TUF verified.” If manual downloads need the same
-trust guarantee, provide a small installer that embeds the trusted root and performs the complete
-TUF client workflow.
-
-The Worker also must not receive the TUF signing key, R2 API credentials, or CI publication
-credentials. The route needs read access only to URLs that are already public.
+The Worker must not receive the TUF signing key, R2 API credentials, or CI publication
+credentials. It reads only URLs that are already public.
 
 ## Worker implementation
-
-Create a Worker with the following TypeScript entry point:
 
 ```ts
 const downloads: Record<string, string> = {
@@ -104,24 +80,17 @@ type Metadata = {
   };
 };
 
-type Release = {
-  targets?: Record<string, unknown>;
-};
+// release.json is plain JSON, not signed metadata; the separate type keeps the two apart.
+type Release = { targets?: Record<string, unknown> };
 
 async function readJSON<T>(origin: string, path: string): Promise<T> {
   const response = await fetch(`${origin}/${path}`);
-  if (!response.ok) {
-    throw new Error(`${path}: HTTP ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   return response.json() as Promise<T>;
 }
 
 function version(value: unknown, label: string): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < 1
-  ) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
     throw new Error(`invalid ${label}`);
   }
   return value;
@@ -137,70 +106,29 @@ function hash(value: unknown, label: string): string {
 export default {
   async fetch(request: Request): Promise<Response> {
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method not allowed", {
-        status: 405,
-        headers: { Allow: "GET, HEAD" },
-      });
+      return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
     }
-
     const url = new URL(request.url);
     const platform = downloads[url.pathname];
-    if (!platform) {
-      return new Response("Unknown download", { status: 404 });
-    }
+    if (!platform) return new Response("Unknown download", { status: 404 });
 
     try {
-      const timestamp = await readJSON<Metadata>(
-        url.origin,
-        "metadata/timestamp.json",
-      );
-      const snapshotVersion = version(
-        timestamp.signed?.meta?.["snapshot.json"]?.version,
-        "snapshot version",
-      );
-
-      const snapshot = await readJSON<Metadata>(
-        url.origin,
-        `metadata/${snapshotVersion}.snapshot.json`,
-      );
-      const targetsVersion = version(
-        snapshot.signed?.meta?.["targets.json"]?.version,
-        "targets version",
-      );
-
-      const targets = await readJSON<Metadata>(
-        url.origin,
-        `metadata/${targetsVersion}.targets.json`,
-      );
-      const releaseHash = hash(
-        targets.signed?.targets?.["release.json"]?.hashes?.sha256,
-        "release manifest hash",
-      );
-      const release = await readJSON<Release>(
-        url.origin,
-        `targets/${releaseHash}.release.json`,
-      );
+      const timestamp = await readJSON<Metadata>(url.origin, "metadata/timestamp.json");
+      const snapshotVersion = version(timestamp.signed?.meta?.["snapshot.json"]?.version, "snapshot version");
+      const snapshot = await readJSON<Metadata>(url.origin, `metadata/${snapshotVersion}.snapshot.json`);
+      const targetsVersion = version(snapshot.signed?.meta?.["targets.json"]?.version, "targets version");
+      const targets = await readJSON<Metadata>(url.origin, `metadata/${targetsVersion}.targets.json`);
+      const releaseHash = hash(targets.signed?.targets?.["release.json"]?.hashes?.sha256, "release manifest hash");
+      const release = await readJSON<Release>(url.origin, `targets/${releaseHash}.release.json`);
 
       const targetName = release.targets?.[platform];
-      if (
-        typeof targetName !== "string" ||
-        !/^[A-Za-z0-9._-]+$/.test(targetName)
-      ) {
+      if (typeof targetName !== "string" || !/^[A-Za-z0-9._-]+$/.test(targetName)) {
         throw new Error(`invalid target for ${platform}`);
       }
-
-      const targetHash = hash(
-        targets.signed?.targets?.[targetName]?.hashes?.sha256,
-        "target hash",
-      );
-      const location = `${url.origin}/targets/${targetHash}.${targetName}`;
-
+      const targetHash = hash(targets.signed?.targets?.[targetName]?.hashes?.sha256, "target hash");
       return new Response(null, {
         status: 302,
-        headers: {
-          Location: location,
-          "Cache-Control": "no-store",
-        },
+        headers: { Location: `${url.origin}/targets/${targetHash}.${targetName}`, "Cache-Control": "no-store" },
       });
     } catch (error) {
       console.error(error);
@@ -210,28 +138,22 @@ export default {
 };
 ```
 
-The Worker deliberately reads the public origin rather than using an R2 binding. Because its route
-matches only `/download/*`, requests to `/metadata/*` and `/targets/*` continue to the existing R2
-origin. This avoids giving the Worker credentials or the ability to mutate the release bucket.
-
-The `release.json` file is an ordinary JSON object, unlike signed TUF metadata. The separate type
-and validation in the example prevent accidentally treating it as signed metadata.
+Reading the public origin instead of an R2 binding, the Worker holds no credentials and cannot
+mutate the bucket. Its route matches only `/download/*`; everything else continues to R2.
 
 ## Cloudflare setup
 
-The `quesma.dev` zone and the R2 custom domain must be in an account where Workers can add a route.
-The existing `updates.quesma.dev` DNS record must remain proxied through Cloudflare.
+The `quesma.dev` zone and the R2 custom domain must be in an account where Workers can add a
+route, and the `updates.quesma.dev` DNS record must stay proxied through Cloudflare.
 
-1. In **Workers & Pages**, create a Worker named `quesma-release-downloads`.
-2. Paste or deploy the implementation above. It needs no variables, secrets, or R2 binding.
-3. Under the Worker's **Settings > Domains & Routes**, add a route rather than a Worker Custom
-   Domain.
-4. Set the route to `updates.quesma.dev/download/*` in the `quesma.dev` zone.
-5. Configure the route to fail closed. Failure must produce an error rather than silently treating
-   `/download/*` as an R2 object path.
-6. Leave the existing R2 custom domain in place. It continues serving every unmatched path.
+1. In **Workers & Pages**, create a Worker named `quesma-release-downloads` from the code above.
+   It needs no variables, secrets, or R2 binding.
+2. Under **Settings > Domains & Routes**, add a route (not a Worker Custom Domain) for
+   `updates.quesma.dev/download/*` in the `quesma.dev` zone, configured to fail closed so a failure
+   is an error rather than an R2 object lookup.
+3. Leave the R2 custom domain in place. It keeps serving every unmatched path.
 
-The equivalent Wrangler configuration is:
+The equivalent Wrangler configuration:
 
 ```toml
 name = "quesma-release-downloads"
@@ -244,50 +166,40 @@ routes = [
 ]
 ```
 
-Do not add an `r2_buckets` binding or commit account IDs, API tokens, bucket names, or credentials.
-The compatibility flag permits the Worker to fetch public URLs in the same Cloudflare zone. It does
-not grant access to private resources. Without it, a same-zone subrequest can fail with Cloudflare
-error `1042`.
-Cloudflare documents path-specific
-[Worker routes](https://developers.cloudflare.com/workers/configuration/routing/routes/) and public
-[R2 custom domains](https://developers.cloudflare.com/r2/buckets/public-buckets/).
+Do not add an `r2_buckets` binding or commit account IDs, API tokens, bucket names, or
+credentials. The compatibility flag lets the Worker fetch public URLs in its own zone and grants
+no access to private resources; without it, a same-zone subrequest can fail with error `1042`.
+See Cloudflare's [Worker routes](https://developers.cloudflare.com/workers/configuration/routing/routes/)
+and [R2 custom domains](https://developers.cloudflare.com/r2/buckets/public-buckets/).
 
 ## Deployment checks
 
-Test the metadata chain before deploying the route:
+Before deploying the route, check the metadata chain:
 
 ```sh
 curl -fsS https://updates.quesma.dev/metadata/1.root.json >/dev/null
 curl -fsS https://updates.quesma.dev/metadata/timestamp.json >/dev/null
 ```
 
-After deployment, check every friendly endpoint. Each response must be `302`; its `Location` must
-start with `https://updates.quesma.dev/targets/`, and the target request must return `200` with an
-unhashed filename in `Content-Disposition`:
+After deployment, every friendly endpoint must answer `302` with a `Location` under
+`https://updates.quesma.dev/targets/`, and the target must return `200` with an unhashed filename
+in `Content-Disposition`. Check every endpoint this way, and test the macOS package on a supported Mac:
 
 ```sh
 curl -fsSI https://updates.quesma.dev/download/quesma-shipper-linux-amd64
 curl -fsSIL https://updates.quesma.dev/download/quesma-shipper-linux-amd64
 ```
 
-Also test both architectures on Linux, both portable and setup downloads on Windows, and install
-the macOS package on a supported Mac. Only after all seven endpoints pass should the README publish
-the friendly URLs.
-
-The release workflow publishes targets first, versioned metadata second, and `timestamp.json` last.
-Preserve that order: the Worker reads the timestamp first, so it sees either the complete previous
-release or the complete new release.
+The release workflow publishes targets first, versioned metadata second, and `timestamp.json`
+last. Preserve that order: the Worker reads the timestamp first, so it sees either the complete
+previous release or the complete new one.
 
 ## Operations and rollback
 
 - Monitor Worker `5xx` responses and the expiry of TUF metadata.
-- Keep redirects uncached while validating the service. A short cache lifetime such as 60 seconds
-  can be considered later.
-- Worker requests and R2 reads count against their respective Cloudflare allowances. R2 egress is
-  currently free; consult the official
-  [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and
-  [R2 pricing](https://developers.cloudflare.com/r2/pricing/) pages rather than copying prices into
-  this repository.
-- To roll back, remove or disable only the `updates.quesma.dev/download/*` Worker route. Do not
-  remove the R2 custom domain or change `/metadata/*` or `/targets/*`; installed clients depend on
-  them.
+- Keep redirects uncached; a short cache lifetime such as 60 seconds can be considered later.
+- Worker requests and R2 reads count against their Cloudflare allowances; see the
+  [Workers](https://developers.cloudflare.com/workers/platform/pricing/) and
+  [R2](https://developers.cloudflare.com/r2/pricing/) pricing pages rather than copying prices here.
+- To roll back, remove or disable only the `updates.quesma.dev/download/*` route. Never remove the
+  R2 custom domain or change `/metadata/*` or `/targets/*`; installed clients depend on them.

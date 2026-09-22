@@ -10,8 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// maxACEs bounds the enumeration: GetAce reports the end of the list as an error, and a corrupt
-// ACL must not become an unbounded loop.
+// maxACEs keeps a corrupt ACL from becoming an unbounded loop; GetAce reports the end as an error.
 const maxACEs = 4096
 
 func verifyInstallDir(dir, installerSID string) error {
@@ -64,22 +63,16 @@ func directoryACEs(dir string) ([]ace, error) {
 func describeTrustees(sids []string) []string {
 	described := make([]string, 0, len(sids))
 	for _, raw := range sids {
-		described = append(described, describeTrustee(raw))
+		name := raw
+		if sid, err := windows.StringToSid(raw); err == nil {
+			if account, domain, _, err := sid.LookupAccount(""); err == nil && account != "" {
+				name = account
+				if domain != "" {
+					name = domain + `\` + account
+				}
+			}
+		}
+		described = append(described, name)
 	}
 	return described
-}
-
-func describeTrustee(raw string) string {
-	sid, err := windows.StringToSid(raw)
-	if err != nil {
-		return raw
-	}
-	account, domain, _, err := sid.LookupAccount("")
-	if err != nil || account == "" {
-		return raw
-	}
-	if domain == "" {
-		return account
-	}
-	return domain + `\` + account
 }

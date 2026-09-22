@@ -1,11 +1,9 @@
-// store.go is the store side of the join: the vendor row shapes in the two generations a live
-// state.vscdb holds, and the indexing and ordering that turn rows into a conversation's event
-// list. Every struct decodes only what the join reads: no rows ship.
+// store.go decodes the vendor row shapes of both generations a live state.vscdb holds into each
+// conversation's event list. Structs decode only what the join reads: rows reach megabytes.
 
 package cursorjoin
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json"
 	"slices"
@@ -14,21 +12,16 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
 )
 
-// composerData is the per-conversation record. Only the fields the join needs are decoded:
-// rows reach megabytes, and decoding whole would pull attachment hex into memory for nothing.
 type composerData struct {
 	// The newer generation's authoritative bubble order, which the inline array does not carry.
-	FullConversationHeadersOnly []header `json:"fullConversationHeadersOnly"`
+	FullConversationHeadersOnly []struct {
+		BubbleID string `json:"bubbleId"`
+	} `json:"fullConversationHeadersOnly"`
 
 	// The older generation's inline array, empty on newer conversations.
 	Conversation []bubble `json:"conversation"`
 }
 
-type header struct {
-	BubbleID string `json:"bubbleId"`
-}
-
-// bubble is one turn record.
 type bubble struct {
 	BubbleID  string `json:"bubbleId"`
 	Type      int    `json:"type"` // 1 = user, 2 = assistant
@@ -36,13 +29,11 @@ type bubble struct {
 	CreatedAt string `json:"createdAt"`
 	RequestID string `json:"requestId"`
 
-	// Scaffolding markers, skipped as non-events. Current stores stamp capabilityType 15 on
-	// every tool bubble, so the flag alone no longer implies scaffolding; see isScaffolding.
+	// Current stores stamp capabilityType 15 on every tool bubble, so see isScaffolding.
 	IsCapabilityIteration bool       `json:"isCapabilityIteration"`
 	CapabilityType        flexString `json:"capabilityType"`
 
-	// Older stores mark reasoning with isThought, current ones write a thinking object; current
-	// transcripts write it as a plain text block, so it is alignable. See matchBlock.
+	// Older stores mark reasoning with isThought, current ones write a thinking object.
 	IsThought bool          `json:"isThought"`
 	Thinking  *thinkingData `json:"thinking"`
 
@@ -52,52 +43,30 @@ type bubble struct {
 	TurnDurationMs int64  `json:"turnDurationMs"`
 
 	// ModelName is the older stores' field; current ones nest it as modelInfo.modelName.
-	ModelName string     `json:"modelName"`
-	ModelInfo *modelInfo `json:"modelInfo"`
-}
-
-type modelInfo struct {
 	ModelName string `json:"modelName"`
+	ModelInfo *struct {
+		ModelName string `json:"modelName"`
+	} `json:"modelInfo"`
 }
 
-// thinkingData decodes reasoning in both encodings a store holds: an object, and that object
-// serialised into a string on server-hydrated rows. A strict field would reject the whole row.
+// thinkingData decodes reasoning as an object, or as one serialised into a string on server-hydrated rows.
 type thinkingData struct {
 	Text string `json:"text"`
 }
 
 func (t *thinkingData) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		return nil
+	type plain thinkingData // does not re-enter this method
+	var s string
+	if json.Unmarshal(b, &s) != nil {
+		return json.Unmarshal(b, (*plain)(t))
 	}
-	// A named type, so decoding the object form does not re-enter this method.
-	type plain struct {
-		Text string `json:"text"`
+	// A string with no text under the known name is taken as the reasoning itself.
+	if json.Unmarshal([]byte(s), (*plain)(t)) != nil || t.Text == "" {
+		t.Text = s
 	}
-	if b[0] == '"' {
-		var inner string
-		if err := json.Unmarshal(b, &inner); err != nil {
-			return err
-		}
-		// A string with no text under the known name is taken as the reasoning itself.
-		var p plain
-		if err := json.Unmarshal([]byte(inner), &p); err != nil || p.Text == "" {
-			t.Text = inner
-			return nil
-		}
-		t.Text = p.Text
-		return nil
-	}
-	var p plain
-	if err := json.Unmarshal(b, &p); err != nil {
-		return err
-	}
-	t.Text = p.Text
 	return nil
 }
 
-// reasoningText is a bubble's reasoning in either generation's encoding; empty means none.
 func (b *bubble) reasoningText() string {
 	if b.Thinking != nil && b.Thinking.Text != "" {
 		return b.Thinking.Text
@@ -108,31 +77,17 @@ func (b *bubble) reasoningText() string {
 	return ""
 }
 
-// flexString decodes any JSON value as a string: the store migrated several fields to numeric
-// enums, and a strict string field makes json.Unmarshal reject the whole bubble row.
+// flexString keeps a non-string's raw JSON text: the store migrated fields to numeric enums.
 type flexString string
 
 func (f *flexString) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		*f = ""
-		return nil
+	if json.Unmarshal(b, (*string)(f)) != nil {
+		*f = flexString(b)
 	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		*f = flexString(s)
-		return nil
-	}
-	// Any other shape keeps its raw JSON text rather than costing the record it sits in.
-	*f = flexString(b)
 	return nil
 }
 
-// toolFormerData is the tool call as the store records it: the id, the status, and the result
-// this whole enricher exists for. Tool is a string in older stores, a numeric enum in current.
+// toolFormerData is the tool call as the store records it; Tool is a string in older stores, an enum now.
 type toolFormerData struct {
 	ToolCallID string     `json:"toolCallId"`
 	Name       string     `json:"name"`
@@ -143,66 +98,53 @@ type toolFormerData struct {
 	Result     string     `json:"result"`
 }
 
-// indexed is the store side, arranged for the join.
 type indexed struct {
 	composers map[string]*composerData
 	bubbles   map[string]map[string]*bubble // conversation -> bubbleId -> bubble
-	order     map[string][]string           // conversation -> bubble ids in key order
+	order     map[string][]*bubble          // conversation -> bubbles in key order
 
-	// Surfaced as a note, never swallowed: silence here turns struct drift into a mismatch
-	// alarm that points away from its cause.
+	// Surfaced as a note: silence turns struct drift into a mismatch alarm pointing elsewhere.
 	decodeErrors int
 }
 
 func indexRows(rows []sqliteread.Row) *indexed {
-	ix := &indexed{
-		composers: map[string]*composerData{},
-		bubbles:   map[string]map[string]*bubble{},
-		order:     map[string][]string{},
-	}
+	ix := &indexed{composers: map[string]*composerData{}, bubbles: map[string]map[string]*bubble{}, order: map[string][]*bubble{}}
 	for _, r := range rows {
-		switch {
-		case strings.HasPrefix(r.Key, composerPrefix):
+		if id, ok := strings.CutPrefix(r.Key, composerPrefix); ok {
 			var c composerData
-			if err := json.Unmarshal(r.Value, &c); err != nil {
+			if json.Unmarshal(r.Value, &c) != nil {
 				ix.decodeErrors++
-				continue
+			} else {
+				ix.composers[id] = &c
 			}
-			ix.composers[strings.TrimPrefix(r.Key, composerPrefix)] = &c
-
-		case strings.HasPrefix(r.Key, bubblePrefix):
-			// bubbleId:<conversation>:<bubble>
-			conv, bubbleID, ok := strings.Cut(strings.TrimPrefix(r.Key, bubblePrefix), ":")
-			if !ok {
-				ix.decodeErrors++
-				continue
-			}
-			var b bubble
-			if err := json.Unmarshal(r.Value, &b); err != nil {
-				ix.decodeErrors++
-				continue
-			}
-			if b.BubbleID == "" {
-				b.BubbleID = bubbleID
-			}
-			if ix.bubbles[conv] == nil {
-				ix.bubbles[conv] = map[string]*bubble{}
-			}
-			ix.bubbles[conv][bubbleID] = &b
-			ix.order[conv] = append(ix.order[conv], bubbleID)
+			continue
 		}
+		rest, ok := strings.CutPrefix(r.Key, bubblePrefix)
+		if !ok {
+			continue // SQLite's LIKE ignores case; the prefixes do not
+		}
+		conv, bubbleID, ok := strings.Cut(rest, ":") // bubbleId:<conversation>:<bubble>
+		var b bubble
+		if !ok || json.Unmarshal(r.Value, &b) != nil {
+			ix.decodeErrors++
+			continue
+		}
+		b.BubbleID = cmp.Or(b.BubbleID, bubbleID)
+		if ix.bubbles[conv] == nil {
+			ix.bubbles[conv] = map[string]*bubble{}
+		}
+		ix.bubbles[conv][bubbleID] = &b
+		ix.order[conv] = append(ix.order[conv], &b)
 	}
 	return ix
 }
 
-// orderBubbles produces the authoritative bubble order: fullConversationHeadersOnly, the only
-// place it is recorded, then a key scan for the errored turns whose header list is empty.
-func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string) []*bubble {
-	if c != nil && len(c.FullConversationHeadersOnly) > 0 {
-		out := make([]*bubble, 0, len(c.FullConversationHeadersOnly))
+// orderBubbles takes the recorded header order, then the inline array, then a key scan (errored turns).
+func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []*bubble) []*bubble {
+	var out []*bubble
+	if c != nil {
 		for _, h := range c.FullConversationHeadersOnly {
-			// A header naming an absent row is normal after compaction; skipping the gap
-			// rather than counting it is what keeps a compacted conversation shipping.
+			// A header naming an absent row is normal after compaction.
 			if b, ok := bubbles[h.BubbleID]; ok {
 				out = append(out, b)
 			}
@@ -210,44 +152,23 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string
 		if len(out) > 0 {
 			return out
 		}
-	}
-
-	// Inline conversation, the older generation.
-	if c != nil && len(c.Conversation) > 0 {
-		out := make([]*bubble, 0, len(c.Conversation))
 		for i := range c.Conversation {
 			out = append(out, &c.Conversation[i])
 		}
-		return out
-	}
-
-	// Key scan. createdAt is a real timestamp, unlike anything in the transcript, so it is the
-	// ordering of last resort; ties fall back to the sorted key order, so this is deterministic.
-	out := make([]*bubble, 0, len(bubbles))
-	seen := map[string]bool{}
-	for _, id := range keyOrder {
-		if b, ok := bubbles[id]; ok && !seen[id] {
-			seen[id] = true
-			out = append(out, b)
+		if len(out) > 0 {
+			return out
 		}
 	}
+	// createdAt is a real timestamp, unlike anything in the transcript; ties keep key order.
+	out = slices.Clone(keyOrder)
 	slices.SortStableFunc(out, func(a, b *bubble) int { return cmp.Compare(a.CreatedAt, b.CreatedAt) })
 	return out
 }
 
-// isScaffolding reports whether a bubble has no transcript counterpart by design.
+// isScaffolding reports a bubble with no transcript counterpart by design; tool calls and reasoning never are.
 func isScaffolding(b *bubble) bool {
-	// A tool call or a reasoning bubble is an event whatever else it is flagged with; one the
-	// transcript does not mention simply goes unconsumed, which alignment tolerates.
-	if b.ToolFormerData != nil {
+	if b.ToolFormerData != nil || b.reasoningText() != "" {
 		return false
 	}
-	if b.reasoningText() != "" {
-		return false
-	}
-	if b.IsCapabilityIteration || b.CapabilityType != "" {
-		return true
-	}
-	// Neither text nor a tool call: an artefact of how the store records turn boundaries.
-	return b.Text == ""
+	return b.IsCapabilityIteration || b.CapabilityType != "" || b.Text == ""
 }

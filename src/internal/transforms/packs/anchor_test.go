@@ -3,18 +3,21 @@ package packs
 import (
 	"fmt"
 	"math/rand"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The entry literals of every vendored rule: a keyword edit shows up as a diff in this table,
 // and a rule that quietly stopped being anchored shows up as "sweep".
 func TestAnchorLiterals(t *testing.T) {
 	want := map[string]string{
-		// gitleaks-core. slack-webhook and gcp-service-account-key declare "sweep":
-		// their keywords occur mid-match, so anchoring would miss every redaction.
+		// gitleaks-core. slack-webhook and gcp-service-account-key have mid-match keywords.
 		"aws-access-key-id":       `wb ["AKIA" "ASIA" "ABIA" "ACCA"]`,
 		"aws-secret-key":          `fold ["aws"]`,
 		"github-pat":              `wb ["ghp_" "gho_" "ghu_" "ghs_" "ghr_"]`,
@@ -32,11 +35,8 @@ func TestAnchorLiterals(t *testing.T) {
 		"twilio-key":              `wb ["SK"]`,
 		"azure-storage-key":       `["AccountKey="]`,
 		"gcp-service-account-key": "sweep",
-		// quesma-extra. secret-access-key is deliberately case-sensitive: a folded rule
-		// cannot anchor on a keyword starting with "s" (the long-s fold orbit is
-		// non-ASCII), so the wild spellings are enumerated as their own anchors.
-		// hashicorp-tf-api-token's keyword occurs mid-match and azure-ad-client-secret's
-		// two bytes in, so both declare "sweep".
+		// quesma-extra. secret-access-key enumerates its spellings: a folded "s" keyword cannot
+		// anchor (long s). hashicorp-tf-api-token and azure-ad-client-secret have mid-match keywords.
 		"secret-access-key":               `["SecretAccessKey" "secretAccessKey" "secret_access_key" "SECRET_ACCESS_KEY"]`,
 		"digitalocean-token":              `wb ["dop_v1_" "doo_v1_" "dor_v1_"]`,
 		"databricks-api-token":            `wb ["dapi"]`,
@@ -73,8 +73,7 @@ func TestAnchorLiterals(t *testing.T) {
 		"langsmith-api-key":               `wb ["lsv2_pt_" "lsv2_sk_"]`,
 		"pinecone-api-key":                `wb ["pcsk_"]`,
 		"azure-sas-token":                 `wb ["sig="]`,
-		// cloud-keys. private-key-block sweeps for cost, a failed candidate running to the
-		// value's end (see TestPEMHeaderFloodStaysLinear); url-userinfo-credentials for head-ness.
+		// cloud-keys. private-key-block sweeps for cost (TestPEMHeaderFloodStaysLinear).
 		"private-key-block":        "sweep",
 		"jwt":                      `wb ["eyJ"]`,
 		"authorization-bearer":     `fold ["authorization"]`,
@@ -90,23 +89,12 @@ func TestAnchorLiterals(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range rules {
-			got := describeAnchor(r)
-			if want[r.id] != got {
-				t.Errorf("%s: anchor is %s, table says %s", r.id, got, want[r.id])
-			}
-			seen[r.id] = true
-		}
+	for _, r := range loadedRules(t, PatternPacks...) {
+		assert.Equal(t, want[r.id], describeAnchor(r), r.id)
+		seen[r.id] = true
 	}
 	for id := range want {
-		if !seen[id] {
-			t.Errorf("%s: in the table, not in any pack", id)
-		}
+		assert.Truef(t, seen[id], "%s: in the table, not in any pack", id)
 	}
 }
 
@@ -125,8 +113,7 @@ func describeAnchor(r *Rule) string {
 	return b.String()
 }
 
-// The shapes the build must refuse: a refusal costs throughput, a wrong acceptance costs a
-// redaction.
+// A refusal costs throughput, a wrong acceptance a redaction.
 func TestAnchorRefusals(t *testing.T) {
 	cases := []struct {
 		pattern  string
@@ -159,47 +146,62 @@ func TestAnchorRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		scan, err := newAnchorScan(tc.pattern, tc.keywords, tc.sweep)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.pattern, err)
-		}
-		got := describeAnchor(&Rule{anchor: scan})
-		if got != tc.want {
-			t.Errorf("%s: anchor is %s, want %s", tc.pattern, got, tc.want)
-		}
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, describeAnchor(&Rule{anchor: scan}), tc.pattern)
 	}
 }
 
-// The differential fuzz: for every anchored rule, the literal scan and the plain sweep must return
-// the same spans. The per-rule alphabet is adversarial: the paths differ only on near-matches.
+// Rejected candidates in front of, or inside, a real match: a wrong resume position loses these.
+var anchorTraps = []string{
+	// A rejected candidate in front of a live one, sharing a prefix.
+	"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
+	"AKIAAKIA0123456789ABCDEF",
+	"SKSK" + strings.Repeat("a", 32),
+	"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
+	"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
+	// Boundary traps around the \b rules.
+	"_AIza" + strings.Repeat("b", 35),
+	"AIza" + strings.Repeat("b", 36),
+	" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
+	// Case-folded heads, including the runes (?i) reaches outside ASCII.
+	"ToKeN: " + strings.Repeat("a", 25),
+	"toKen: " + strings.Repeat("a", 25),
+	"MY_ſECRET token : " + strings.Repeat("a", 25),
+	"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
+	"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
+	// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
+	"://user:pass@host",
+	"x://user:pass@host",
+	"1http://user:pass@host",
+	"http://user:pass@host postgres://admin:hunter2@db:5432/app",
+	"see http://a://user:pass@host",
+	"ftp://u:p@h ftp://u:p@h",
+	"http://user@host",
+	"http://user:pw@ http://user:password@host",
+	strings.Repeat("a", 100) + "://u:ppp@h",
+	"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
+}
+
+// For every anchored rule, literal scan and plain sweep agree over an alphabet of near-matches.
 func TestAnchorMatchesSweep(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260817))
 	rounds := 20000
 	if testing.Short() {
 		rounds = 2000
 	}
-	total := 0
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if r.anchor == nil {
+			continue
 		}
-		for _, r := range rules {
-			if r.anchor == nil {
-				continue
-			}
-			alphabet := fuzzAlphabet(r)
-			for i := 0; i < rounds; i++ {
-				value := buildFuzzValue(rng, alphabet)
-				got := r.matchAnchored(value)
-				want := r.matchSweep(value)
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
-				}
-				total++
-			}
+		values := slices.Clone(anchorTraps)
+		alphabet := fuzzAlphabet(r)
+		for i := 0; i < rounds; i++ {
+			values = append(values, buildFuzzValue(rng, alphabet))
+		}
+		for _, value := range values {
+			require.Equal(t, r.matchSweep(value), r.matchAnchored(value), "%s: %q", r.id, value)
 		}
 	}
-	t.Logf("%d cases", total)
 }
 
 // fuzzAlphabet is the token pool one rule's fuzz draws from.
@@ -221,17 +223,14 @@ func fuzzAlphabet(r *Rule) []string {
 	return pool
 }
 
+// swapCase flips ASCII case; the literals are ASCII.
 func swapCase(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		switch {
-		case 'a' <= c && c <= 'z':
-			b[i] = c - ('a' - 'A')
-		case 'A' <= c && c <= 'Z':
-			b[i] = c + ('a' - 'A')
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLower(r) {
+			return unicode.ToUpper(r)
 		}
-	}
-	return string(b)
+		return unicode.ToLower(r)
+	}, s)
 }
 
 func buildFuzzValue(rng *rand.Rand, pool []string) string {
@@ -243,99 +242,18 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 	return b.String()
 }
 
-// The hand-written half of the fuzz: a candidate the pattern rejects sitting in front of, or
-// inside, a real match. Getting the resume position wrong loses exactly these.
-func TestAnchorOverlapTraps(t *testing.T) {
-	rules := map[string]*Rule{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		loaded, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range loaded {
-			rules[r.id] = r
-		}
-	}
-
-	values := []string{
-		// A rejected candidate in front of a live one, sharing a prefix.
-		"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
-		"AKIAAKIA0123456789ABCDEF",
-		"SKSK" + strings.Repeat("a", 32),
-		"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
-		"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
-		// Boundary traps around the \b rules.
-		"_AIza" + strings.Repeat("b", 35),
-		"AIza" + strings.Repeat("b", 36),
-		" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
-		// Case-folded heads, including the runes (?i) reaches outside ASCII.
-		"ToKeN: " + strings.Repeat("a", 25),
-		"toKen: " + strings.Repeat("a", 25),
-		"MY_ſECRET token : " + strings.Repeat("a", 25),
-		"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
-		"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
-		// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
-		"://user:pass@host",
-		"x://user:pass@host",
-		"1http://user:pass@host",
-		"http://user:pass@host postgres://admin:hunter2@db:5432/app",
-		"see http://a://user:pass@host",
-		"ftp://u:p@h ftp://u:p@h",
-		"http://user@host",
-		"http://user:pw@ http://user:password@host",
-		strings.Repeat("a", 100) + "://u:ppp@h",
-		"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
-	}
-
-	for _, v := range values {
-		for id, r := range rules {
-			if r.anchor == nil {
-				continue
-			}
-			got, want := r.matchAnchored(v), r.matchSweep(v)
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s on %q:\n anchored %v\n sweep    %v", id, v, got, want)
-			}
-		}
-	}
-}
-
-// The regression for the shape that made anchoring quadratic: every line a PEM header, none a
-// footer, so every candidate ran the body to the value's end. Both assertions are needed, the rule
-// unanchored and doubled input not blowing the time up. The bound is loose on purpose: a shape
-// test, not a throughput budget.
+// Every line a PEM header, none a footer, made anchoring quadratic; the bound tests shape, not throughput.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
-	rules, err := Load(CloudKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var pem *Rule
-	for _, r := range rules {
-		if r.id == "private-key-block" {
-			pem = r
-		}
-	}
-	if pem == nil {
-		t.Fatal("cloud-keys no longer carries private-key-block")
-	}
-	if pem.anchor != nil {
-		t.Fatal("private-key-block is anchored: its unbounded body makes a failed " +
-			"candidate cost the whole value, which is why the corpus declares \"sweep\"")
-	}
+	pem := ruleByID(t, CloudKeys, "private-key-block")
+	require.Nil(t, pem.anchor, "an unbounded body makes a failed anchored candidate cost the whole value, hence \"sweep\"")
 
-	flood := func(headers int) string {
+	timeFlood := func(headers int) time.Duration {
 		var b strings.Builder
 		for i := 0; i < headers; i++ {
 			fmt.Fprintf(&b, "src/testdata/key%d.pem:1:-----BEGIN PRIVATE KEY-----\n", i)
 		}
-		return b.String()
-	}
-	timeFlood := func(headers int) time.Duration {
-		v := flood(headers)
 		start := time.Now()
-		if spans := pem.MatchScanned(v); len(spans) != 0 {
-			t.Fatalf("%d headers: %d spans, want none (no footer in the value)", headers, len(spans))
-		}
+		require.Empty(t, pem.MatchScanned(b.String()))
 		return time.Since(start)
 	}
 
@@ -343,8 +261,5 @@ func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	timeFlood(200)
 	small := timeFlood(1600)
 	large := timeFlood(3200)
-	if large > 8*small+2*time.Millisecond {
-		t.Errorf("doubling the headers took %v against %v: that is the quadratic shape back",
-			large, small)
-	}
+	assert.Truef(t, large <= 8*small+2*time.Millisecond, "doubling the headers took %v against %v: that is the quadratic shape back", large, small)
 }

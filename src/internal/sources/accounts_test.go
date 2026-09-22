@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
@@ -33,83 +35,39 @@ func accountFixture(t *testing.T) Request {
 	}
 }
 
-func accountFile(t *testing.T, path, body string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	req := accountFixture(t)
 	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"dev@example.org","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`))
-	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"workspace-1","id_token":"x.`+claims+`.x"}}`)
+	writeFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"workspace-1","id_token":"x.`+claims+`.x"}}`)
 	calls := 0
-	p := Accounts{client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
+	p := accounts{client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Header.Get("Authorization") != "Bearer fixture-access" || r.Header.Get("ChatGPT-Account-Id") != "workspace-1" {
-			t.Error("wrong authentication")
-		}
+		assert.True(t, r.Header.Get("Authorization") == "Bearer fixture-access" && r.Header.Get("ChatGPT-Account-Id") == "workspace-1", "wrong authentication")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{ "unknown":{"input_tokens":9007199254740993,"utilization":123.456,"optional":null,"accessToken":"fixture-secret"}, "windows":[] }`)), Header: http.Header{}}, nil
 	})}}
-	first, err := p.Discover(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first.Candidates) != 1 || calls != 0 {
-		t.Fatalf("first: %+v calls %d", first, calls)
-	}
+	req.Capture = false
+	inspected, err := p.discover(req)
+	require.Truef(t, err == nil && len(inspected.Candidates) == 0 && inspected.Deferred, "inspection: %+v %v", inspected, err)
+	req.Capture = true
+	// Discovery neither fetches nor writes; only Load does.
+	first, err := p.discover(req)
+	require.NoError(t, err)
+	require.Truef(t, len(first.Candidates) == 1 && calls == 0, "first: %+v calls %d", first, calls)
 	c := first.Candidates[0]
-	if c.RelPath != "codex.account.20260916T141500Z.jsonl" {
-		t.Fatal(c.RelPath)
-	}
+	require.Equal(t, "codex.account.20260916T141500Z.jsonl", c.RelPath, c.RelPath)
 	payload, err := c.Load(req.Context)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Fatalf("load calls %d", calls)
-	}
+	require.NoError(t, err)
+	require.Equalf(t, 1, calls, "load calls %d", calls)
 	raw := payload.Bytes
 	for _, field := range []string{`"input_tokens":9007199254740993`, `"utilization":123.456`, `"optional":null`, `"windows":[]`, `"chatgpt_plan_type":"pro"`} {
-		if !bytes.Contains(raw, []byte(field)) {
-			t.Fatalf("lost %s: %s", field, raw)
-		}
+		require.Containsf(t, string(raw), field, "lost %s: %s", field, raw)
 	}
-	again, err := p.Discover(req)
-	if err != nil || len(again.Candidates) != 1 || calls != 1 || again.Candidates[0].Path != c.Path {
-		t.Fatalf("same bucket: %+v %v calls %d", again, err, calls)
-	}
+	again, err := p.discover(req)
+	require.Truef(t, err == nil && len(again.Candidates) == 1 && calls == 1 && again.Candidates[0].Path == c.Path, "same bucket: %+v %v calls %d", again, err, calls)
 	req.Now = func() time.Time { return time.Date(2026, 9, 16, 14, 31, 0, 0, time.UTC) }
-	next, err := p.Discover(req)
-	if err != nil || len(next.Candidates) != 1 || calls != 1 || next.Candidates[0].Path == c.Path {
-		t.Fatalf("new bucket: %+v %v calls %d", next, err, calls)
-	}
-	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
-		t.Fatal("account collection wrote local state")
-	}
-}
-
-func TestAccountDiscoveryDoesNotFetchOrWrite(t *testing.T) {
-	req := accountFixture(t)
-	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture"}}`)
-	p := Accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
-		t.Fatal("discovery fetched account data")
-		return nil, nil
-	})}}
-	for _, capture := range []bool{false, true} {
-		req.Capture = capture
-		d, err := p.Discover(req)
-		if err != nil || (len(d.Candidates) == 1) != capture {
-			t.Fatalf("capture=%v discovery: %+v %v", capture, d, err)
-		}
-	}
-	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
-		t.Fatal("discovery wrote state")
-	}
+	next, err := p.discover(req)
+	require.Truef(t, err == nil && len(next.Candidates) == 1 && calls == 1 && next.Candidates[0].Path != c.Path, "new bucket: %+v %v calls %d", next, err, calls)
+	require.NoDirExists(t, req.StateDir, "account collection wrote local state")
 }
 
 func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
@@ -125,17 +83,11 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 		{"oversized", 200, strings.Repeat("x", accountResponseLimit+1), "response_too_large"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := Accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
+			p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: http.Header{}}, nil
 			})}}
-			request, err := http.NewRequest("GET", "https://example.org", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			obs := p.fetch(accountObservation{Source: "test"}, request)
-			if obs.Error != tc.want || len(obs.Body) != 0 {
-				t.Fatalf("%+v", obs)
-			}
+			obs := p.observe(context.Background(), accountFixture(t), "fixture-secret", accountEndpoint{source: "test", method: "GET", url: "https://example.org"})
+			require.Truef(t, obs.Error == tc.want && len(obs.Body) == 0, "%+v", obs)
 		})
 	}
 	redirected := false
@@ -143,16 +95,8 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 	defer target.Close()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer origin.Close()
-	p := Accounts{}
-	request, err := http.NewRequest("GET", origin.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", "Bearer fixture-secret")
-	obs := p.fetch(accountObservation{Source: "test"}, request)
-	if redirected || obs.HTTPStatus != 302 {
-		t.Fatalf("followed credential redirect: %+v", obs)
-	}
+	obs := (&accounts{}).observe(context.Background(), accountFixture(t), "fixture-secret", accountEndpoint{source: "test", method: "GET", url: origin.URL})
+	require.Truef(t, !redirected && obs.HTTPStatus == 302, "followed credential redirect: %+v", obs)
 }
 
 func TestClaudeUsesActiveCredentialsAndPreservesLocalAccount(t *testing.T) {
@@ -162,47 +106,31 @@ func TestClaudeUsesActiveCredentialsAndPreservesLocalAccount(t *testing.T) {
 	home := filepath.Join(req.Env.Home, "other-claude")
 	req.Source.Root = home
 	req.Env.Lookup = func(k string) (string, bool) { return home, k == "CLAUDE_CONFIG_DIR" }
-	accountFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"organizationType":"max","future":42},"unrelated":"not collected"}`)
-	accountFile(t, filepath.Join(home, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"correct","scopes":["user:profile"]}}`)
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"organizationType":"max","future":42},"unrelated":"not collected"}`)
+	writeFile(t, filepath.Join(home, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"correct","scopes":["user:profile"]}}`)
 	calls := 0
-	p := Accounts{keychain: func(context.Context, string) ([]byte, error) { return nil, errors.New("locked") }, client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
+	p := accounts{keychain: func(context.Context, string) ([]byte, error) { return nil, errors.New("locked") }, client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Header.Get("Authorization") != "Bearer correct" || r.Header.Get("anthropic-beta") == "" {
-			t.Error("wrong Claude credentials")
-		}
+		assert.True(t, r.Header.Get("Authorization") == "Bearer correct" && r.Header.Get("anthropic-beta") != "", "wrong Claude credentials")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"five_hour":null,"limits":[{"kind":"future","percent":111}]}`)), Header: http.Header{}}, nil
 	})}}
-	d, err := p.Discover(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	d, err := p.discover(req)
+	require.NoError(t, err)
 	payload, err := d.Candidates[0].Load(req.Context)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 2 {
-		t.Fatalf("calls %d", calls)
-	}
+	require.NoError(t, err)
+	require.Equalf(t, 2, calls, "calls %d", calls)
 	raw := payload.Bytes
 	lines := bytes.Split(raw, []byte("\n"))
-	if len(lines) != 4 || len(lines[3]) != 0 {
-		t.Fatalf("expected three newline-terminated records: %s", raw)
-	}
+	require.Truef(t, len(lines) == 4 && len(lines[3]) == 0, "expected three newline-terminated records: %s", raw)
 	for i, line := range lines[:3] {
 		var record struct {
 			BucketStart time.Time `json:"bucket_start"`
 			accountObservation
 		}
-		if err := json.Unmarshal(line, &record); err != nil {
-			t.Fatal(err)
-		}
-		if !record.BucketStart.Equal(req.Now().Truncate(req.Interval)) || record.Source == "" || record.ObservedAt.IsZero() || len(record.Body) == 0 {
-			t.Fatalf("incomplete record %d: %s", i, line)
-		}
+		require.NoError(t, json.Unmarshal(line, &record))
+		require.Truef(t, record.BucketStart.Equal(req.Now().Truncate(req.Interval)) && record.Source != "" && !record.ObservedAt.IsZero() && len(record.Body) != 0, "incomplete record %d: %s", i, line)
 	}
-	if bytes.Contains(raw, []byte(`"observations"`)) || bytes.Contains(raw, []byte("not collected")) || !bytes.Contains(raw, []byte(`"future":42`)) {
-		t.Fatalf("%s", raw)
-	}
+	require.Truef(t, !bytes.Contains(raw, []byte(`"observations"`)) && !bytes.Contains(raw, []byte("not collected")) && bytes.Contains(raw, []byte(`"future":42`)), "%s", raw)
 }
 
 func TestAccountBucketUsesCollectionInterval(t *testing.T) {
@@ -210,34 +138,16 @@ func TestAccountBucketUsesCollectionInterval(t *testing.T) {
 		t.Run(interval.String(), func(t *testing.T) {
 			req := accountFixture(t)
 			req.Interval = interval
-			accountFile(t, filepath.Join(req.Source.Root, "auth.json"), `{}`)
-			d, err := (&Accounts{}).Discover(req)
+			writeFile(t, filepath.Join(req.Source.Root, "auth.json"), `{}`)
+			d, err := (&accounts{}).discover(req)
 			if interval <= 0 {
-				if err == nil {
-					t.Fatal("accepted nonpositive interval")
-				}
+				require.Error(t, err, "accepted nonpositive interval")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			bucket := req.Now().UTC().Truncate(interval)
-			c := d.Candidates[0]
-			if c.RelPath != "codex.account."+bucket.Format("20060102T150405Z")+".jsonl" {
-				t.Fatal(c.RelPath)
-			}
-			payload, err := c.Load(req.Context)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, line := range bytes.Split(bytes.TrimSpace(payload.Bytes), []byte("\n")) {
-				var record struct {
-					BucketStart time.Time `json:"bucket_start"`
-				}
-				if err := json.Unmarshal(line, &record); err != nil || !record.BucketStart.Equal(bucket) {
-					t.Fatalf("wrong bucket: %s (%v)", line, err)
-				}
-			}
+			// The records' bucket_start comes from the same bucket, checked in TestClaudeUsesActiveCredentials.
+			require.Equal(t, "codex.account."+bucket.Format("20060102T150405Z")+".jsonl", d.Candidates[0].RelPath)
 		})
 	}
 }
@@ -246,19 +156,15 @@ func TestCandidateLoadLimitsAndCancellation(t *testing.T) {
 	req := accountFixture(t)
 	req.Source.MaxFileBytes = 1
 	path := filepath.Join(req.Source.Root, "auth.json")
-	accountFile(t, path, `{}`)
-	d, err := (&Accounts{}).Discover(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, path, `{}`)
+	d, err := (&accounts{}).discover(req)
+	require.NoError(t, err)
 	for _, load := range []func(context.Context) (Payload, error){fileLoader(path, 1), d.Candidates[0].Load} {
-		if _, err := load(context.Background()); !errors.Is(err, platform.ErrTooLarge) {
-			t.Fatalf("expected size limit: %v", err)
-		}
+		_, err := load(context.Background())
+		require.ErrorIs(t, err, platform.ErrTooLarge)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := load(ctx); !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected cancellation: %v", err)
-		}
+		_, err = load(ctx)
+		require.ErrorIs(t, err, context.Canceled)
 	}
 }

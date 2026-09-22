@@ -25,22 +25,16 @@ type Heartbeat struct {
 	ClientVersion string `json:"client_version"`
 	ConfigVersion int    `json:"config_version"`
 
-	// ConfigExpired says collection continued under a cached config past its expiry, since expiry
-	// fails toward collecting.
-	ConfigExpired bool `json:"config_expired,omitempty"`
+	// ConfigExpired says collection continued under a cached config past its expiry.
+	ConfigExpired bool   `json:"config_expired,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
 
-	// RunID ties this heartbeat to the crash journal and audit entries the same process wrote.
-	RunID string `json:"run_id,omitempty"`
-
-	// Embedded, so the fields stay at the top level of the document where readers already expect
-	// last_crash. A failed or stalled run can now ship its own record, so the newest event may
-	// describe THIS run, not only past ones.
+	// Embedded, so last_crash stays top-level; the newest event may describe this run.
 	formats.FailureRecord
 
 	Sources []SourceHealth `json:"sources"`
 }
 
-// SourceHealth is one source's discovery state.
 type SourceHealth struct {
 	SourceID string `json:"source_id"`
 	Family   string `json:"family,omitempty"`
@@ -52,28 +46,21 @@ type SourceHealth struct {
 	Sniff        string `json:"shape_sniff,omitempty"`
 	AgentVersion string `json:"agent_version,omitempty"`
 
-	// FilesSeen and BytesRead describe volume, not content.
-	FilesSeen int `json:"files_seen"`
-	Shipped   int `json:"shipped"`
-	Unchanged int `json:"unchanged"`
-	Parked    int `json:"parked"`
-	Failed    int `json:"failed"`
-
-	// Oversize counts files the size cap excluded: never collected, then reaped by the agent.
-	Oversize int `json:"oversize,omitempty"`
-
-	// Unreadable counts paths discovery could not look at, which this install will never ship.
+	// Volume, not content.
+	FilesSeen  int `json:"files_seen"`
+	Shipped    int `json:"shipped"`
+	Unchanged  int `json:"unchanged"`
+	Parked     int `json:"parked"`
+	Failed     int `json:"failed"`
+	Oversize   int `json:"oversize,omitempty"`
 	Unreadable int `json:"unreadable,omitempty"`
 
-	// EnrichMismatch is a TOP-LEVEL alarm: the derived view is the only carrier of the DB-side
-	// fields, so a mismatch means they are lost until a release fixes the join.
-	Enriched       int `json:"enriched,omitempty"`
-	EnrichSkipped  int `json:"enrich_skipped,omitempty"`
-	EnrichMismatch int `json:"enrich_mismatch,omitempty"`
-	EnrichErrors   int `json:"enrich_errors,omitempty"`
-
-	// Enricher names the code that produced this source's derived objects.
-	Enricher string `json:"enricher,omitempty"`
+	// EnrichMismatch is an alarm: the derived view is the only carrier of the DB-side fields.
+	Enriched       int    `json:"enriched,omitempty"`
+	EnrichSkipped  int    `json:"enrich_skipped,omitempty"`
+	EnrichMismatch int    `json:"enrich_mismatch,omitempty"`
+	EnrichErrors   int    `json:"enrich_errors,omitempty"`
+	Enricher       string `json:"enricher,omitempty"`
 
 	// RedactionDensity is the mean across this source's files; a fleet-wide spike means rule drift.
 	RedactionDensity float64 `json:"redaction_density,omitempty"`
@@ -81,54 +68,16 @@ type SourceHealth struct {
 	LastCollectedAt string `json:"last_collected_at,omitempty"`
 }
 
-// Input is what a heartbeat is built from.
-type Input struct {
-	OrganizationID string
-	InstallID      string
-	ClientVersion  string
-	ConfigVersion  int
-	ConfigExpired  bool
-	RunID          string
-	Report         formats.Report
-	Now            time.Time
+// WithReport fills the heartbeat's discovery facts while retaining its install metadata.
+func (hb Heartbeat) WithReport(rep formats.Report, now time.Time) Heartbeat {
+	hb.HeartbeatVersion = 1
+	hb.At = now.UTC().Format(time.RFC3339)
+	hb.Sources = []SourceHealth{}
 
-	// FailureRecord comes from the caller's judgement layer; it may already include this run's
-	// own failure (the failure and stall heartbeats exist to carry exactly that).
-	FailureRecord formats.FailureRecord
-}
-
-// Build turns one run's report into a heartbeat.
-func Build(in Input) Heartbeat {
-	hb := Heartbeat{
-		HeartbeatVersion: 1,
-		At:               in.Now.UTC().Format(time.RFC3339),
-		OrganizationID:   in.OrganizationID,
-		InstallID:        in.InstallID,
-		ClientVersion:    in.ClientVersion,
-		ConfigVersion:    in.ConfigVersion,
-		ConfigExpired:    in.ConfigExpired,
-		RunID:            in.RunID,
-		FailureRecord:    in.FailureRecord,
-		Sources:          []SourceHealth{},
-	}
-
-	for _, s := range in.Report.Sources {
-		sh := SourceHealth{
-			SourceID:     s.SourceID,
-			Family:       s.Family,
-			State:        string(s.Health),
-			Reason:       s.Reason,
-			Sniff:        string(s.Sniff),
-			AgentVersion: s.AgentVersion,
-			FilesSeen:    len(s.Files),
-			Oversize:     s.Oversize,
-			Unreadable:   s.Unreadable,
-
-			Enriched:       s.Enriched,
-			EnrichSkipped:  s.EnrichSkipped,
-			EnrichMismatch: s.EnrichMismatch,
-			EnrichErrors:   s.EnrichErrors,
-		}
+	for _, s := range rep.Sources {
+		sh := SourceHealth{SourceID: s.SourceID, Family: s.Family, State: string(s.Health), Reason: s.Reason,
+			Sniff: string(s.Sniff), AgentVersion: s.AgentVersion, FilesSeen: len(s.Files), Oversize: s.Oversize, Unreadable: s.Unreadable,
+			Enriched: s.Enriched, EnrichSkipped: s.EnrichSkipped, EnrichMismatch: s.EnrichMismatch, EnrichErrors: s.EnrichErrors}
 		if s.EnricherID != "" {
 			sh.Enricher = fmt.Sprintf("%s@%d", s.EnricherID, s.EnricherVersion)
 		}
@@ -155,14 +104,13 @@ func Build(in Input) Heartbeat {
 			sh.RedactionDensity = densitySum / float64(densityCount)
 		}
 		if sh.Shipped > 0 {
-			sh.LastCollectedAt = in.Now.UTC().Format(time.RFC3339)
+			sh.LastCollectedAt = hb.At
 		}
 		hb.Sources = append(hb.Sources, sh)
 	}
 	return hb
 }
 
-// Encode serializes the heartbeat.
 func (h Heartbeat) Encode() ([]byte, error) {
 	body, err := json.MarshalIndent(h, "", "  ")
 	if err != nil {

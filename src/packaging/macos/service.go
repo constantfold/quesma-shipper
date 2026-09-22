@@ -3,9 +3,7 @@
 package macos
 
 import (
-	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,29 +23,26 @@ func launchdPath(home string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", bundleIdentifier+".plist")
 }
 
-// installedApp is where the package puts the bundle.
-func installedApp(home string) string { return filepath.Join(home, "Applications", appName) }
-
+// installedExecutable is inside the bundle where the package puts it.
 func installedExecutable(home string) string {
-	return filepath.Join(installedApp(home), "Contents", "MacOS", executableName)
+	return filepath.Join(home, "Applications", appName, "Contents", "MacOS", executableName)
 }
 
-// renderPlist builds the LaunchAgent. KeepAlive and RunAtLoad together are what survive both a
-// dying process and a reboot; ProcessType Background keeps a poller off the interactive share.
+// renderPlist: KeepAlive and RunAtLoad survive a dying process and a reboot; Background keeps off the interactive share.
 func renderPlist(spec Spec) string {
 	args := append([]string{spec.Executable}, spec.Args...)
 	var argXML strings.Builder
 	for _, a := range args {
-		fmt.Fprintf(&argXML, "\t\t<string>%s</string>\n", escapeXML(a))
+		fmt.Fprintf(&argXML, "\t\t<string>%s</string>\n", common.XMLText(a))
 	}
 
 	var envXML strings.Builder
 	if spec.Home != "" {
-		fmt.Fprintf(&envXML, "\t\t<key>HOME</key>\n\t\t<string>%s</string>\n", escapeXML(spec.Home))
+		fmt.Fprintf(&envXML, "\t\t<key>HOME</key>\n\t\t<string>%s</string>\n", common.XMLText(spec.Home))
 	}
 	if spec.StateDir != "" {
 		fmt.Fprintf(&envXML, "\t\t<key>XDG_STATE_HOME</key>\n\t\t<string>%s</string>\n",
-			escapeXML(filepath.Dir(spec.StateDir)))
+			common.XMLText(filepath.Dir(spec.StateDir)))
 	}
 
 	stdout := filepath.Join(spec.LogDir, "agent.out.log")
@@ -87,7 +82,7 @@ func renderPlist(spec Spec) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, bundleIdentifier, bundleIdentifier, argXML.String(), envXML.String(), stop, escapeXML(stdout), escapeXML(stderr))
+`, bundleIdentifier, bundleIdentifier, argXML.String(), envXML.String(), stop, common.XMLText(stdout), common.XMLText(stderr))
 }
 
 const launchctl = "/bin/launchctl"
@@ -95,62 +90,62 @@ const launchctl = "/bin/launchctl"
 func guiDomain() string  { return fmt.Sprintf("gui/%d", os.Getuid()) }
 func guiService() string { return guiDomain() + "/" + bundleIdentifier }
 
-func installService(spec Spec) (Status, error) {
+func installService(spec Spec) error {
 	path := launchdPath(spec.Home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return Status{}, fmt.Errorf("supervise: %w", err)
+		return fmt.Errorf("supervise: %w", err)
 	}
 	if spec.LogDir != "" {
 		if err := os.MkdirAll(spec.LogDir, 0o700); err != nil {
-			return Status{}, fmt.Errorf("supervise: %w", err)
+			return fmt.Errorf("supervise: %w", err)
 		}
 	}
 	// Atomic: launchd reads the plist on its own schedule and a torn one fails to load.
 	if err := platform.WriteAtomic(path, []byte(renderPlist(spec)), common.EntryMode); err != nil {
-		return Status{}, fmt.Errorf("supervise: write %s: %w", path, err)
+		return fmt.Errorf("supervise: write %s: %w", path, err)
 	}
 
 	// bootout first, ignoring failure: otherwise re-installing keeps running the old plist.
 	_ = exec.Command(launchctl, "bootout", guiService()).Run()
 
 	// The label lingers after bootout; bootstrapping in that window fails with "5: Input/output error".
-	st := Status{Kind: common.KindLaunchd, Installed: true, Path: path}
 	if err := waitForLabelGone(common.ExitTimeout(spec)); err != nil {
-		st.Detail = "plist written but the previous agent did not exit: " + err.Error()
-		return st, fmt.Errorf("supervise: %w", err)
+		return fmt.Errorf("supervise: %w", err)
 	}
-
-	out, err := exec.Command(launchctl, "bootstrap", guiDomain(), path).CombinedOutput()
-	if err != nil {
-		st.Detail = fmt.Sprintf("plist written but launchctl bootstrap failed: %v: %s",
-			err, strings.TrimSpace(string(out)))
-		return st, fmt.Errorf("supervise: launchctl bootstrap: %w: %s", err, strings.TrimSpace(string(out)))
+	if out, err := exec.Command(launchctl, "bootstrap", guiDomain(), path).CombinedOutput(); err != nil {
+		return fmt.Errorf("supervise: launchctl bootstrap: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	st.Loaded = true
-	st.Detail = "loaded; runs at load and is restarted if it exits"
-	return st, nil
+	return nil
 }
 
-func PostInstall() (Status, error) {
+func PostInstall() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Status{}, err
+		return err
 	}
 	exe, err := common.CurrentExecutable()
 	if err != nil {
-		return Status{}, err
+		return err
 	}
 	expected := installedExecutable(home)
 	if resolved, err := filepath.EvalSymlinks(expected); err == nil {
 		expected = resolved
 	}
 	if exe != expected && common.HomebrewCaskRoot(exe) == "" {
-		return Status{}, fmt.Errorf("postinstall must run from %s, not %s", expected, exe)
+		return fmt.Errorf("postinstall must run from %s, not %s", expected, exe)
 	}
 	if err := checkInstallOwner(exe, launchdPath(home)); err != nil {
-		return Status{}, err
+		return err
 	}
-	return supervise(exe, home)
+	// The default state directory: packaging cannot import config, and Installer carries no override.
+	spec, err := common.ServiceSpecFor(exe, filepath.Join(home, ".local", "state", "trajectory-shipper"), 0, 0)
+	if err != nil {
+		return err
+	}
+	if err := common.ValidateInstall(spec); err != nil {
+		return err
+	}
+	return installService(spec)
 }
 
 func checkInstallOwner(exe, plist string) error {
@@ -165,20 +160,6 @@ func checkInstallOwner(exe, plist string) error {
 		return fmt.Errorf("another installation owns the background service (%s); uninstall it without purging local state before changing installation methods", previous)
 	}
 	return nil
-}
-
-// supervise registers exe as the LaunchAgent with the default state directory: packaging cannot
-// import the config layer, and the Installer environment carries no override.
-func supervise(exe, home string) (Status, error) {
-	stateDir := filepath.Join(home, ".local", "state", "trajectory-shipper")
-	spec, err := common.ServiceSpecFor(exe, stateDir, 0, 0)
-	if err != nil {
-		return Status{}, err
-	}
-	if err := common.ValidateInstall(spec); err != nil {
-		return Status{}, err
-	}
-	return installService(spec)
 }
 
 func waitForLabelGone(within time.Duration) error {
@@ -246,18 +227,15 @@ func ServiceState(ctx context.Context) Status {
 		return st
 	}
 	st.Path = launchdPath(home)
-	if _, err := os.Stat(st.Path); err == nil {
-		st.Installed = true
-	}
+	_, err = os.Stat(st.Path)
+	st.Installed = err == nil
 
 	out, err := exec.CommandContext(ctx, launchctl, "print", guiService()).CombinedOutput()
 	if err != nil {
-		switch {
-		case st.Installed:
+		st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
+		if st.Installed {
 			// Written but not loaded is the state that collects nothing while looking installed.
 			st.Detail = "plist present but NOT loaded: re-run the Quesma Shipper installer"
-		default:
-			st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
 		}
 		return st
 	}
@@ -299,10 +277,4 @@ func summariseLaunchctlPrint(out string) string {
 	default:
 		return "loaded, not currently running"
 	}
-}
-
-func escapeXML(s string) string {
-	var b bytes.Buffer
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
 }

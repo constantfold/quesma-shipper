@@ -4,6 +4,7 @@ package common
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -51,7 +51,7 @@ type Result struct {
 
 // Check verifies the current TUF repository and reports its signed release.
 func Check(ctx context.Context, o Options) (latest string, publishedAt time.Time, available bool, err error) {
-	ctx, cancel := context.WithTimeout(ctx, timeoutOr(o.Timeout, defaultCheckTimeout))
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(o.Timeout, defaultCheckTimeout))
 	defer cancel()
 
 	_, release, err := load(ctx)
@@ -74,7 +74,7 @@ func ApplyBinary(raw []byte) error {
 // Update replaces this binary only when the signed release is newer than o.Current.
 func Update(ctx context.Context, o Options, selectTarget func(Release) string,
 	applyTarget func([]byte, string) error) (Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeoutOr(o.Timeout, defaultUpdateTimeout))
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(o.Timeout, defaultUpdateTimeout))
 	defer cancel()
 
 	repo, release, err := load(ctx)
@@ -85,9 +85,20 @@ func Update(ctx context.Context, o Options, selectTarget func(Release) string,
 	if !newer(release.Version, o.Current) {
 		return res, nil
 	}
-	binary, err := download(repo, release, selectTarget, o.Out)
+	target := selectTarget(release)
+	if target == "" {
+		return res, fmt.Errorf("release %s has no binary for %s/%s", release.Version, runtime.GOOS, runtime.GOARCH)
+	}
+	info, err := repo.GetTargetInfo(target)
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("finding %s: %w", target, err)
+	}
+	if o.Out != nil {
+		fmt.Fprintf(o.Out, "downloading shipper %s\n", release.Version)
+	}
+	_, binary, err := repo.DownloadTarget(info, "", "")
+	if err != nil {
+		return res, fmt.Errorf("downloading %s: %w", target, err)
 	}
 	if err := applyTarget(binary, release.Version); err != nil {
 		return res, fmt.Errorf("installing update: %w", err)
@@ -96,29 +107,12 @@ func Update(ctx context.Context, o Options, selectTarget func(Release) string,
 	return res, nil
 }
 
-func download(repo *tufupdater.Updater, release Release, selectTarget func(Release) string, out io.Writer) ([]byte, error) {
-	target := selectTarget(release)
-	if target == "" {
-		return nil, fmt.Errorf("release %s has no binary for %s/%s", release.Version, runtime.GOOS, runtime.GOARCH)
-	}
-	info, err := repo.GetTargetInfo(target)
-	if err != nil {
-		return nil, fmt.Errorf("finding %s: %w", target, err)
-	}
-	progress(out, "downloading shipper %s", release.Version)
-	_, binary, err := repo.DownloadTarget(info, "", "")
-	if err != nil {
-		return nil, fmt.Errorf("downloading %s: %w", target, err)
-	}
-	return binary, nil
-}
-
 func load(ctx context.Context) (*tufupdater.Updater, Release, error) {
-	cfg, err := config.New(strings.TrimRight(baseURL, "/")+"/metadata", trustedRoot)
+	cfg, err := config.New(baseURL+"/metadata", trustedRoot)
 	if err != nil {
 		return nil, Release{}, fmt.Errorf("configuring TUF: %w", err)
 	}
-	cfg.RemoteTargetsURL = strings.TrimRight(baseURL, "/") + "/targets"
+	cfg.RemoteTargetsURL = baseURL + "/targets"
 	cfg.DisableLocalCache = true
 	client := &http.Client{Transport: contextTransport{ctx: ctx}}
 	if err := cfg.SetDefaultFetcherHTTPClient(client); err != nil {
@@ -162,21 +156,5 @@ func newer(latest, current string) bool {
 		return false
 	}
 	c, err := semver.NewVersion(current)
-	if err != nil {
-		return false
-	}
-	return l.GreaterThan(c)
-}
-
-func timeoutOr(d, fallback time.Duration) time.Duration {
-	if d > 0 {
-		return d
-	}
-	return fallback
-}
-
-func progress(w io.Writer, format string, args ...any) {
-	if w != nil {
-		fmt.Fprintf(w, format+"\n", args...)
-	}
+	return err == nil && l.GreaterThan(c)
 }
