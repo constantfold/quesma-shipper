@@ -81,38 +81,13 @@ type SourceHealth struct {
 	LastCollectedAt string `json:"last_collected_at,omitempty"`
 }
 
-// Input is what a heartbeat is built from.
-type Input struct {
-	OrganizationID string
-	InstallID      string
-	ClientVersion  string
-	ConfigVersion  int
-	ConfigExpired  bool
-	RunID          string
-	Report         formats.Report
-	Now            time.Time
+// WithReport fills the heartbeat's discovery facts while retaining its install metadata.
+func (hb Heartbeat) WithReport(rep formats.Report, now time.Time) Heartbeat {
+	hb.HeartbeatVersion = 1
+	hb.At = now.UTC().Format(time.RFC3339)
+	hb.Sources = []SourceHealth{}
 
-	// FailureRecord comes from the caller's judgement layer; it may already include this run's
-	// own failure (the failure and stall heartbeats exist to carry exactly that).
-	FailureRecord formats.FailureRecord
-}
-
-// Build turns one run's report into a heartbeat.
-func Build(in Input) Heartbeat {
-	hb := Heartbeat{
-		HeartbeatVersion: 1,
-		At:               in.Now.UTC().Format(time.RFC3339),
-		OrganizationID:   in.OrganizationID,
-		InstallID:        in.InstallID,
-		ClientVersion:    in.ClientVersion,
-		ConfigVersion:    in.ConfigVersion,
-		ConfigExpired:    in.ConfigExpired,
-		RunID:            in.RunID,
-		FailureRecord:    in.FailureRecord,
-		Sources:          []SourceHealth{},
-	}
-
-	for _, s := range in.Report.Sources {
+	for _, s := range rep.Sources {
 		sh := SourceHealth{
 			SourceID:     s.SourceID,
 			Family:       s.Family,
@@ -155,7 +130,7 @@ func Build(in Input) Heartbeat {
 			sh.RedactionDensity = densitySum / float64(densityCount)
 		}
 		if sh.Shipped > 0 {
-			sh.LastCollectedAt = in.Now.UTC().Format(time.RFC3339)
+			sh.LastCollectedAt = hb.At
 		}
 		hb.Sources = append(hb.Sources, sh)
 	}

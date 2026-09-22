@@ -22,19 +22,18 @@ func (r *Runtime) WriteHeartbeat(ctx context.Context, rep formats.Report) error 
 func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror bool) error {
 	r.hbMu.Lock()
 	defer r.hbMu.Unlock()
-	hb := engine.Build(engine.Input{
+	now := time.Now()
+	hb := (engine.Heartbeat{
 		OrganizationID: r.eff.OrganizationID,
 		InstallID:      r.unit.InstallID.String(),
 		ClientVersion:  r.build.Version,
 		ConfigVersion:  r.eff.ConfigVersion,
 		ConfigExpired:  r.eff.ConfigExpired,
 		RunID:          r.runID,
-		Report:         rep,
-		Now:            time.Now().UTC(),
 		// The crash comes from this process reading the journal; the failures come from the
 		// record, which may include this very run's judgement.
 		FailureRecord: r.failureRecord(),
-	})
+	}).WithReport(rep, now)
 	body, err := hb.Encode()
 	if err != nil {
 		return err

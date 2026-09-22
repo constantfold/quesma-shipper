@@ -17,55 +17,54 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-func TestJudgeTick(t *testing.T) {
-	// Only panics attributed to a collection run count toward its failure streak.
-	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}, runID: "0123456789abcdef"}
-
-	r.JudgeTick(errors.New("flush failed"), formats.Report{}, false, platform.Delta{})
-	rec := readFailureRecord(r.eff.StateDir)
-	require.Truef(t, rec.ConsecutiveFailures == 1 && rec.Latest() != nil, "first failure not recorded: %+v", rec)
-	assert.Equalf(t, formats.FailureTick, rec.Latest().Kind, "a plain error was recorded as %q", rec.Latest().Kind)
-	assert.NotEqual(t, "", rec.Latest().At, "the failure carries no timestamp")
-
-	r.JudgeTick(errors.New("still failing"), formats.Report{}, true, platform.Delta{})
-	rec = readFailureRecord(r.eff.StateDir)
-	require.Truef(t, rec.ConsecutiveFailures == 2 && rec.Latest().Message == "still failing" && rec.Latest().Kind == formats.FailurePanic, "second failure did not update the record: %+v", rec)
-
-	// Recovery clears the streak but preserves failure history.
-	r.JudgeTick(nil, formats.Report{}, false, platform.Delta{})
-	rec = readFailureRecord(r.eff.StateDir)
-	assert.Equalf(t, 0, rec.ConsecutiveFailures, "success left consecutive_failures at %d", rec.ConsecutiveFailures)
-	assert.Truef(t, rec.Latest() != nil && rec.Latest().Message == "still failing", "recovery erased the last failure: %+v", rec)
-}
-
-// Lock contention is neutral; failing every attempted upload is a failure.
-func TestJudgeTickClassifies(t *testing.T) {
+// Classification, recovery and restart share one history; every event keeps its originating run.
+func TestJudgeTickLifecycle(t *testing.T) {
+	const first, second = "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
-
-	assert.NoError(t, r.JudgeTick(
-		fmt.Errorf("open store: %w", engine.ErrLocked), formats.Report{}, false, platform.Delta{}))
-	if rec := readFailureRecord(r.eff.StateDir); rec.ConsecutiveFailures != 0 || rec.Latest() != nil {
-		t.Errorf("lock contention wrote a record: %+v", rec)
+	allFailed := formats.Report{Failed: 3, Sources: []formats.SourceOutcome{{Files: []formats.FileOutcome{
+		{Decision: formats.DecisionFailed, Reason: "the control plane authorized nothing"},
+	}}}}
+	var history []formats.FailureEvent
+	for _, tc := range []struct {
+		name, runID   string
+		err           error
+		report        formats.Report
+		panicked      bool
+		streak        int
+		kind, message string
+	}{
+		{"locked", first, fmt.Errorf("open store: %w", engine.ErrLocked), formats.Report{}, false, 0, "", ""},
+		{"failed", first, errors.New("flush failed"), formats.Report{}, false, 1, formats.FailureTick, "flush failed"},
+		{"panicked", second, errors.New("still failing"), formats.Report{}, true, 2, formats.FailurePanic, "still failing"},
+		{"empty recovery", second, nil, formats.Report{}, false, 0, "", ""},
+		{"sink refused", first, errors.New("the sink refused"), formats.Report{}, false, 1, formats.FailureTick, "the sink refused"},
+		{"partial recovery", second, nil, formats.Report{Shipped: 1, Failed: 3}, false, 0, "", ""},
+		{"all failed", first, nil, allFailed, false, 1, formats.FailureTick,
+			"the run shipped nothing: all 3 attempted uploads failed: the control plane authorized nothing"},
+		{"later failure", second, errors.New("the sink refused every object"), formats.Report{}, false, 2,
+			formats.FailureTick, "the sink refused every object"},
+		{"shipped recovery", second, nil, formats.Report{Shipped: 1}, false, 0, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.runID = tc.runID
+			err := r.JudgeTick(tc.err, tc.report, tc.panicked, platform.Delta{})
+			if tc.kind == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tc.message)
+				history = append(history, formats.FailureEvent{RunID: tc.runID, Kind: tc.kind, Message: tc.message})
+			}
+			rec := readFailureRecord(r.eff.StateDir)
+			later := &Runtime{eff: r.eff}
+			assert.Equal(t, rec, later.failureRecord(), "a new runtime must load the persisted history")
+			assert.Equal(t, tc.streak, rec.ConsecutiveFailures)
+			for i := range rec.Recent {
+				assert.NotEmpty(t, rec.Recent[i].At)
+				rec.Recent[i].At = ""
+			}
+			assert.Equal(t, history, rec.Recent)
+		})
 	}
-
-	tickErr := r.JudgeTick(nil, formats.Report{
-		Failed: 3,
-		Sources: []formats.SourceOutcome{{Files: []formats.FileOutcome{
-			{Decision: formats.DecisionFailed, Reason: "the control plane authorized nothing"},
-		}}},
-	}, false, platform.Delta{})
-	require.Error(t, tickErr, "an all-uploads-failed run did not classify as a failure")
-	// Preserve the cause so an operator can distinguish different upload failures.
-	assert.Containsf(t, tickErr.Error(), "authorized nothing", "the verdict does not say why nothing shipped: %v", tickErr)
-	if rec := readFailureRecord(r.eff.StateDir); rec.ConsecutiveFailures != 1 || rec.Latest() == nil {
-		t.Errorf("an all-uploads-failed run did not record: %+v", rec)
-	}
-}
-
-func TestJudgeTickAcceptsAPartialRun(t *testing.T) {
-	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
-
-	assert.NoError(t, r.JudgeTick(nil, formats.Report{Shipped: 1, Failed: 3}, false, platform.Delta{}))
 }
 
 func TestJudgeTickPlaceholdersTheUsername(t *testing.T) {
@@ -96,16 +95,6 @@ func TestTheFailureLogIsBoundedAndKeepsTheNewest(t *testing.T) {
 	assert.Equal(t, rec.Recent[0].Message, fmt.Sprintf("failure number %d", 15))
 	// The count is not the log's length: it counts runs since the last success, unbounded.
 	assert.Equalf(t, formats.MaxRecentFailures+15, rec.ConsecutiveFailures, "consecutive_failures = %d, want every failed run counted", rec.ConsecutiveFailures)
-}
-
-func TestRecoveryKeepsTheLog(t *testing.T) {
-	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
-	r.JudgeTick(errors.New("the sink refused"), formats.Report{}, false, platform.Delta{})
-	r.JudgeTick(nil, formats.Report{Shipped: 1}, false, platform.Delta{})
-
-	rec := readFailureRecord(r.eff.StateDir)
-	assert.Equalf(t, 0, rec.ConsecutiveFailures, "consecutive_failures = %d after a success", rec.ConsecutiveFailures)
-	assert.Truef(t, len(rec.Recent) == 1 && rec.Latest().Message == "the sink refused", "recovery erased the log: %+v", rec.Recent)
 }
 
 // These failures must persist even when configuration cannot produce a Runtime.
@@ -142,18 +131,6 @@ func TestFailuresWithoutResolvedConfig(t *testing.T) {
 			assert.Equal(t, tc.count, rec.ConsecutiveFailures)
 		})
 	}
-}
-
-// A later Runtime must pick up failures persisted by an earlier one.
-func TestFailureRecordSurvivesIntoTheHeartbeat(t *testing.T) {
-	dir := t.TempDir()
-	r := &Runtime{eff: &config.Effective{StateDir: dir}}
-	r.JudgeTick(errors.New("the sink refused every object"), formats.Report{}, false, platform.Delta{})
-
-	r2 := &Runtime{eff: &config.Effective{StateDir: dir}}
-	rec := r2.failureRecord()
-	require.Truef(t, rec.Latest() != nil && rec.Latest().Message == "the sink refused every object", "a later run did not pick up the persisted failure: %+v", rec)
-	assert.Equalf(t, 1, rec.ConsecutiveFailures, "consecutive_failures = %d, want 1", rec.ConsecutiveFailures)
 }
 
 // Discarding corrupt state records a warning without counting a failed collection.
@@ -206,7 +183,7 @@ func TestEventsAreAttributedToTheRunThatRecordedThem(t *testing.T) {
 		got = append(got, e.Kind+"/"+e.RunID)
 	}
 	want := []string{"tick_failed/aaaaaaaaaaaaaaaa", "tick_failed/bbbbbbbbbbbbbbbb"}
-	assert.Truef(t, len(got) == 2 && got[0] == want[0] && got[1] == want[1], "tick events not attributed:\n got %v\nwant %v", got, want)
+	assert.Equal(t, want, got)
 }
 
 func TestACrashIsPersistedLocally(t *testing.T) {
@@ -233,7 +210,7 @@ func TestACrashIsPersistedLocally(t *testing.T) {
 }
 
 // Repeated stall warnings must not evict other failures from the bounded log.
-func TestAStalledTickIsRecordedOnce(t *testing.T) {
+func TestStalledTickLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "eeeeeeeeeeeeeeee"}
 	watchFires(r, 7, 2)
@@ -244,21 +221,15 @@ func TestAStalledTickIsRecordedOnce(t *testing.T) {
 		t.Errorf("the event does not name the tick or its run: %+v", rec.Latest())
 	}
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a stall moved consecutive_failures to %d; the tick may yet complete", rec.ConsecutiveFailures)
-}
 
-// A new stall replaces the old event even when intervening clean ticks appended nothing.
-func TestALaterStallReplacesTheStandingEvent(t *testing.T) {
-	dir := t.TempDir()
-	r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "ffffffffffffffff"}
-
-	watchFires(r, 5, 1)
-	for i := 0; i < 3; i++ {
+	// Clean ticks append nothing; the next stall must replace the standing event.
+	for range 3 {
 		r.JudgeTick(nil, formats.Report{Shipped: 1}, false, platform.Delta{})
 	}
 	watchFires(r, 900, 1)
-
-	rec := readFailureRecord(dir)
-	require.Truef(t, len(rec.Recent) == 1 && strings.Contains(rec.Latest().Message, "tick 900"), "want one stalled event naming tick 900, got %+v", rec.Recent)
+	rec = readFailureRecord(dir)
+	require.Len(t, rec.Recent, 1)
+	assert.Contains(t, rec.Latest().Message, "tick 900")
 }
 
 // Wait for actual watchdog warnings rather than guessing how long the goroutine needs.

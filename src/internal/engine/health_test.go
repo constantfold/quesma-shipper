@@ -41,11 +41,10 @@ func report() formats.Report {
 // The heartbeat carries no transcript bytes: it answers "is this source still findable", never
 // "what did you send".
 func TestHeartbeatCarriesNoContentOrUploadState(t *testing.T) {
-	hb := engine.Build(engine.Input{
+	hb := (engine.Heartbeat{
 		OrganizationID: "default", InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		ClientVersion: "0.1.0", ConfigVersion: 1,
-		Report: report(), Now: time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC),
-	})
+	}).WithReport(report(), time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC))
 	body, err := hb.Encode()
 	require.NoError(t, err)
 
@@ -70,7 +69,7 @@ func TestHeartbeatCarriesNoContentOrUploadState(t *testing.T) {
 
 // The two states that look identical from a distance must stay distinct in the heartbeat.
 func TestHeartbeatKeepsAbsentAndNoMatchDistinct(t *testing.T) {
-	hb := engine.Build(engine.Input{Report: report(), Now: time.Now()})
+	hb := (engine.Heartbeat{}).WithReport(report(), time.Now())
 
 	states := map[string]string{}
 	for _, s := range hb.Sources {
@@ -81,7 +80,7 @@ func TestHeartbeatKeepsAbsentAndNoMatchDistinct(t *testing.T) {
 }
 
 func TestHeartbeatRecordsPerSourceCounts(t *testing.T) {
-	hb := engine.Build(engine.Input{Report: report(), Now: time.Now()})
+	hb := (engine.Heartbeat{}).WithReport(report(), time.Now())
 	for _, s := range hb.Sources {
 		if s.SourceID != "claude-code-transcripts" {
 			continue
