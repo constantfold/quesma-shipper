@@ -28,9 +28,7 @@ func doctorCmd(build app.Build) *cobra.Command {
 			if st, err := app.CurrentStatus(build); err == nil {
 				printHeader(out, p, st, time.Now())
 			}
-			for _, line := range updateLines(build, rep.Update, p, verbose) {
-				fmt.Fprintln(out, line)
-			}
+			printUpdate(out, build, rep.Update, p, verbose)
 			fmt.Fprintln(out)
 			renderSections(out, p, rep.Sections)
 			renderVerdict(out, p, fails, rep.AgentsCollecting, issues)
@@ -55,20 +53,18 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-func updateLines(build app.Build, upd app.UpdateStatus, p palette, verbose bool) []string {
-	var lines []string
+func printUpdate(w io.Writer, build app.Build, upd app.UpdateStatus, p palette, verbose bool) {
 	if verbose {
-		lines = append(lines, styled(p.dim, "Version "+build.Version, p.reset))
+		fmt.Fprintln(w, styled(p.dim, "Version "+build.Version, p.reset))
 	}
 	if upd.State == "available" {
-		lines = append(lines, styled(p.yellow+p.bold, "Update", p.reset)+" "+upd.Detail)
+		fmt.Fprintln(w, styled(p.yellow+p.bold, "Update", p.reset)+" "+upd.Detail)
 		if upd.Fix != "" {
-			lines = append(lines, "  → "+p.names("`"+upd.Fix+"`", ""))
+			fmt.Fprintln(w, "  → "+p.names("`"+upd.Fix+"`", ""))
 		}
 	} else if verbose {
-		lines = append(lines, styled(p.dim, "Update "+upd.Detail, p.reset))
+		fmt.Fprintln(w, styled(p.dim, "Update "+upd.Detail, p.reset))
 	}
-	return lines
 }
 
 func renderVerdict(w io.Writer, p palette, fails, agents int, issues []string) {

@@ -1,7 +1,6 @@
-package upload
-
 // Local ticket validation: nothing in an authorization response may validate anything else in
 // it. Every field is checked against the prepared object or the machine owner's allowlist.
+package upload
 
 import (
 	"errors"
@@ -12,28 +11,23 @@ import (
 	"time"
 )
 
-// Provider header names. The set is closed: a name outside it invalidates the whole ticket.
-const (
-	metadataPrefix   = "x-amz-meta-"
-	sourceHashHeader = metadataPrefix + "source-hash"
-	ticketIDHeader   = metadataPrefix + "ticket-id"
-	taggingHeader    = "x-amz-tagging"
-)
-
+// A provider's header names. The set is closed: a name outside it invalidates the whole ticket.
 type headerDialect struct {
-	metadataPrefix, sourceHash, ticketID, tagging string
-	azure                                         bool // metadata names use _ for -, and x-ms-blob-type is required
+	metadataPrefix, tagging string
+	azure                   bool // metadata names use _ for -, and x-ms-blob-type is required
 }
 
-var headerDialects = []headerDialect{
-	{metadataPrefix, sourceHashHeader, ticketIDHeader, taggingHeader, false},
-	{"x-goog-meta-", "x-goog-meta-source-hash", "x-goog-meta-ticket-id", "", false},
-	{"x-ms-meta-", "x-ms-meta-source_hash", "x-ms-meta-ticket_id", "x-ms-tags", true},
+var headerDialects = []headerDialect{{"x-amz-meta-", "x-amz-tagging", false}, {"x-goog-meta-", "", false}, {"x-ms-meta-", "x-ms-tags", true}}
+
+func (d headerDialect) metadata(name string) string {
+	if d.azure {
+		name = strings.ReplaceAll(name, "-", "_")
+	}
+	return d.metadataPrefix + name
 }
 
-// MetadataNames is the client-declarable metadata allowlist, unprefixed; source-hash and ticket-id
-// are checked against their own sources instead. A deliberate copy of controlplane's list (this
-// package imports nothing internal); a test in app, which may import both, keeps them equal.
+// MetadataNames is the client-declarable metadata allowlist; source-hash and ticket-id are checked
+// against their own sources. A copy of controlplane's list, kept equal by a test in app.
 var MetadataNames = []string{
 	"manifest-version", "source-id", "shipped-hash", "artifact-class",
 	"agent-version", "shape-sniff", "derived", "enrich-status", "kind",
@@ -133,6 +127,7 @@ func validatePath(target UploadTarget, prepared PreparedUpload, escaped string) 
 func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
 	h, id := ticket.RequiredHeaders, prepared.ObjectID
 	dialect, err := ticketHeaderDialect(h)
+	sourceHash, ticketID := dialect.metadata("source-hash"), dialect.metadata("ticket-id")
 	switch {
 	case err != nil:
 		return fmt.Errorf("upload: ticket for object %q: %w", id, err)
@@ -140,12 +135,12 @@ func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
 		return fmt.Errorf("upload: prepared object %q carries no source hash", id)
 	case ticket.TicketID == "":
 		return fmt.Errorf("upload: ticket for object %q carries no ticket id", id)
-	case h[dialect.sourceHash] != prepared.SourceHash:
-		return fmt.Errorf("upload: ticket for object %q requires source hash %q, prepared object hashed %q", id, h[dialect.sourceHash], prepared.SourceHash)
+	case h[sourceHash] != prepared.SourceHash:
+		return fmt.Errorf("upload: ticket for object %q requires source hash %q, prepared object hashed %q", id, h[sourceHash], prepared.SourceHash)
 	}
-	switch got, ok := h[dialect.ticketID]; {
+	switch got, ok := h[ticketID]; {
 	case !ok:
-		return fmt.Errorf("upload: ticket for object %q requires no %s header", id, dialect.ticketID)
+		return fmt.Errorf("upload: ticket for object %q requires no %s header", id, ticketID)
 	case got != ticket.TicketID:
 		return fmt.Errorf("upload: ticket %q for object %q requires ticket-id header %q", ticket.TicketID, id, got)
 	}
@@ -154,10 +149,7 @@ func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
 		if !slices.Contains(MetadataNames, name) {
 			return fmt.Errorf("upload: prepared object %q declares metadata %q outside the closed set", id, name)
 		}
-		header := dialect.metadataPrefix + name
-		if dialect.azure {
-			header = dialect.metadataPrefix + strings.ReplaceAll(name, "-", "_")
-		}
+		header := dialect.metadata(name)
 		switch got, ok := h[header]; {
 		case !ok:
 			return fmt.Errorf("upload: ticket for object %q requires no %s header, which the prepared object declared", id, header)
@@ -177,7 +169,7 @@ func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
 		switch {
 		case got == "":
 			return fmt.Errorf("upload: ticket for object %q requires header %q with an empty value", id, name)
-		case name == dialect.sourceHash, name == dialect.ticketID, dialect.azure && name == "x-ms-blob-type":
+		case name == sourceHash, name == ticketID, dialect.azure && name == "x-ms-blob-type":
 		case name == dialect.tagging && dialect.tagging != "":
 			if !slices.Contains(taggingValues, got) {
 				return fmt.Errorf("upload: ticket for object %q requires tag %q", id, got)
@@ -198,7 +190,7 @@ func validateHeaders(prepared PreparedUpload, ticket Ticket) error {
 func ticketHeaderDialect(headers map[string]string) (headerDialect, error) {
 	var found []headerDialect
 	for _, d := range headerDialects {
-		if _, ok := headers[d.sourceHash]; ok {
+		if _, ok := headers[d.metadata("source-hash")]; ok {
 			found = append(found, d)
 		}
 	}

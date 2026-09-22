@@ -1,7 +1,6 @@
-package upload
-
 // The PUT itself: one request per ticket, HTTP 200 the only success. No retry loop lives here:
 // a failed PUT commits nothing and the next run reauthorizes.
+package upload
 
 import (
 	"bytes"
@@ -18,9 +17,8 @@ import (
 	"time"
 )
 
-// Per-phase timeouts, never one overall http.Client.Timeout: that covers the body upload too, so no
-// single value both allows a 256 MiB object on a slow link and catches a stall. The whole-operation
-// bound scales with the body instead, with a pessimistic minThroughput: being wrong costs a retry.
+// Per-phase timeouts, never one http.Client.Timeout: no single value both allows a 256 MiB body on a
+// slow link and catches a stall. The whole-operation bound scales with the body at a pessimistic rate.
 const (
 	dialTimeout           = 10 * time.Second
 	tlsTimeout            = 10 * time.Second
@@ -32,8 +30,7 @@ const (
 	maxOperation          = 30 * time.Minute
 )
 
-// A failure body is read only this far: maxDiagnosticBytes for the diagnostic, maxDrainBytes more
-// to keep the connection reusable.
+// A failure body is read this far for the diagnostic, then drained further to keep the connection reusable.
 const (
 	maxDiagnosticBytes = 4 << 10
 	maxDrainBytes      = 64 << 10
@@ -43,8 +40,7 @@ const (
 // ErrRedirect is any 3xx: a presigned signature covers one origin and path, so none is followed.
 var ErrRedirect = errors.New("upload: the object store redirected and presigned tickets are never followed")
 
-// StatusError is a PUT that answered something other than 200. Reason is the store's own text,
-// sanitized; the URL and its query never reach it.
+// StatusError is a PUT that answered something other than 200; Reason is the store's sanitized text, never the URL.
 type StatusError struct {
 	Status int
 	Reason string
@@ -63,7 +59,6 @@ type Uploader struct {
 	client *http.Client
 }
 
-// New builds the uploader.
 func New() *Uploader {
 	return &Uploader{client: &http.Client{
 		Transport: &http.Transport{
@@ -113,7 +108,7 @@ func (u *Uploader) Upload(ctx context.Context, ticket Ticket, body []byte) error
 	if resp.StatusCode != http.StatusOK {
 		diagnostic, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDiagnosticBytes))
 		if readErr != nil {
-			diagnostic = nil // a partial body is not a diagnostic
+			diagnostic = nil
 		}
 		return &StatusError{Status: resp.StatusCode, Reason: sanitizeReason(string(diagnostic))}
 	}

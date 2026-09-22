@@ -18,15 +18,8 @@ func (l Layer) IsLocal() bool {
 }
 
 func (l Layer) String() string {
-	switch l {
-	case LayerCompiledDefaults:
-		return "compiled-defaults"
-	case LayerBundledCatalog:
-		return "bundled-catalog"
-	case LayerUser:
-		return "user"
-	case LayerRemote:
-		return "remote"
+	if l >= LayerCompiledDefaults && l <= LayerRemote {
+		return [...]string{"compiled-defaults", "bundled-catalog", "user", "remote"}[l-1]
 	}
 	return fmt.Sprintf("layer(%d)", int(l))
 }

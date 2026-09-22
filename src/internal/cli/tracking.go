@@ -48,10 +48,7 @@ func decodeKey(b []byte) key {
 	if len(b) >= 3 && b[0] == 0x1b && b[1] == '[' {
 		return keyBindings[string(b[:3])]
 	}
-	if len(b) == 0 {
-		return keyNone
-	}
-	return keyBindings[string(b[:1])]
+	return keyBindings[string(b[:min(len(b), 1)])]
 }
 
 func browseTracking(cmd *cobra.Command) error {
@@ -79,12 +76,11 @@ type browser struct {
 	rows []app.AgentRow
 	pal  palette
 
-	open        string
-	sel         int
-	top         int
-	height      int
-	status      string
-	statusStyle string
+	open   string
+	sel    int
+	top    int
+	height int
+	status string // shown dim under the table until the next move
 }
 
 func (b *browser) refresh() error {
@@ -162,7 +158,7 @@ func (b *browser) screen(now time.Time, raw bool) string {
 	}
 	body = b.clip(body)
 	if b.status != "" {
-		body += "\n" + styled(b.statusStyle, b.status, b.pal.reset) + "\n"
+		body += "\n" + styled(b.pal.dim, b.status, b.pal.reset) + "\n"
 	}
 	off := false
 	if a := b.agent(); a != nil && b.sel < len(a.Repos) {
@@ -237,7 +233,7 @@ func (b *browser) toggle() error {
 	}
 	r := a.Repos[b.sel]
 	if r.Dir == "" {
-		b.status, b.statusStyle = "these sessions belong to no repository, so tracking cannot be switched off for them", b.pal.dim
+		b.status = "these sessions belong to no repository, so tracking cannot be switched off for them"
 		return nil
 	}
 	if !r.Off {
@@ -246,12 +242,12 @@ func (b *browser) toggle() error {
 	}
 	own := sources.MarkerPath(r.Dir)
 	if !slices.Contains(r.Markers, own) {
-		b.status, b.statusStyle = "not tracked because of "+strings.Join(r.Markers, ", ")+", remove that file to track everything under it", b.pal.dim
+		b.status = "not tracked because of " + strings.Join(r.Markers, ", ") + ", remove that file to track everything under it"
 		return nil
 	}
 	b.status = ""
 	if others := slices.DeleteFunc(slices.Clone(r.Markers), func(m string) bool { return m == own }); len(others) > 0 {
-		b.status, b.statusStyle = "some sessions stay untracked because of "+strings.Join(others, ", "), b.pal.dim
+		b.status = "some sessions stay untracked because of " + strings.Join(others, ", ")
 	}
 	return b.attr.Track(r.Dir)
 }

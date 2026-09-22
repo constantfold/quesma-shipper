@@ -101,8 +101,6 @@ func (s *progressStream) emit(sourceID string, done, total int, f formats.FileOu
 // Stderr is a writer that takes the bar down before a line and redraws it after.
 func (s *progressStream) Stderr() io.Writer { return barWriter{s} }
 
-func (s *progressStream) Finish() { s.erase() }
-
 func (s *progressStream) notice() string {
 	where := "the summary below"
 	if s.logPath != "" {
@@ -117,7 +115,8 @@ func (s *progressStream) draw(frame string) {
 	s.frame = frame
 }
 
-func (s *progressStream) erase() {
+// Finish takes the bar down, leaving the cursor at the start of a blank line.
+func (s *progressStream) Finish() {
 	if s.frame != "" {
 		fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", len(s.frame)))
 		s.frame = ""
@@ -128,7 +127,7 @@ type barWriter struct{ s *progressStream }
 
 func (b barWriter) Write(p []byte) (int, error) {
 	frame := b.s.frame
-	b.s.erase()
+	b.s.Finish()
 	n, err := b.s.out.Write(p)
 	if frame != "" {
 		b.s.draw(frame)

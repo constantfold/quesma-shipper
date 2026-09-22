@@ -31,14 +31,6 @@ func TestUpdateRestartWarnings(t *testing.T) {
 	}
 }
 
-// Loaded is a detection result, and detection is what goes wrong: on Windows a running task whose
-// definition could not be read, or a macOS plist present but not loaded, still needs its restart.
-func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) {
-	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: true}))
-	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: false}))
-	assert.False(t, restartWanted(packaging.ServiceStatus{}), "no service entry, nothing to restart")
-}
-
 // Dev builds never self-update, SHIPPER_NO_SELFUPDATE always wins, and the re-exec guard allows
 // exactly one hop per boot; every skip the operator should know about says why.
 func TestTheBootGateKeepsItsPromises(t *testing.T) {

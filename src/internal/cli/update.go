@@ -55,7 +55,8 @@ func restartService(ctx context.Context, w io.Writer) error {
 	if stateErr != nil {
 		return serviceStateTimeoutError(stateErr)
 	}
-	if !restartWanted(state) {
+	// Installed, not Loaded: an unloaded or unparseable service still needs restarting.
+	if !state.Installed {
 		return nil
 	}
 
@@ -74,11 +75,6 @@ func restartService(ctx context.Context, w io.Writer) error {
 	}
 	banner(w, p, p.green, "on", "background service restarted")
 	return nil
-}
-
-// restartWanted uses Installed: an unloaded or unparseable service still needs restarting.
-func restartWanted(st packaging.ServiceStatus) bool {
-	return st.Installed
 }
 
 // withRestart appends the command that forces a restart, on platforms that have one.

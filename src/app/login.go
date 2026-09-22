@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
@@ -32,7 +34,7 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
-	pub, priv, err := controlplane.NewDeviceKey()
+	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -62,7 +64,7 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 		Organization: resp.Organization,
 		Endpoint:     server,
 		DeviceKey:    controlplane.EncodeKey(priv),
-		EnrolledAt:   controlplane.Now(),
+		EnrolledAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := rec.Save(paths.StateDir); err != nil {
 		return LoginResult{}, err

@@ -13,18 +13,15 @@ import (
 	"uuid"
 )
 
-// TelemetryPath is the only route the telemetry signature is valid for: the control plane builds
-// the same preamble from the same literal, so a served path that differs is refused locally.
-const TelemetryPath = "/v1/telemetry"
+// TelemetryPath is the only route the signature is valid for: the preamble names it, so a
+// signature cannot be replayed onto another route, and a served path that differs is refused locally.
+const (
+	TelemetryPath     = "/v1/telemetry"
+	TelemetryPreamble = "trajectory-shipper-telemetry-v1\nPOST\n" + TelemetryPath + "\n"
+	MaxTelemetryBody  = 1 << 20 // the control plane refuses more permanently, so this side checks first
+)
 
-// TelemetryPreamble domain-separates the signature like the v2 upload one: the signed bytes are
-// this prefix followed by the body. The path is inside it, so a signature cannot be replayed onto another route.
-const TelemetryPreamble = "trajectory-shipper-telemetry-v1\nPOST\n" + TelemetryPath + "\n"
-
-// MaxTelemetryBody is what the control plane accepts; more is refused permanently, so this side checks first.
-const MaxTelemetryBody = 1 << 20
-
-// TelemetryRequest is one submission. IssuedAt is the caller's stamp and is the freshness the control plane checks.
+// TelemetryRequest is one submission; IssuedAt is the freshness the control plane checks.
 type TelemetryRequest struct {
 	Schema   int             `json:"schema"`
 	BatchID  string          `json:"batch_id"`
@@ -35,22 +32,18 @@ type TelemetryRequest struct {
 // NewBatchID mints the identifier for one event: the far end deduplicates on it, so a resend presents the same id.
 func NewBatchID() string { return uuid.New().String() }
 
+// Disabled holds until the next configuration load, rejected is permanent, unavailable retries next tick.
 var (
-	// ErrTelemetryDisabled says this organization has no collector; the answer cannot change before the next configuration load.
-	ErrTelemetryDisabled = errors.New("controlplane: telemetry is disabled for this organization")
-
-	// ErrTelemetryRejected is a submission this control plane will never accept.
-	ErrTelemetryRejected = errors.New("controlplane: telemetry submission was rejected")
-
-	// ErrTelemetryUnavailable marks a transient submission failure; the next tick retries.
+	ErrTelemetryDisabled    = errors.New("controlplane: telemetry is disabled for this organization")
+	ErrTelemetryRejected    = errors.New("controlplane: telemetry submission was rejected")
 	ErrTelemetryUnavailable = errors.New("controlplane: telemetry could not be delivered")
 )
 
-// SubmitTelemetry posts one event to path, taken from served configuration and resolved against
-// the enrolled origin, so a served document cannot point telemetry at a third party.
+// SubmitTelemetry posts one event to the served path, resolved against the enrolled origin so a
+// served document cannot point telemetry at a third party.
 func (c *Client) SubmitTelemetry(ctx context.Context, path, batchID string, issuedAt time.Time, payload json.RawMessage) error {
 	switch {
-	case c.installID == "":
+	case c.o.InstallID == "":
 		return ErrNotEnrolled
 	case path == "":
 		return ErrTelemetryDisabled
