@@ -85,9 +85,16 @@ func ErrorLine(err error, w io.Writer) string {
 	return app.Name + ": " + p.names(err.Error(), "")
 }
 
-func HelpPointer(w io.Writer) string {
-	p := paletteFor(w)
-	return styled(p.dim, "More:", p.reset) + " " + styled(p.cyan, app.Name+" --help", p.reset)
+func HelpPointer(w io.Writer) string { return more(paletteFor(w), app.Name+" --help") }
+
+func more(p palette, command string) string {
+	return styled(p.dim, "More:", p.reset) + " " + styled(p.cyan, command, p.reset)
+}
+
+// verb is a subcommand that takes no arguments.
+func verb(use, short string, run func(cmd *cobra.Command) error) *cobra.Command {
+	return &cobra.Command{Use: use, Short: short, Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return run(cmd) }}
 }
 
 type errSilent struct{ code int }

@@ -138,10 +138,14 @@ func trackingHelp(pal palette, repoLevel, off bool) string {
 	if off {
 		toggle = "resume tracking"
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"t", toggle}, {"b", "back"}, {"q", "quit"}}
 	if !repoLevel {
-		keys = [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"q", "quit"}}
+		return keyHelp(pal, [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"q", "quit"}})
 	}
+	return keyHelp(pal, [][2]string{{"↑↓", "move"}, {"enter", "open"}, {"t", toggle}, {"b", "back"}, {"q", "quit"}})
+}
+
+// keyHelp is the footer naming each key and what it does.
+func keyHelp(pal palette, keys [][2]string) string {
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, styled(pal.cyan, k[0], pal.reset)+styled(pal.dim, " "+k[1], pal.reset))

@@ -13,20 +13,18 @@ import (
 
 const (
 	consoleLineBudget = 32
-
-	plainEvery = 100
-
-	runLogName = "last-sync.log"
-
-	barCols = 75
-
-	barWidth = 16
+	plainEvery        = 100
+	runLogName        = "last-sync.log"
+	barCols           = 75
+	barWidth          = 16
 )
 
+// progressStream shows the first per-file lines of a --once run, then a bar on a terminal or a
+// periodic counter line elsewhere; every line also goes to the run log.
 type progressStream struct {
 	out     io.Writer // the console, always present: warnings go here even under --quiet
 	log     io.Writer // nil until the log opens, and again if writing to it fails
-	logFile *os.File  // the same file, kept so the stream can close what it opened
+	logFile *os.File
 	logPath string
 	quiet   bool
 	tty     bool
@@ -41,11 +39,7 @@ type progressStream struct {
 }
 
 func newProgressStream(out io.Writer, quiet bool) *progressStream {
-	return &progressStream{
-		out:   out,
-		quiet: quiet,
-		tty:   isTerminal(out),
-	}
+	return &progressStream{out: out, quiet: quiet, tty: isTerminal(out)}
 }
 
 func (s *progressStream) openLog(stateDir string) {
@@ -63,17 +57,19 @@ func (s *progressStream) openLog(stateDir string) {
 }
 
 func (s *progressStream) closeLog() {
-	if s.logFile == nil {
-		return
+	if s.logFile != nil {
+		s.logFile.Close()
+		s.logFile, s.log = nil, nil
 	}
-	s.logFile.Close()
-	s.logFile, s.log = nil, nil
 }
 
 func (s *progressStream) emit(sourceID string, done, total int, f formats.FileOutcome) {
 	line := progressLine(sourceID, done, total, f)
-	if line != "" {
-		s.tee(line)
+	if line != "" && s.log != nil {
+		if _, err := fmt.Fprintln(s.log, line); err != nil {
+			s.log = nil
+			fmt.Fprintf(s.Stderr(), "warning: the run log stopped at %s: %v\n", s.logPath, err)
+		}
 	}
 	s.decided++
 	switch f.Decision {
@@ -82,51 +78,37 @@ func (s *progressStream) emit(sourceID string, done, total int, f formats.FileOu
 	case formats.DecisionParked, formats.DecisionFailed:
 		s.errors++
 	}
-	if s.quiet {
-		return
-	}
-	if s.lines < consoleLineBudget {
-		if line == "" {
-			return
+	switch {
+	case s.quiet:
+	case s.lines < consoleLineBudget:
+		if line != "" {
+			fmt.Fprintln(s.out, line)
+			s.lines++
 		}
-		fmt.Fprintln(s.out, line)
-		s.lines++
-		return
-	}
-	if line != "" && !s.noticed {
-		s.noticed = true
-		fmt.Fprintln(s.Stderr(), s.notice())
-	}
-	if s.tty {
-		s.draw(barFrame(sourceID, done, total, s.sent, s.errors))
-		return
-	}
-	if s.decided%plainEvery == 0 {
-		fmt.Fprintln(s.out, plainFrame(sourceID, done, total, s.sent, s.errors))
+	default:
+		if line != "" && !s.noticed {
+			s.noticed = true
+			fmt.Fprintln(s.Stderr(), s.notice())
+		}
+		if s.tty {
+			s.draw(progressFrame(sourceID, done, total, s.sent, s.errors, true))
+		} else if s.decided%plainEvery == 0 {
+			fmt.Fprintln(s.out, progressFrame(sourceID, done, total, s.sent, s.errors, false))
+		}
 	}
 }
 
+// Stderr is a writer that takes the bar down before a line and redraws it after.
 func (s *progressStream) Stderr() io.Writer { return barWriter{s} }
 
 func (s *progressStream) Finish() { s.erase() }
 
-func (s *progressStream) tee(line string) {
-	if s.log == nil {
-		return
-	}
-	if _, err := fmt.Fprintln(s.log, line); err != nil {
-		s.log = nil
-		fmt.Fprintf(s.Stderr(), "warning: the run log stopped at %s: %v\n", s.logPath, err)
-	}
-}
-
 func (s *progressStream) notice() string {
-	if s.logPath == "" {
-		return fmt.Sprintf("  … %d lines shown; the rest of this run is in the summary below",
-			consoleLineBudget)
+	where := "the summary below"
+	if s.logPath != "" {
+		where = s.logPath
 	}
-	return fmt.Sprintf("  … %d lines shown; the rest of this run is in %s",
-		consoleLineBudget, s.logPath)
+	return fmt.Sprintf("  … %d lines shown; the rest of this run is in %s", consoleLineBudget, where)
 }
 
 func (s *progressStream) draw(frame string) {
@@ -136,11 +118,10 @@ func (s *progressStream) draw(frame string) {
 }
 
 func (s *progressStream) erase() {
-	if s.frame == "" {
-		return
+	if s.frame != "" {
+		fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", len(s.frame)))
+		s.frame = ""
 	}
-	fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", len(s.frame)))
-	s.frame = ""
 }
 
 type barWriter struct{ s *progressStream }
@@ -155,30 +136,17 @@ func (b barWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func barFrame(sourceID string, done, total, sent, errs int) string {
-	filled := 0
-	if total > 0 {
-		filled = done * barWidth / total
+// progressFrame is one transient progress line, the source id shortened so it never wraps past barCols.
+func progressFrame(sourceID string, done, total, sent, errs int, bar bool) string {
+	tail := fmt.Sprintf("  %d/%d  sent %d  errors %d", done, total, sent, errs)
+	if bar {
+		filled := 0
+		if total > 0 {
+			filled = min(done*barWidth/total, barWidth)
+		}
+		tail = "  [" + strings.Repeat("#", filled) + strings.Repeat("-", barWidth-filled) + "]" + tail
 	}
-	filled = min(filled, barWidth)
-	bar := "[" + strings.Repeat("#", filled) + strings.Repeat("-", barWidth-filled) + "]"
-	return clampFrame(sourceID, fmt.Sprintf("  %s  %s", bar, counters(done, total, sent, errs)))
-}
-
-func plainFrame(sourceID string, done, total, sent, errs int) string {
-	return clampFrame(sourceID, "  "+counters(done, total, sent, errs))
-}
-
-func counters(done, total, sent, errs int) string {
-	return fmt.Sprintf("%d/%d  sent %d  errors %d", done, total, sent, errs)
-}
-
-func clampFrame(sourceID, tail string) string {
-	room := max(0, barCols-len(tail))
-	if len(sourceID) > room {
-		sourceID = sourceID[:room]
-	}
-	return sourceID + tail
+	return sourceID[:min(len(sourceID), max(0, barCols-len(tail)))] + tail
 }
 
 func isTerminal(w io.Writer) bool {
@@ -187,8 +155,5 @@ func isTerminal(w io.Writer) bool {
 		return false
 	}
 	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

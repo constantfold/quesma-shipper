@@ -16,13 +16,13 @@ import (
 // startCrashJournal opens the journal in dir; dirErr says the caller could not find one, which
 // leaves this run unjournaled rather than unstarted.
 func startCrashJournal(errOut io.Writer, dir string, dirErr error) (*crashjournal.Log, string, *formats.LastCrash) {
-	runID := newRunID()
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	runID := hex.EncodeToString(b)
 	if dirErr != nil {
 		return nil, runID, nil
 	}
-
-	// Before Open, which may rotate the file this reads.
-	prev := crashjournal.LastRun(dir)
+	prev := crashjournal.LastRun(dir) // before Open, which may rotate the file this reads
 
 	fl, err := crashjournal.Open(dir, runID)
 	if err != nil {
@@ -31,18 +31,12 @@ func startCrashJournal(errOut io.Writer, dir string, dirErr error) (*crashjourna
 	}
 	fl.Start()
 
-	var crash *formats.LastCrash
-	if prev != nil {
-		crash = &formats.LastCrash{RunID: prev.RunID, Phase: prev.Phase, Consecutive: prev.Crashes}
-		fmt.Fprintf(errOut, "previous run %s never exited: last step %q; %d consecutive unclean run(s)\n",
-			prev.RunID, prev.Phase, prev.Crashes)
-		app.RecordCrash(crash)
+	if prev == nil {
+		return fl, runID, nil
 	}
+	crash := &formats.LastCrash{RunID: prev.RunID, Phase: prev.Phase, Consecutive: prev.Crashes}
+	fmt.Fprintf(errOut, "previous run %s never exited: last step %q; %d consecutive unclean run(s)\n",
+		prev.RunID, prev.Phase, prev.Crashes)
+	app.RecordCrash(crash)
 	return fl, runID, crash
-}
-
-func newRunID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

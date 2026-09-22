@@ -20,7 +20,11 @@ func pauseCmd() *cobra.Command {
 			now := time.Now()
 			var until time.Time
 			if len(args) == 0 {
-				i, err := choose(cmd, labels(app.PauseChoices))
+				labels := make([]string, len(app.PauseChoices))
+				for i, c := range app.PauseChoices {
+					labels[i] = c.Label
+				}
+				i, err := choose(cmd, labels)
 				if errors.Is(err, errCancelled) {
 					fmt.Fprintln(cmd.OutOrStdout(), "Not paused.")
 					return nil
@@ -48,33 +52,20 @@ func pauseCmd() *cobra.Command {
 }
 
 func resumeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "resume",
-		Short: "Start collecting again",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			was, warning, err := app.Resume()
-			if err != nil {
-				return err
-			}
-			printWarning(cmd.ErrOrStderr(), warning)
-			p := paletteFor(cmd.OutOrStdout())
-			why := ""
-			if !was {
-				why = "was not paused"
-			}
-			banner(cmd.OutOrStdout(), p, p.green, "on", why)
-			return nil
-		},
-	}
-}
-
-func labels(choices []app.PauseChoice) []string {
-	out := make([]string, len(choices))
-	for i, c := range choices {
-		out[i] = c.Label
-	}
-	return out
+	return verb("resume", "Start collecting again", func(cmd *cobra.Command) error {
+		was, warning, err := app.Resume()
+		if err != nil {
+			return err
+		}
+		printWarning(cmd.ErrOrStderr(), warning)
+		p := paletteFor(cmd.OutOrStdout())
+		why := ""
+		if !was {
+			why = "was not paused"
+		}
+		banner(cmd.OutOrStdout(), p, p.green, "on", why)
+		return nil
+	})
 }
 
 func usage(err error) error { return usageError{err} }

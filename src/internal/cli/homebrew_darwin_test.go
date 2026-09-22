@@ -47,10 +47,14 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		if _, err := packaging.Update(context.Background(), packaging.UpdateOptions{}); err == nil || transport.calls == 0 {
 			t.Fatalf("packaging.Update = %v", err)
 		}
+		execute := func(args ...string) error {
+			out.Reset()
+			cmd := Root(build, &out, &out)
+			cmd.SetArgs(args)
+			return cmd.Execute()
+		}
 		transport.calls = 0
-		cmd := Root(build, &out, &out)
-		cmd.SetArgs([]string{"update"})
-		if err := cmd.Execute(); err == nil || transport.calls == 0 || !strings.Contains(err.Error(), "test update endpoint unavailable") {
+		if err := execute("update"); err == nil || transport.calls == 0 || !strings.Contains(err.Error(), "test update endpoint unavailable") {
 			t.Fatalf("manual update did not reach TUF: %v", err)
 		}
 		_, paths, err := app.ResolveEffective()
@@ -58,22 +62,13 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		require.NoError(t, os.MkdirAll(paths.StateDir, 0o700))
 		marker := filepath.Join(paths.StateDir, "preserve")
 		require.NoError(t, os.WriteFile(marker, []byte("state"), 0o600))
-		for _, purge := range []bool{false, true} {
-			out.Reset()
-			cmd = Root(build, &out, &out)
-			args := []string{"uninstall"}
-			if purge {
-				args = append(args, "--purge")
-			}
-			cmd.SetArgs(args)
-			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "uninstall asks first") || !strings.Contains(out.String(), "Homebrew command") {
+		for _, args := range [][]string{{"uninstall"}, {"uninstall", "--purge"}} {
+			purge := len(args) > 1
+			if err := execute(args...); err == nil || !strings.Contains(err.Error(), "uninstall asks first") || !strings.Contains(out.String(), "Homebrew command") {
 				t.Fatalf("uninstall confirmation: %v, %s", err, &out)
 			}
-			_, statErr := os.Stat(marker)
-			require.NoError(t, statErr, "state changed before confirmation:")
-			cmd = Root(build, &out, &out)
-			cmd.SetArgs(append(args, "--yes"))
-			if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), packaging.BrewUninstall) {
+			require.FileExists(t, marker, "state changed before confirmation")
+			if err := execute(append(args, "--yes")...); err != nil || !strings.Contains(out.String(), packaging.BrewUninstall) {
 				t.Fatalf("uninstall --yes: %v, %s", err, &out)
 			}
 			if _, err := os.Stat(marker); (!purge && err != nil) || (purge && !os.IsNotExist(err)) {
@@ -98,6 +93,5 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cask subprocess: %v\n%s", err, out)
 	}
-	_, payloadErr := os.Stat(installed)
-	require.NoError(t, payloadErr, "Brew payload was removed:")
+	require.FileExists(t, installed, "Brew payload was removed")
 }
