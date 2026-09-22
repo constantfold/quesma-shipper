@@ -184,40 +184,25 @@ func TestUnreadableDatabaseFallbacks(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, want string
-		rows       map[string]string
-		prefixes   []string
-		now        func() time.Time
 		prepare    func(*testing.T, string, string)
 	}{
-		{"all methods fail", "every read method failed",
-			map[string]string{"composerData:c1": `{"composerId":"c1"}`, "bubbleId:c1:b1": `{"type":1,"text":"hi"}`},
-			[]string{"composerData:", "bubbleId:"}, nil,
-			func(t *testing.T, path, scratch string) {
-				inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
-				require.Equal(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first")
-			}},
-		{"live database cannot be copied", "not cold enough",
-			map[string]string{"composerData:c1": `{"composerId":"c1"}`},
-			[]string{"composerData:"}, time.Now,
-			func(t *testing.T, path, _ string) {
-				require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
-			}},
+		{"all methods fail", "every read method failed", func(t *testing.T, path, scratch string) {
+			inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
+			require.Equal(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first")
+		}},
+		{"live database cannot be copied", "not cold enough", func(t *testing.T, path, _ string) {
+			require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := newStore(t, tc.rows)
+			path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
 			scratch := filepath.Join(t.TempDir(), "scratch")
 			tc.prepare(t, path, scratch)
 			if err := os.Chmod(path, 0o000); err != nil {
 				t.Skipf("cannot chmod: %v", err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-			_, err := sqliteread.Read(sqliteread.Options{
-				Path:        path,
-				ScratchDir:  scratch,
-				Table:       "cursorDiskKV",
-				KeyPrefixes: tc.prefixes,
-				Now:         tc.now,
-			})
+			_, err := sqliteread.Read(sqliteread.Options{Path: path, ScratchDir: scratch, Table: "cursorDiskKV"})
 			require.Error(t, err, "an unreadable database produced a successful read")
 			assert.Contains(t, err.Error(), tc.want)
 		})
@@ -267,8 +252,9 @@ func listDir(t *testing.T, dir string) []string {
 	return out
 }
 
-// THE FALLBACK-EQUIVALENCE GATE: every read method returns identical ROW VALUES, which is why hashes come from values and not bytes.
-func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
+// Every read method returns identical row values, which is why hashes come from values and not bytes. Each
+// method leaves the source directory alone; a snapshot replaces crash debris and removes its own copy.
+func TestEveryReadMethodReturnsIdenticalRowsAndCleansUp(t *testing.T) {
 	path := newStore(t, map[string]string{
 		"composerData:c1": `{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`,
 		"bubbleId:c1:b1":  `{"type":1,"text":"hello","createdAt":"2026-07-30T10:00:00Z"}`,
@@ -279,54 +265,29 @@ func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, old, old))
 
 	before := listDir(t, filepath.Dir(path))
-	methods := []sqliteread.ReadMethod{sqliteread.ReadInPlace, sqliteread.ReadSnapshot, sqliteread.ReadColdCopy}
 	var reference []sqliteread.Row
+	for _, want := range []sqliteread.ReadMethod{sqliteread.ReadInPlace, sqliteread.ReadSnapshot, sqliteread.ReadColdCopy} {
+		scratch := filepath.Join(t.TempDir(), "scratch")
+		leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
+		require.NoError(t, os.MkdirAll(scratch, 0o700))
+		require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
 
-	for _, want := range methods {
-		res := read(t, path, func(o *sqliteread.Options) { o.StartAt = want })
+		res := read(t, path, func(o *sqliteread.Options) { o.ScratchDir, o.StartAt = scratch, want })
 		require.Equalf(t, want, res.Method, "asked for method %s, got %s", want, res.Method)
 		assert.Equal(t, before, listDir(t, filepath.Dir(path)), "method %s changed the source directory", want)
+		if want == sqliteread.ReadSnapshot {
+			assert.Empty(t, listDir(t, scratch))
+		} else {
+			body, err := os.ReadFile(leftover)
+			require.NoError(t, err)
+			assert.Equal(t, "corrupt partial", string(body), "method %s touched the snapshot slot", want)
+			assert.Equal(t, []string{"snapshot-state.vscdb.sqlite"}, listDir(t, scratch))
+		}
 		if reference == nil {
 			reference = res.Rows
 			continue
 		}
 		assert.Equal(t, reference, res.Rows, "method %s", want)
 	}
-}
-
-// A snapshot replaces crash debris and removes its copy; an in-place read leaves scratch alone.
-func TestSnapshotCleanup(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		method   sqliteread.ReadMethod
-		leftover bool
-	}{
-		{"in place leaves existing scratch alone", sqliteread.ReadInPlace, true},
-		{"snapshot leaves no files", sqliteread.ReadSnapshot, false},
-		{"snapshot replaces corrupt leftover", sqliteread.ReadSnapshot, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-			scratch := filepath.Join(t.TempDir(), "scratch")
-			leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
-			if tc.leftover {
-				require.NoError(t, os.MkdirAll(scratch, 0o700))
-				require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
-			}
-			res := read(t, path, func(o *sqliteread.Options) {
-				o.ScratchDir, o.StartAt = scratch, tc.method
-				o.KeyPrefixes = []string{"composerData:"}
-			})
-			require.Equal(t, tc.method, res.Method)
-			require.Len(t, res.Rows, 1)
-			if tc.method == sqliteread.ReadInPlace {
-				assert.Equal(t, []string{"snapshot-state.vscdb.sqlite"}, listDir(t, scratch))
-				body, err := os.ReadFile(leftover)
-				require.NoError(t, err)
-				assert.Equal(t, "corrupt partial", string(body))
-			} else {
-				assert.Empty(t, listDir(t, scratch))
-			}
-		})
-	}
+	assert.Len(t, reference, 3)
 }
