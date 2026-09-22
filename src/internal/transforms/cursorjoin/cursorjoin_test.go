@@ -30,14 +30,7 @@ func TestTheJoinCarriesTheFieldsTheTranscriptLacks(t *testing.T) {
 	require.Lenf(t, lines, 3, "derived %d lines, want 3 (one per transcript line)", len(lines))
 
 	// The assistant turn: block 0 is prose, block 1 is the tool call.
-	blocks, ok := lines[1]["_enrich"].([]any)
-	if !ok || len(blocks) != 2 {
-		t.Fatalf("assistant line has no per-block enrichment: %v", lines[1]["_enrich"])
-	}
-	tool, ok := blocks[1].(map[string]any)
-	if !ok {
-		t.Fatalf("the tool_use block was not enriched: %v", blocks[1])
-	}
+	tool := matchedBubbles(t, lines[1], "b2", "b3")[1]
 
 	// The four fields the raw transcript structurally cannot carry.
 	assert.Truef(t, tool["tool_call_id"] == "call_abc123", "tool_call_id = %v", tool["tool_call_id"])

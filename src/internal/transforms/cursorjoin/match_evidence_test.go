@@ -2,8 +2,6 @@ package cursorjoin_test
 
 import (
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // Two agreeing values do not outvote a third that actively disagrees: under a two-of-three rule
@@ -51,10 +49,7 @@ func TestAPartiallyAgreeingOwnBubbleOutranksAnEvidenceFreeOrphan(t *testing.T) {
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "task", "the task joined to %v, want its own prompt-matching bubble", e)
+	e := matchedBubbles(t, lines[1], "task")[0]
 	if e["status"] != "completed" || e["result"] != "no type errors" {
 		t.Errorf("the task wears the orphan's outcome: status=%v result=%v", e["status"], e["result"])
 	}
@@ -148,8 +143,5 @@ func TestTheStrongerOfTwoAgreeingBubblesWins(t *testing.T) {
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "grep", "the search joined to %v, want the bubble agreeing on both values", e)
+	matchedBubbles(t, lines[1], "grep")
 }

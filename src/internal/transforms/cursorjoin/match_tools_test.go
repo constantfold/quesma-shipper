@@ -87,10 +87,7 @@ func TestAnErroredCallRecordedWithoutArgumentsAligns(t *testing.T) {
 	require.Equalf(t, 0, res.Mismatched, "the errored call mismatched: %v", res.Notes)
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "edit", "the block joined to %v, want the errored bubble", e)
+	e := matchedBubbles(t, lines[1], "edit")[0]
 	assert.Truef(t, e["status"] == "error", "status = %v", e["status"])
 }
 

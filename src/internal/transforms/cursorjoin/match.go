@@ -1,5 +1,7 @@
 package cursorjoin
 
+import "cmp"
+
 // Consumption evidence detects repeats; declined bubbles stay unavailable after an ambiguous match.
 type bubbleState struct {
 	used, declined bool
@@ -176,21 +178,13 @@ func (blk block) evidenceFor(b *bubble, role string) (evidence, int) {
 		if b.ToolFormerData != nil {
 			return evidenceNegative, 0
 		}
+		reasoning := b.reasoningText()
+		ev, n := textEvidence(string(blk.Text), cmp.Or(reasoning, b.Text))
 		// Empty text must not consume a reasoning bubble.
-		if rt := b.reasoningText(); rt != "" {
-			if strictOverlap(string(blk.Text), rt) {
-				return evidencePositive, 1
-			}
+		if reasoning != "" && ev == evidenceNeutral {
 			return evidenceNegative, 0
 		}
-		if strictOverlap(string(blk.Text), b.Text) {
-			return evidencePositive, 1
-		}
-		if textOverlap(string(blk.Text), b.Text) {
-			// The lenient rule confirms nothing: positional evidence only.
-			return evidenceNeutral, 0
-		}
-		return evidenceNegative, 0
+		return ev, n
 
 	default:
 		// An unknown block type means Cursor changed; the loud outcome is right.

@@ -46,18 +46,9 @@ func TestTheCurrentStoreGenerationEnriches(t *testing.T) {
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
 
-	blocks, ok := lines[1]["_enrich"].([]any)
-	if !ok || len(blocks) != 2 {
-		t.Fatalf("assistant line has no per-block enrichment: %v", lines[1]["_enrich"])
-	}
-	prose, _ := blocks[0].(map[string]any)
-	if prose == nil || prose["modelName"] != "composer-2.5" {
-		t.Errorf("modelInfo.modelName did not reach the derived object: %v", blocks[0])
-	}
-	tool, _ := blocks[1].(map[string]any)
-	if tool == nil {
-		t.Fatalf("the tool_use block was not enriched: %v", blocks[1])
-	}
+	blocks := matchedBubbles(t, lines[1], "a1", "tool1")
+	assert.Equal(t, "composer-2.5", blocks[0]["modelName"])
+	tool := blocks[1]
 	assert.Truef(t, tool["tool_call_id"] == "tool_33e5b6ee", "tool_call_id = %v", tool["tool_call_id"])
 	assert.Truef(t, tool["tool_name"] == "run_terminal_command_v2", "tool_name = %v", tool["tool_name"])
 	if s, _ := tool["result"].(string); !strings.Contains(s, "main.go") {
@@ -107,19 +98,8 @@ func TestTheCurrentTranscriptGenerationEnriches(t *testing.T) {
 
 	// The thinking text block matched the thinking bubble rather than mismatching.
 	lines := decode(t, res.Objects[0].Payload)
-	blocks, ok := lines[1]["_enrich"].([]any)
-	if !ok || len(blocks) != 2 {
-		t.Fatalf("assistant line has no per-block enrichment: %v", lines[1]["_enrich"])
-	}
-	think, _ := blocks[0].(map[string]any)
-	if think == nil || think["bubbleId"] != "think1" {
-		t.Errorf("the thinking text block did not align to the thinking bubble: %v", blocks[0])
-	}
-	// The no-arguments tool bubble matched by position and name, carrying the result.
-	tool, _ := blocks[1].(map[string]any)
-	if tool == nil || tool["tool_call_id"] != "tool_dev123" {
-		t.Errorf("the no-arguments tool bubble did not align: %v", blocks[1])
-	}
+	blocks := matchedBubbles(t, lines[1], "think1", "tool1")
+	assert.Equal(t, "tool_dev123", blocks[1]["tool_call_id"])
 	assert.Contains(t, payload, "VITE ready", "the tool result did not reach the derived object")
 	// The injected trailing turns are tail, not mismatch: carried native-only, said out
 	// loud as an info — the object shipped, so it must not read as loss in Notes.
@@ -228,8 +208,5 @@ func TestAReasoningStringWithNoKnownTextFieldKeepsItsProse(t *testing.T) {
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "b2", "the reasoning block joined to %v, want the bubble that carried it", e)
+	matchedBubbles(t, lines[1], "b2")
 }

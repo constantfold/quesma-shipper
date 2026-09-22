@@ -4,27 +4,18 @@ import (
 	"strings"
 )
 
-// strictOverlap reports whether two texts genuinely share their prose. Stricter than
-// textOverlap on purpose: an empty side is a non-match here, never a free pass.
-func strictOverlap(transcript, stored string) bool { return overlap(transcript, stored, false) }
-
-// textOverlap reports whether a transcript text block and a bubble carry the same prose. The
-// transcript wraps user text in tags the store does not, so a normalised core is compared.
-// An empty side cannot contradict: position in the ordered list stands.
-func textOverlap(transcript, stored string) bool { return overlap(transcript, stored, true) }
-
-func overlap(transcript, stored string, emptyMatches bool) bool {
-	t := normaliseText(transcript)
-	s := normaliseText(stored)
+// textEvidence treats an empty side as positional evidence; matching prose confirms identity.
+func textEvidence(transcript, stored string) (evidence, int) {
+	t, s := normaliseText(transcript), normaliseText(stored)
 	if t == "" || s == "" {
-		return emptyMatches
+		return evidenceNeutral, 0
 	}
-	if strings.Contains(t, s) || strings.Contains(s, t) {
-		return true
-	}
-	// Compare a prefix: the store truncates long prose in some generations.
+	// Some store generations truncate prose, so a shared prefix still confirms it.
 	n := min(len(t), len(s), 64)
-	return t[:n] == s[:n]
+	if strings.Contains(t, s) || strings.Contains(s, t) || t[:n] == s[:n] {
+		return evidencePositive, 1
+	}
+	return evidenceNegative, 0
 }
 
 func normaliseText(s string) string {

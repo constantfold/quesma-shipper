@@ -142,6 +142,7 @@ func matchedBubbles(t *testing.T, line map[string]any, ids ...string) []map[stri
 	out := make([]map[string]any, len(items))
 	for i, item := range items {
 		out[i], _ = item.(map[string]any)
+		require.NotNil(t, out[i], "block %d", i)
 		assert.Equal(t, ids[i], out[i]["bubbleId"], "block %d", i)
 	}
 	return out

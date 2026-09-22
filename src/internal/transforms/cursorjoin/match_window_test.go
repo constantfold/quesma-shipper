@@ -73,10 +73,7 @@ func TestForwardWindowKeepsDistantCallsOut(t *testing.T) {
 			res := run(t, newStore(t, rows), unit(t, transcript))
 			require.Lenf(t, res.Objects, 1, "objects = %d, mismatched %d, notes %v", len(res.Objects), res.Mismatched, res.Notes)
 			lines := decode(t, res.Objects[0].Payload)
-			enrich, _ := lines[1]["_enrich"].([]any)
-			require.Len(t, enrich, 1)
-			e, _ := enrich[0].(map[string]any)
-			require.Truef(t, e != nil && e["bubbleId"] == "near", "the call joined to %v, want the bubble at its own position", e)
+			e := matchedBubbles(t, lines[1], "near")[0]
 			assert.Equal(t, "the right result", e["result"])
 		})
 	}
@@ -132,10 +129,7 @@ func TestThePositionalLookBehindTakesTheNearestSiblingNotAnyOfThem(t *testing.T)
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 2)
-	e, _ := enrich[1].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "shellNear", "the shell call joined to %v, want the nearest sibling behind the cursor", e)
+	e := matchedBubbles(t, lines[1], "read", "shellNear")[1]
 	assert.True(t, e["result"] != "the FAR sibling", "the look-behind reached past a nearer sibling")
 }
 

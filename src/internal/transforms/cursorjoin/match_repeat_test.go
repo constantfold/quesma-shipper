@@ -39,21 +39,10 @@ func TestARepeatedCallTheStoreRecordedOnceIsNotAMismatch(t *testing.T) {
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
 
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	if e, _ := enrich[0].(map[string]any); e == nil || e["bubbleId"] != "grep" {
-		t.Errorf("first run joined to %v", enrich)
-	}
-	if _, has := lines[2]["_enrich"]; has {
-		t.Errorf("the repeat was given enrichment it has no recorded bubble for: %v", lines[2]["_enrich"])
-	}
-	enrich, _ = lines[3]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	if e, _ := enrich[0].(map[string]any); e == nil || e["bubbleId"] != "purge" {
-		t.Errorf("the sibling search joined to %v, want its own bubble", e)
-	}
-	enrich, _ = lines[4]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
+	matchedBubbles(t, lines[1], "grep")
+	assert.NotContains(t, lines[2], "_enrich", "the repeat has no recorded bubble")
+	matchedBubbles(t, lines[3], "purge")
+	matchedBubbles(t, lines[4], "a1")
 	// The argument-less bubble's result must not surface ANYWHERE: not on the re-run, and
 	// not on a later call the declined bubble could otherwise fall back to.
 	assert.NotContains(t, string(res.Objects[0].Payload), "NOT THE REPEAT'S RESULT", "the undecided argument-less bubble's result reached the derived object")
@@ -133,15 +122,10 @@ func TestAnUndecidableRepeatAttachesNothingAndDoesNotCascade(t *testing.T) {
 
 	// Under one reading t2 is the re-run's own bubble, under the other a different call's,
 	// and no local signal picks between them.
-	if _, has := lines[2]["_enrich"]; has {
-		t.Errorf("the undecidable re-run was given enrichment: %v", lines[2]["_enrich"])
-	}
+	assert.NotContains(t, lines[2], "_enrich", "the re-run is undecidable")
 	// And the undecided bubble does not cascade: git status gets ITS OWN bubble, not the
 	// re-run's declined one.
-	enrich, _ := lines[3]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "t3", "git status joined to %v, want t3", e)
+	e := matchedBubbles(t, lines[3], "t3")[0]
 	assert.Truef(t, e["result"] == " M internal/config/resolve.go", "git status result = %v", e["result"])
 	// The re-run's likely result must not surface on ANY block.
 	assert.NotContains(t, string(res.Objects[0].Payload), "PASS all tests passed", "the declined bubble's result reached the derived object on some other block")
