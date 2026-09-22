@@ -70,7 +70,7 @@ The main files name the decisions they own:
 | SQLite read fallbacks and scoped, filtered queries | `internal/sources/sqliteread/{sqliteread,query}.go` |
 | Run policy and per-source collection | `internal/engine/{engine,collect}.go` |
 | Admission and concurrency | `internal/engine/pool.go` |
-| Ordered outcomes and durable write intents | `internal/engine/{outcome,commitbuffer}.go` |
+| Ordered outcomes and durable commits | `internal/engine/{outcome,commitbuffer}.go` |
 | State ownership and disk representation | `internal/engine/{state,state_wire}.go` |
 | Scrub orchestration and replacement plans | `internal/transforms/{scrub,redaction}.go` |
 | Cursor alignment, evidence ranking, argument comparison | `internal/transforms/cursorjoin/{align,match,args}.go` |
@@ -78,10 +78,9 @@ The main files name the decisions they own:
 | Diagnostic agent summaries, source details, history | `app/diagnose_{agents,sources,history}.go` |
 
 `sources.Discover` dispatches to the compiled collectors. Enrichers use an ID-to-implementation
-map populated by the app and shared with diagnostics. Workers return write intents;
-only the source coordinator commits them, after the destination confirms the write.
-A `fileResult` carries ciphertext while pending and clears it after upload or abandonment;
-batching uses that same record without another staging wrapper.
+map populated by the app and shared with diagnostics. Raw and derived files both produce a
+`fileResult` that carries its ciphertext and the fingerprint to commit; only the source
+coordinator commits it, after the destination confirms the write, and clears the ciphertext.
 The audit logger accepts nil as disabled, allowing preview to use the same pipeline.
 
 Import direction follows the table below: **every internal edge is declared, package by
