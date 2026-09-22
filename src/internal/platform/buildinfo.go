@@ -34,16 +34,8 @@ type Info struct {
 // releaseVersion is set by release CI via -ldflags -X; believed only when applyStamp corroborates it.
 var releaseVersion string
 
-var (
-	once   sync.Once
-	cached Info
-)
-
 // Current reads the stamped information once.
-func Current() Info {
-	once.Do(func() { cached = read() })
-	return cached
-}
+var Current = sync.OnceValue(read)
 
 func read() Info {
 	i := Info{Version: "unknown", GoVersion: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
