@@ -106,70 +106,47 @@ func TestManifestIsTheFirstTarEntry(t *testing.T) {
 	}
 }
 
-// A ranged GET of the head of a multi-MB object parses the full manifest. The prefix is a real
-// byte slice, not an io.LimitReader over the whole object, which would hide the failure being
-// tested: the lower layers error on a truncated final chunk and the manifest read must survive.
-func TestReadManifestPrefixOnMultiMegabyteObject(t *testing.T) {
-	id := identity(t)
+// Real truncated ciphertext must yield the manifest or a distinguishable request for more bytes.
+func TestManifestPrefixReads(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int
+		seed int64
+	}{
+		{"six megabytes", 6 << 20, 1},
+		{"one megabyte", 1 << 20, 2},
+		{"two megabytes", 2 << 20, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := identity(t)
+			// Incompressible bytes keep a prefix read from silently becoming a whole-object read.
+			payload := make([]byte, tc.size)
+			_, err := rand.New(rand.NewSource(tc.seed)).Read(payload)
+			require.NoError(t, err)
+			obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(obj), 1<<20)
 
-	// Incompressible on purpose: a repeating payload would compress below the prefix size and
-	// quietly turn this into a test of nothing.
-	payload := make([]byte, 6<<20)
-	rng := rand.New(rand.NewSource(1))
-	if _, err := rng.Read(payload); err != nil {
-		t.Fatal(err)
-	}
-	obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-	require.Truef(t, len(obj) >= 1<<20, "object compressed to %d bytes; the test needs one larger than the prefix", len(obj))
+			m, err := transforms.ReadManifestPrefix(obj[:transforms.SuggestedPrefixBytes], id)
+			require.NoError(t, err)
+			assert.Equal(t, manifest().NativePath, m.NativePath)
+			assert.Equal(t, manifest().SourceHash, m.SourceHash)
+			assert.Equal(t, int64(len(payload)), m.PayloadSize)
+			for _, n := range []int{1, 16, 128, 1024} {
+				_, err := transforms.ReadManifestPrefix(obj[:n], id)
+				assert.ErrorIs(t, err, transforms.ErrPrefixTooShort, "prefix bytes: %d", n)
+			}
 
-	prefix := obj[:transforms.SuggestedPrefixBytes]
-	m, err := transforms.ReadManifestPrefix(prefix, id)
-	require.NoErrorf(t, err, "a %d-byte prefix of a %d-byte object must yield the manifest: %v", len(prefix), len(obj), err)
-	assert.Equalf(t, manifest().NativePath, m.NativePath, "native_path from prefix: %q", m.NativePath)
-	assert.Equalf(t, manifest().SourceHash, m.SourceHash, "source_hash from prefix: %q", m.SourceHash)
-	assert.Equalf(t, int64(len(payload)), m.PayloadSize, "payload_size from prefix: %d, want %d", m.PayloadSize, len(payload))
-}
-
-// A prefix too short to hold the manifest must say so distinguishably, so the caller doubles
-// its range instead of concluding the object is corrupt.
-func TestReadManifestPrefixReportsTooShort(t *testing.T) {
-	id := identity(t)
-	big := make([]byte, 1<<20)
-	rand.New(rand.NewSource(2)).Read(big)
-	obj, _, err := transforms.Seal(manifest(), big, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-
-	for _, n := range []int{1, 16, 128, 1024} {
-		if n >= len(obj) {
-			continue
-		}
-		_, err := transforms.ReadManifestPrefix(obj[:n], id)
-		assert.ErrorIsf(t, err, transforms.ErrPrefixTooShort, "a %d-byte prefix should report ErrPrefixTooShort, got %v", n, err)
-	}
-}
-
-// The doubling loop a sink implements works from any starting point.
-func TestPrefixDoublingConverges(t *testing.T) {
-	id := identity(t)
-	big := make([]byte, 2<<20)
-	rand.New(rand.NewSource(3)).Read(big)
-	obj, _, err := transforms.Seal(manifest(), big, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-
-	budget := 512
-	attempts := 0
-	for {
-		attempts++
-		require.True(t, attempts <= 20, "doubling did not converge")
-		n := min(budget, len(obj))
-		m, err := transforms.ReadManifestPrefix(obj[:n], id)
-		if err == nil {
-			assert.Equalf(t, "claude-code-transcripts", m.SourceID, "wrong manifest: %+v", m)
-			return
-		}
-		require.ErrorIsf(t, err, transforms.ErrPrefixTooShort, "unexpected error at %d bytes: %v", n, err)
-		budget *= 2
+			for budget, attempts := 512, 1; ; budget, attempts = budget*2, attempts+1 {
+				require.LessOrEqual(t, attempts, 20, "doubling did not converge")
+				m, err := transforms.ReadManifestPrefix(obj[:min(budget, len(obj))], id)
+				if err == nil {
+					assert.Equal(t, "claude-code-transcripts", m.SourceID)
+					break
+				}
+				require.ErrorIs(t, err, transforms.ErrPrefixTooShort, "prefix budget: %d", budget)
+			}
+		})
 	}
 }
 
@@ -246,29 +223,18 @@ func TestSealRefusesWithNoRecipients(t *testing.T) {
 // A manifest that would fail downstream validation must not reach a bucket.
 func TestSealValidatesTheManifestAgainstItsSchema(t *testing.T) {
 	id := identity(t)
-
-	bad := manifest()
-	bad.ArtifactClass = "whatever"
-	if _, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()}); err == nil {
-		t.Error("an artifact_class outside the enum must be refused")
-	}
-
-	bad = manifest()
-	bad.ShapeSniff = "probably-fine"
-	if _, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()}); err == nil {
-		t.Error("a shape_sniff outside the closed enum must be refused")
-	}
-
-	bad = manifest()
-	bad.SourceHash = "deadbeef"
-	if _, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()}); err == nil {
-		t.Error("a malformed source_hash must be refused")
-	}
-
-	bad = manifest()
-	bad.Derived = true
-	if _, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()}); err == nil {
-		t.Error("derived without enricher provenance must be refused")
+	for name, mutate := range map[string]func(*transforms.Manifest){
+		"artifact class outside enum": func(m *transforms.Manifest) { m.ArtifactClass = "whatever" },
+		"shape sniff outside enum":    func(m *transforms.Manifest) { m.ShapeSniff = "probably-fine" },
+		"malformed source hash":       func(m *transforms.Manifest) { m.SourceHash = "deadbeef" },
+		"derived without provenance":  func(m *transforms.Manifest) { m.Derived = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := manifest()
+			mutate(&bad)
+			_, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()})
+			require.Error(t, err)
+		})
 	}
 }
 
