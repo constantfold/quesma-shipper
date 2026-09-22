@@ -4,9 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +26,9 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 		{name: "invalid JSON", body: "{not json"},
 		{name: "state_schema mismatch", body: `{"state_schema": 2, "entries": []}`},
 		{name: "checksum mismatch", body: `{"state_schema": 1, "checksum": "deadbeef", "entries": []}`},
-		{name: "another install", body: `{"state_schema": 1, "install_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", "entries": []}`},
+		// Its entries name objects under another key root, so not one may survive into this install.
+		{name: "another install", body: `{"state_schema": 1, "install_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", ` +
+			`"entries": [{"source_id": "s", "native_path": "/x/a.jsonl", "source_hash": "` + strings.Repeat("a", 64) + `"}]}`},
 		{name: "negative attempts", body: `{"state_schema": 1, "entries": [{"source_id": "s", "native_path": "/x/a.jsonl", "attempts": -5}]}`},
 		{name: "oversize", body: valid, maxBytes: 8},
 		{name: "unreadable", body: valid, unreadable: true},
@@ -47,9 +51,7 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 
 			s, err := open(dir, install, maxBytes)
 			require.NoErrorf(t, err, "open must succeed over a document it cannot load: %v", err)
-			if s.Len() != 0 || !s.Corrupt() {
-				t.Fatalf("len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
-			}
+			require.Truef(t, s.Len() == 0 && s.Corrupt(), "len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
 			k := Key{SourceID: "s", NativePath: "/x/b.jsonl"}
 			fp := Fingerprint{SourceSize: 1, SourceMTime: time.Unix(1, 0).UTC(), SourceHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			require.NoError(t, s.CommitAll(map[Key]Fingerprint{k: fp}))
@@ -58,12 +60,9 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 			s2, err := Open(dir, install)
 			require.NoErrorf(t, err, "reopen: %v", err)
 			defer s2.Close()
-			if s2.Corrupt() || s2.Len() != 1 {
-				t.Fatalf("after the replace: corrupt=%v len=%d, want a clean store of one", s2.Corrupt(), s2.Len())
-			}
-			if got, ok := s2.Get(k); !ok || got != fp {
-				t.Errorf("the committed entry did not survive the replace: %+v ok=%v", got, ok)
-			}
+			require.Truef(t, !s2.Corrupt() && s2.Len() == 1, "after the replace: corrupt=%v len=%d, want a clean store of one", s2.Corrupt(), s2.Len())
+			got, ok := s2.Get(k)
+			assert.Truef(t, ok && got == fp, "the committed entry did not survive the replace: %+v ok=%v", got, ok)
 		})
 	}
 }

@@ -22,7 +22,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The suite's shared fixture: a minted install, an audit log, a fake port and a plan over one
+// The suite's shared fixture: a minted install, an audit log, a fake port and a policy over one
 // Claude-Code-shaped source under a temporary home.
 type fixture struct {
 	t        *testing.T
@@ -31,7 +31,7 @@ type fixture struct {
 	store    *engine.Store
 	port     *fakePort
 	unit     *identity.Unit
-	plan     engine.Plan
+	plan     engine.Options // policy only; opts adds the ports
 	log      *auditlog.Log
 }
 
@@ -45,7 +45,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, err)
 
 	f := &fixture{t: t, home: home, stateDir: stateDir, port: newPort(), unit: unit, log: log}
-	f.plan = engine.Plan{
+	f.plan = engine.Options{
 		Interval:       config.DefaultTick,
 		StateDir:       stateDir,
 		MaxFilesPerRun: 64,
@@ -86,15 +86,11 @@ func (f *fixture) reopen() {
 }
 
 func (f *fixture) opts() engine.Options {
-	return engine.Options{
-		Plan:       f.plan,
-		Identity:   f.unit,
-		Upload:     f.port,
-		Log:        f.log,
-		Recipients: []age.Recipient{f.unit.Recipient()},
-		Now:        engineFixedTime,
-		Client:     transforms.Client{Version: "0.1.0-test"},
-	}
+	o := f.plan
+	o.Identity, o.Upload, o.Log = f.unit, f.port, f.log
+	o.Recipients = []age.Recipient{f.unit.Recipient()}
+	o.Now, o.Client = engineFixedTime, transforms.Client{Version: "0.1.0-test"}
+	return o
 }
 
 func (f *fixture) run(adjust ...func(*engine.Options)) engine.Report {

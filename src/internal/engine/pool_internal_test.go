@@ -84,11 +84,9 @@ func TestGeneratedFileChecksUploadStateBeforeLoading(t *testing.T) {
 				sources.Resolved{}, sources.Discovery{Candidates: []sources.Candidate{cand}}, false)
 			require.Nil(t, result.pending, "unexpected upload")
 			if hash != "" {
-				if loads != 0 || result.outcome.Decision != "unchanged" {
-					t.Fatalf("reloaded uploaded snapshot: loads=%d, %+v", loads, result.outcome)
-				}
-			} else if loads != 1 || result.outcome.Decision != "parked" {
-				t.Fatalf("did not retry uncommitted snapshot: loads=%d, %+v", loads, result.outcome)
+				assert.Truef(t, loads == 0 && result.outcome.Decision == "unchanged", "reloaded uploaded snapshot: loads=%d, %+v", loads, result.outcome)
+			} else {
+				assert.Truef(t, loads == 1 && result.outcome.Decision == "parked", "did not retry uncommitted snapshot: loads=%d, %+v", loads, result.outcome)
 			}
 		})
 	}

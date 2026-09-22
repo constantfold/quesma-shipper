@@ -14,7 +14,7 @@ import (
 func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash string, res transforms.Result) transforms.Manifest {
 	m := transforms.Manifest{
 		ManifestVersion: transforms.ManifestVersion,
-		OrganizationID:  orgOf(o.Plan),
+		OrganizationID:  o.org(),
 		InstallID:       o.Identity.InstallID.String(),
 		SourceID:        src.ID,
 		SourceFamily:    src.Family,
@@ -22,8 +22,8 @@ func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash strin
 		Gather:          src.Gather,
 		ArtifactClass:   src.ArtifactClass,
 		SealedAt:        o.Now().Format(time.RFC3339),
-		ConfigVersion:   o.Plan.ConfigVersion,
-		ConfigExpired:   o.Plan.ConfigExpired,
+		ConfigVersion:   o.ConfigVersion,
+		ConfigExpired:   o.ConfigExpired,
 		Client:          o.Client,
 		RunID:           o.RunID,
 		SourceHash:      sourceHash,
@@ -37,6 +37,6 @@ func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash strin
 
 // mirrorKey is the key an object ships to. Path-derived, so a re-run lands on the same one.
 func (o Options) mirrorKey(sourceID, relPath string) (string, error) {
-	return formats.MirrorKey(orgOf(o.Plan), o.Identity.InstallID.String(), sourceID,
+	return formats.MirrorKey(o.org(), o.Identity.InstallID.String(), sourceID,
 		o.Identity.NameKey, formats.CanonicalPath(relPath, o.user))
 }

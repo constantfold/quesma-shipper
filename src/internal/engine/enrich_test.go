@@ -86,7 +86,7 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine.Options {
 	t.Helper()
 	o := f.opts()
-	o.Plan.Sources = []sources.Resolved{{
+	o.Sources = []sources.Resolved{{
 		Source: sources.Source{
 			ID:            "cursor-transcripts",
 			Family:        "cursor",

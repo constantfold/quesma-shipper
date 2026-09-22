@@ -18,13 +18,13 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 
 	disc, err := sources.Discover(sources.Request{
 		Source:   src,
-		All:      o.Plan.Sources,
-		Deny:     o.Plan.Deny,
-		Ignore:   o.Plan.Ignore,
-		StateDir: o.Plan.StateDir,
+		All:      o.Sources,
+		Deny:     o.Deny,
+		Ignore:   o.Ignore,
+		StateDir: o.StateDir,
 		Username: o.user,
 		Now:      o.Now,
-		Interval: o.Plan.Interval,
+		Interval: o.Interval,
 		Context:  ctx,
 		Env:      o.Env,
 		Capture:  !o.DryRun,

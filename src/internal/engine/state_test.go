@@ -147,14 +147,11 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 		require.NoError(t, commit(s, k, fingerprint()))
 	}
 
-	if n, err := s.EnsureSpec("claude-code-transcripts", sha); err != nil || n != 0 {
-		t.Fatalf("an unchanged spec must drop nothing: n=%d err=%v", n, err)
-	}
-	if n, err := s.EnsureSpec("claude-code-transcripts", otherSha); err != nil || n != 2 {
-		t.Fatalf("a changed spec must drop that source's entries: n=%d err=%v", n, err)
-	}
+	n, err := s.EnsureSpec("claude-code-transcripts", sha)
+	require.Truef(t, err == nil && n == 0, "an unchanged spec must drop nothing: n=%d err=%v", n, err)
+	n, err = s.EnsureSpec("claude-code-transcripts", otherSha)
+	require.Truef(t, err == nil && n == 2, "a changed spec must drop that source's entries: n=%d err=%v", n, err)
 	assert.Equalf(t, 1, s.Len(), "expected 1 surviving entry, got %d", s.Len())
-	if _, ok := s.Get(entries[2]); !ok {
-		t.Error("an unrelated source must not be touched")
-	}
+	_, ok := s.Get(entries[2])
+	assert.True(t, ok, "an unrelated source must not be touched")
 }

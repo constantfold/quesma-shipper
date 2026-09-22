@@ -122,6 +122,6 @@ func (p *sourcePass) stagedUnits() []transforms.RawUnit {
 }
 
 func (o Options) auditSource(sourceID string, entry auditlog.Entry) {
-	entry.SourceID, entry.ConfigVersion = sourceID, o.Plan.ConfigVersion
+	entry.SourceID, entry.ConfigVersion = sourceID, o.ConfigVersion
 	_ = o.Log.Append(entry)
 }

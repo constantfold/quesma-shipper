@@ -29,7 +29,7 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 	if o.DryRun {
 		o.Log = nil // a preview writes no audit lines
 	}
-	o.user = UsernameFromStateDir(o.Plan.StateDir)
+	o.user = UsernameFromStateDir(o.StateDir)
 
 	// Deferred LIFO: this runs after the flush below, since the run is not over while state is written.
 	defer func() {
@@ -54,7 +54,7 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 
 	// Preview is exempt from pause: it ships nothing, and a paused owner may still look.
 	if !o.DryRun {
-		if p := platform.Read(o.Plan.StateDir); p.Paused {
+		if p := platform.Read(o.StateDir); p.Paused {
 			rep.Paused, rep.PauseReason = true, p.Reason
 			return rep, nil
 		}
@@ -63,11 +63,11 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 	// Compiled once per run and after the pause check, so a paused tick stays cheap.
 	o.scrub, o.scrubErr = o.scrubber()
 
-	budget := o.Plan.MaxFilesPerRun
+	budget := o.MaxFilesPerRun
 	if o.Unbounded {
 		budget = math.MaxInt // the drain's ctx deadline bounds the work instead
 	}
-	for _, src := range o.Plan.Sources {
+	for _, src := range o.Sources {
 		if ctx.Err() != nil {
 			return rep, ctx.Err()
 		}

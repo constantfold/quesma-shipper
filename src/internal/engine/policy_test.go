@@ -13,23 +13,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// Preview computes everything that would leave the machine, and neither authorizes nor commits.
-func TestPreviewAuthorizesNothingAndCommitsNothing(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/d%02d.jsonl", 3)
-
-	rep := f.run(dryRun)
-
-	assert.Equalf(t, 3, rep.Shipped, "preview should report what would ship: %+v", rep)
-	assert.Empty(t, f.port.sizes(), "preview authorized something")
-	assert.Equal(t, 0, f.store.Len(), "preview committed state")
-	// The plan must carry the real object key and sealed size, or it previews nothing.
-	for _, file := range rep.Sources[0].Files {
-		assert.NotEqual(t, "", file.ObjectKey, "preview should report the object key that would be used")
-		assert.NotEqual(t, int64(0), file.BytesOut, "preview should report the sealed size")
-	}
-}
-
 // Budget is reserved at admission, so parallel files cannot overshoot it; the rest arrive next
 // tick, and the drain ignores the bound because a backlog left behind at shutdown is data loss.
 func TestMaxFilesPerRunAndTheDrain(t *testing.T) {
@@ -85,7 +68,8 @@ func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
 	}
 }
 
-// Pause blocks normal runs and drains without consuming state; preview stays available, then resume sends the backlog.
+// Pause blocks normal runs and drains without consuming state; preview stays available, then
+// resume sends the backlog.
 func TestPauseLifecycle(t *testing.T) {
 	for _, reason := range []string{"", "off to a client site"} {
 		t.Run("reason="+reason, func(t *testing.T) {
@@ -104,11 +88,15 @@ func TestPauseLifecycle(t *testing.T) {
 				assert.Empty(t, doc.Entries, "paused runs must not consume the backlog")
 			}
 
+			// Preview computes everything that would leave the machine, the real key and sealed size
+			// included, and neither authorizes nor commits.
 			preview := f.run(dryRun)
 			assert.False(t, preview.Paused)
 			assert.Equal(t, 1, preview.Shipped)
-			assert.Empty(t, f.port.keys())
+			assert.Empty(t, f.port.sizes(), "preview authorized something")
 			assert.Zero(t, f.store.Len())
+			fo := preview.Sources[0].Files[0]
+			assert.Truef(t, fo.ObjectKey != "" && fo.BytesOut != 0, "preview did not report the key and sealed size: %+v", fo)
 
 			require.NoError(t, platform.Clear(f.stateDir))
 			rep := f.run()

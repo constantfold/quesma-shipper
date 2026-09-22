@@ -48,26 +48,6 @@ func TestResetLifecycle(t *testing.T) {
 	assert.Equal(t, installID, doc.InstallID)
 }
 
-// Re-enrolling replaces identity.json and leaves the old install's document behind. Its entries
-// name objects under that install's key root, so not one of them may survive into this install.
-func TestAnotherInstallsEntriesNeverSurvive(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 3)
-
-	s, err := engine.Open(dir, installID)
-	require.NoErrorf(t, err, "a foreign document must be discarded, not refused: %v", err)
-	assert.True(t, s.Corrupt(), "the discard was not reported to the run")
-	require.Equalf(t, 0, s.Len(), "%d of another install's entries survived", s.Len())
-	require.NoError(t, commit(s, key("/x/mine.jsonl"), fingerprint()))
-	s.Close()
-
-	doc, err := engine.Peek(dir)
-	require.NoError(t, err)
-	assert.Equalf(t, installID, doc.InstallID, "the replacement kept the foreign install id %q", doc.InstallID)
-	assert.True(t, !doc.ForeignTo(installID), "the replacement still reads as foreign, so the next run discards it again")
-	assert.Lenf(t, doc.Entries, 1, "the replacement holds %d entries, want only this install's one", len(doc.Entries))
-}
-
 // Reset and prune replace an unloadable or foreign document on --apply, even when the discarded
 // store forgot nothing, or the stale document is re-discarded every run. A dry run never writes.
 // Prune keeps entries, yet cannot claim another install's uploads: the discard empties it first.

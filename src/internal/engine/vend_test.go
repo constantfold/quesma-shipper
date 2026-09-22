@@ -82,9 +82,7 @@ func TestAFailedObjectDoesNotDiscardItsSiblings(t *testing.T) {
 	f.port = newPort()
 	rep2 := f.run()
 	assert.Truef(t, rep2.Shipped == 1 && rep2.Unchanged == 4, "second run shipped %d and left %d unchanged, want 1 and 4", rep2.Shipped, rep2.Unchanged)
-	if got := f.port.groups; len(got) != 1 || len(got[0]) != 1 || got[0][0] != failed {
-		t.Errorf("second run authorized %v; only the failed object had anything to send", got)
-	}
+	assert.Equal(t, [][]string{{failed}}, f.port.groups, "only the failed object had anything to send")
 }
 
 // A refused install is the kill path: admission stops, and the duplicates in flight are one fact.
@@ -103,9 +101,7 @@ func TestARefusedAuthorizationStopsTheRun(t *testing.T) {
 	assert.Equalf(t, 0, beat, "the heartbeat ran %d times after a refusal", beat)
 	assert.Equalf(t, 0, rep.Shipped, "%d objects shipped against a refused install", rep.Shipped)
 	assert.Equal(t, 0, f.port.putCount())
-	if got := len(f.port.sizes()); got >= 20 {
-		t.Errorf("%d authorizations against a revoked install; admission never stopped", got)
-	}
+	assert.Less(t, len(f.port.sizes()), 20, "admission never stopped against a revoked install")
 }
 
 // An ordinary upload error is per-object: the run continues and attempts every file.
@@ -183,7 +179,7 @@ func TestAStoppedDerivedGroupStopsTheSource(t *testing.T) {
 			second := &countingEnricher{id: "zz-never-runs"}
 			o := enrichOpts(t, f, db, true)
 			o.Enrichers = transforms.NewRegistry(&fixtureEnricher{Enricher: cursorjoin.New(), db: db}, second)
-			o.Plan.Sources[0].Enrichers[second.id] = true
+			o.Sources[0].Enrichers[second.id] = true
 
 			rep, err := engine.Run(context.Background(), f.store, o)
 			require.ErrorIs(t, err, stop)
