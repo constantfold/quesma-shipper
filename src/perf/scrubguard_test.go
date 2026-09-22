@@ -39,10 +39,9 @@ const (
 // and a capped run's rusage would describe the sudo and systemd-run wrapper chain.
 func smokeScrubGuard(t *testing.T) {
 	t.Run("S5-scrub-cpu-guard", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
+		w := stageSmokeWorld(t)
 
-		staged, secrets := stageIncompressibleValue(t, w, 0, scrubGuardBytes, scrubGuardSecretEveryLines)
+		staged, secrets := stageIncompressibleFile(t, w, 0, scrubGuardBytes, scrubGuardSecretEveryLines)
 		t.Logf("%s: %d logical bytes carrying %d planted secret pairs, one per %d bytes of fill",
 			scrubGuardScenario, staged, secrets, scrubGuardSecretEveryLines*memguardLineFill)
 

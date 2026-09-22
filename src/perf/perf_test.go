@@ -20,7 +20,6 @@ import (
 
 	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/testcontainers/testcontainers-go"
@@ -51,17 +50,13 @@ const (
 )
 
 var (
-	minioAccess string
-	minioSecret string
-
 	// Kept for the isolation assertions, which ask the container what it published.
 	minioCtr testcontainers.Container
 
 	// Lists over the unshaped admin proxy, so its traffic never lands on the shipper's counters.
 	adminS3 *awss3.Client
 
-	// The harness's route and the shipper's: the origin every ticket is presigned against.
-	adminEndpoint string
+	// The shipper's route: the origin every ticket is presigned against.
 	storeEndpoint string
 
 	// The one bucket this tier writes to; worlds are separated by install root, not by bucket.
@@ -87,6 +82,15 @@ func TestMain(m *testing.M) {
 // Exists so the teardown can be a defer: TestMain cannot have one, since os.Exit does not unwind.
 func run(m *testing.M) int {
 	ctx := context.Background()
+	warn := func(what string, err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "perf: %s: %v\n", what, err)
+		}
+	}
+	fail := func(what string, err error) int {
+		warn(what, err)
+		return 1
+	}
 	// Package-level temp dirs, so there is no t.TempDir to clean them up.
 	defer removeCorpusMaster()
 	defer removeBinaries()
@@ -95,24 +99,14 @@ func run(m *testing.M) int {
 	// only container on both.
 	edgeNet, err := network.New(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the edge network: %v\n", err)
-		return 1
+		return fail("create the edge network", err)
 	}
-	defer func() {
-		if err := edgeNet.Remove(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: remove the edge network: %v\n", err)
-		}
-	}()
+	defer func() { warn("remove the edge network", edgeNet.Remove(ctx)) }()
 	internalNet, err := network.New(ctx, network.WithInternal())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the internal network: %v\n", err)
-		return 1
+		return fail("create the internal network", err)
 	}
-	defer func() {
-		if err := internalNet.Remove(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: remove the internal network: %v\n", err)
-		}
-	}()
+	defer func() { warn("remove the internal network", internalNet.Remove(ctx)) }()
 
 	minio, err := tcminio.Run(ctx, minioImage,
 		network.WithNetwork([]string{minioAlias}, internalNet),
@@ -128,17 +122,11 @@ func run(m *testing.M) int {
 			wait.ForLog("API:").
 				WithStartupTimeout(2*time.Minute)),
 	)
-	defer func() {
-		if err := testcontainers.TerminateContainer(minio); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: terminate MinIO: %v\n", err)
-		}
-	}()
+	defer func() { warn("terminate MinIO", testcontainers.TerminateContainer(minio)) }()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: start MinIO: %v\n", err)
-		return 1
+		return fail("start MinIO", err)
 	}
 	minioCtr = minio
-	minioAccess, minioSecret = minio.Username, minio.Password
 
 	// Plain testcontainers.Run rather than modules/toxiproxy: that module's own -config cannot be
 	// combined with the -proxy-metrics these byte counters come from.
@@ -154,35 +142,22 @@ func run(m *testing.M) int {
 		testcontainers.WithWaitStrategy(
 			wait.ForHTTP("/version").WithPort(toxiproxyAPIPort+"/tcp")),
 	)
-	defer func() {
-		if err := testcontainers.TerminateContainer(proxyCtr); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: terminate toxiproxy: %v\n", err)
-		}
-	}()
+	defer func() { warn("terminate toxiproxy", testcontainers.TerminateContainer(proxyCtr)) }()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: start toxiproxy: %v\n", err)
-		return 1
+		return fail("start toxiproxy", err)
 	}
 
-	apiAddr, err := hostAddr(ctx, proxyCtr, toxiproxyAPIPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy API address: %v\n", err)
-		return 1
+	var addrs [3]string
+	for i, port := range []string{toxiproxyAPIPort, proxyListenPort, adminListenPort} {
+		if addrs[i], err = hostAddr(ctx, proxyCtr, port); err != nil {
+			return fail("toxiproxy address for port "+port, err)
+		}
 	}
-	listenAddr, err := hostAddr(ctx, proxyCtr, proxyListenPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy listener address: %v\n", err)
-		return 1
-	}
-	adminAddr, err := hostAddr(ctx, proxyCtr, adminListenPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy admin listener address: %v\n", err)
-		return 1
-	}
+	apiAddr, listenAddr, adminAddr := addrs[0], addrs[1], addrs[2]
 	toxiAPIURL = "http://" + apiAddr
 	metricsURL = toxiAPIURL + "/metrics"
 	storeEndpoint = "http://" + listenAddr
-	adminEndpoint = "http://" + adminAddr
+	adminEndpoint := "http://" + adminAddr
 	// The v3 page, not the v2 cluster one: v2 serves a ten-second cached snapshot, so a count read
 	// either side of a sub-second run would read the same number twice.
 	minioMetricsURL = adminEndpoint + "/minio/metrics/v3/api/requests"
@@ -191,36 +166,26 @@ func run(m *testing.M) int {
 	// 0.0.0.0 so the mapped port reaches it; the docker alias upstream, resolved on the internal net.
 	storeProxy, err = toxi.CreateProxy(storeProxyName, "0.0.0.0:"+proxyListenPort, minioAlias+":9000")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the store proxy: %v\n", err)
-		return 1
+		return fail("create the store proxy", err)
 	}
 	// The harness's own route: never shaped, and its bytes carry a different label, so listing keys
 	// cannot show up in what the shipper is charged.
 	if _, err := toxi.CreateProxy(adminProxyName, "0.0.0.0:"+adminListenPort, minioAlias+":9000"); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the admin proxy: %v\n", err)
-		return 1
+		return fail("create the admin proxy", err)
 	}
 
-	adminS3 = awss3.NewFromConfig(aws.Config{
-		Region:      "us-east-1",
-		Credentials: credentials.NewStaticCredentialsProvider(minioAccess, minioSecret, ""),
-	}, func(o *awss3.Options) {
-		o.BaseEndpoint = aws.String(adminEndpoint)
-		o.UsePathStyle = true
-	})
+	adminS3 = pathStyleS3(adminEndpoint, minio.Username, minio.Password)
 
 	// Minted before the protocol peer starts, because it signs the tickets used by the measured path.
 	if err := mintIngestUser(ctx, minio); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: mint the write-only ingestion user: %v\n", err)
-		return 1
+		return fail("mint the write-only ingestion user", err)
 	}
 	perfBucket, err = createVersionedBucket(ctx, fmt.Sprintf("perf-%d", time.Now().UnixNano()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the bucket: %v\n", err)
-		return 1
+		return fail("create the bucket", err)
 	}
 	startProtocolPeer()
-	defer stopProtocolPeer()
+	defer peer.server.Close()
 
 	code := m.Run()
 	if code != 0 {
@@ -235,15 +200,13 @@ func createVersionedBucket(ctx context.Context, name string) (string, error) {
 	if _, err := adminS3.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
 		return "", err
 	}
-	if _, err := adminS3.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
+	_, err := adminS3.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
 		Bucket: aws.String(name),
 		VersioningConfiguration: &types.VersioningConfiguration{
 			Status: types.BucketVersioningStatusEnabled,
 		},
-	}); err != nil {
-		return "", err
-	}
-	return name, nil
+	})
+	return name, err
 }
 
 // Whether a timing scenario failed on slower code or on a toxic that was never attached is the first
@@ -287,15 +250,11 @@ func hostAddr(ctx context.Context, c testcontainers.Container, port string) (str
 // --- link shaping ------------------------------------------------------------
 
 // Half per direction, because the toxic delays one stream and a request-response pair crosses both.
-func withLatency(t *testing.T, rtt, jitter time.Duration) {
+func withLatency(t *testing.T, rtt time.Duration) {
 	t.Helper()
-	half := rtt / 2
 	for _, stream := range []string{"upstream", "downstream"} {
 		_, err := storeProxy.AddToxic("latency_"+stream, "latency", stream, 1,
-			toxiproxy.Attributes{
-				"latency": half.Milliseconds(),
-				"jitter":  (jitter / 2).Milliseconds(),
-			})
+			toxiproxy.Attributes{"latency": (rtt / 2).Milliseconds()})
 		if err != nil {
 			t.Fatalf("add %s latency toxic: %v", stream, err)
 		}
@@ -306,13 +265,9 @@ func withLatency(t *testing.T, rtt, jitter time.Duration) {
 			t.Errorf("reset toxiproxy: %v", err)
 		}
 	})
-	assertShapingIsLive(t, rtt)
-}
 
-// Proves the toxic is on the wire before a test spends minutes measuring under it. A full request,
-// not a dial: the toxic delays data, so a connect-only probe would pass with no shaping at all.
-func assertShapingIsLive(t *testing.T, rtt time.Duration) {
-	t.Helper()
+	// Proves the toxic is on the wire before a test spends minutes measuring under it. A full request,
+	// not a dial: the toxic delays data, so a connect-only probe would pass with no shaping at all.
 	client := &http.Client{
 		Transport: &http.Transport{DisableKeepAlives: true},
 		Timeout:   30 * time.Second,
@@ -346,42 +301,30 @@ type storeCounters struct {
 // tier. Nothing else may talk to the store while fn runs: adminS3 lands in the same request count.
 func aroundStore(t *testing.T, fn func()) storeCounters {
 	t.Helper()
-	upBefore, downBefore := proxiedBytesByDirection(t)
+	before := settledStoreBytes(t)
 	requestsBefore := s3RequestCount(t)
 
 	fn()
 
-	up, down := proxiedBytesByDirection(t)
+	after := settledStoreBytes(t)
 	return storeCounters{
-		up:       up - upBefore,
-		down:     down - downBefore,
+		up:       after.up - before.up,
+		down:     after.down - before.down,
 		requests: s3RequestCount(t) - requestsBefore,
 	}
 }
 
-// One reading of the shaped proxy's four byte counters; toxiproxy counts each link's bytes twice,
-// once received and once sent, so total is not up+down.
+// One reading of the shaped proxy's byte counters; toxiproxy counts each link's bytes twice, once
+// received and once sent, so up and down are the received counters and total is all four.
 type storeBytes struct {
-	receivedUp, receivedDown int64
-	sentUp, sentDown         int64
-}
-
-func (b storeBytes) total() int64 {
-	return b.receivedUp + b.receivedDown + b.sentUp + b.sentDown
+	up, down, total int64
 }
 
 // Call only after the child has exited: toxiproxy accounts a link's bytes when the link closes, and
 // even then the flush trails the process, hence the poll for a value that stopped moving.
 func proxiedBytes(t *testing.T) int64 {
 	t.Helper()
-	return settledStoreBytes(t).total()
-}
-
-// Only the received counters, so the figures are bytes and not bytes counted twice.
-func proxiedBytesByDirection(t *testing.T) (up, down int64) {
-	t.Helper()
-	b := settledStoreBytes(t)
-	return b.receivedUp, b.receivedDown
+	return settledStoreBytes(t).total
 }
 
 func settledStoreBytes(t *testing.T) storeBytes {
@@ -395,7 +338,7 @@ func settledStoreBytes(t *testing.T) storeBytes {
 	last, same := int64(-1), 0
 	for {
 		b := scrapeStoreBytes(t)
-		v := b.total()
+		v := b.total
 		if v == last {
 			if same++; same >= stableReads-1 {
 				return b
@@ -423,16 +366,15 @@ func scrapeStoreBytes(t *testing.T) storeBytes {
 		if !strings.Contains(labels, `proxy="`+storeProxyName+`"`) {
 			return
 		}
-		received := name == "toxiproxy_proxy_received_bytes_total"
+		b.total += int64(value)
+		if name != "toxiproxy_proxy_received_bytes_total" {
+			return
+		}
 		switch {
-		case strings.Contains(labels, `direction="upstream"`) && received:
-			b.receivedUp += int64(value)
 		case strings.Contains(labels, `direction="upstream"`):
-			b.sentUp += int64(value)
-		case strings.Contains(labels, `direction="downstream"`) && received:
-			b.receivedDown += int64(value)
-		default:
-			b.sentDown += int64(value)
+			b.up += int64(value)
+		case strings.Contains(labels, `direction="downstream"`):
+			b.down += int64(value)
 		}
 	})
 	return b

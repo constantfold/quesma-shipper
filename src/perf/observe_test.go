@@ -15,10 +15,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -112,35 +110,23 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	if !ok {
 		t.Fatalf("no rusage for the child on %s: peak memory cannot be observed", runtime.GOOS)
 	}
+	seconds := func(tv syscall.Timeval) float64 { return float64(tv.Sec) + float64(tv.Usec)/1e6 }
 	obs.CPUSeconds = seconds(ru.Utime) + seconds(ru.Stime)
 
-	obs.PeakRSS, obs.PeakRSSSource = ru.Maxrss*maxrssUnit(t), "Maxrss"
+	// Kilobytes on Linux, bytes on darwin, a loud stop elsewhere rather than a peak off by 1000x.
+	unit := map[string]int64{"linux": 1 << 10, "darwin": 1}[runtime.GOOS]
+	if unit == 0 {
+		t.Fatalf("the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
+	}
+	obs.PeakRSS, obs.PeakRSSSource = ru.Maxrss*unit, "Maxrss"
 	if vmHWM > obs.PeakRSS {
 		obs.PeakRSS, obs.PeakRSSSource = vmHWM, "VmHWM"
 	}
 	return obs
 }
 
-func seconds(tv syscall.Timeval) float64 {
-	return float64(tv.Sec) + float64(tv.Usec)/1e6
-}
-
-// Kilobytes on Linux, bytes on darwin, a loud stop elsewhere rather than a peak off by 1000x.
-func maxrssUnit(t *testing.T) int64 {
-	t.Helper()
-	switch runtime.GOOS {
-	case "linux":
-		return 1 << 10
-	case "darwin":
-		return 1
-	default:
-		t.Fatalf("the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
-		return 0
-	}
-}
-
-// Returns a function that stops the watch and reports it; zero where /proc is not. Nothing may be
-// read after the stop: a reaped pid's numbers are gone or belong to someone else.
+// Returns a function that stops the watch and reports it, to be called once; zero where /proc is
+// not. Nothing may be read after the stop: a reaped pid's numbers are gone or belong to someone else.
 func watchPeakRSS(pid int) func() int64 {
 	if runtime.GOOS != "linux" {
 		return func() int64 { return 0 }
@@ -149,15 +135,10 @@ func watchPeakRSS(pid int) func() int64 {
 	result := make(chan int64, 1)
 	go func() {
 		var peak int64
-		read := func() {
-			if v := peakVmHWM(pid); v > peak {
-				peak = v
-			}
-		}
 		tick := time.NewTicker(vmHWMInterval)
 		defer tick.Stop()
 		for {
-			read()
+			peak = max(peak, peakVmHWM(pid))
 			select {
 			case <-done:
 				result <- peak
@@ -166,17 +147,9 @@ func watchPeakRSS(pid int) func() int64 {
 			}
 		}
 	}()
-
-	var (
-		once sync.Once
-		peak int64
-	)
 	return func() int64 {
-		once.Do(func() {
-			close(done)
-			peak = <-result
-		})
-		return peak
+		close(done)
+		return <-result
 	}
 }
 
@@ -184,22 +157,9 @@ func watchPeakRSS(pid int) func() int64 {
 // having is the deepest one, which is also the largest by orders of magnitude.
 func peakVmHWM(pid int) int64 {
 	peak, _ := readVmHWM(pid)
-	for _, child := range procChildren(pid) {
-		if v := peakVmHWM(child); v > peak {
-			peak = v
-		}
-	}
-	return peak
-}
-
-// A process's direct children; empty where there are none and where /proc is not.
-func procChildren(pid int) []int {
+	// A process's direct children; none where /proc is not.
 	tasks := filepath.Join("/proc", strconv.Itoa(pid), "task")
-	entries, err := os.ReadDir(tasks)
-	if err != nil {
-		return nil
-	}
-	var out []int
+	entries, _ := os.ReadDir(tasks)
 	for _, e := range entries {
 		raw, err := os.ReadFile(filepath.Join(tasks, e.Name(), "children"))
 		if err != nil {
@@ -207,11 +167,11 @@ func procChildren(pid int) []int {
 		}
 		for _, field := range strings.Fields(string(raw)) {
 			if child, err := strconv.Atoi(field); err == nil {
-				out = append(out, child)
+				peak = max(peak, peakVmHWM(child))
 			}
 		}
 	}
-	return out
+	return peak
 }
 
 // Not ok once the process is gone, which is expected rather than an error.
@@ -248,25 +208,22 @@ func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, 
 		t.Fatalf("%s declared a memory budget of %d bytes; a budget is a positive number of bytes",
 			scenario, budget)
 	}
+	switch {
 	// A reading of zero is under every budget there is: a broken instrument must not pass a gate.
-	if obs.PeakRSS <= 0 {
+	case obs.PeakRSS <= 0:
 		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this gate would "+
 			"be passing, not the run", scenario, obs.PeakRSS, obs.PeakRSSSource)
-		return
-	}
-	if runtime.GOOS != "linux" {
+	case runtime.GOOS != "linux":
 		t.Logf("%s: peak %d bytes (%s) against a %d byte budget, recorded only: "+
 			"the memory gate needs VmHWM and %s has no /proc",
 			scenario, obs.PeakRSS, obs.PeakRSSSource, budget, runtime.GOOS)
-		return
-	}
-	if obs.PeakRSS >= budget {
+	case obs.PeakRSS >= budget:
 		t.Errorf("%s: peak RSS %d bytes (%s) reached its %d byte budget",
 			scenario, obs.PeakRSS, obs.PeakRSSSource, budget)
-		return
+	default:
+		t.Logf("%s: peak RSS %d bytes (%s), %d bytes under the %d byte budget",
+			scenario, obs.PeakRSS, obs.PeakRSSSource, budget-obs.PeakRSS, budget)
 	}
-	t.Logf("%s: peak RSS %d bytes (%s), %d bytes under the %d byte budget",
-		scenario, obs.PeakRSS, obs.PeakRSSSource, budget-obs.PeakRSS, budget)
 }
 
 // --- the CPU budget ----------------------------------------------------------
@@ -279,19 +236,18 @@ func assertCPUUnderBudget(t *testing.T, scenario string, obs childObservation, b
 	if budget <= 0 {
 		return
 	}
+	switch {
 	// A reading of zero is under every budget there is; a child that ran burned CPU.
-	if obs.CPUSeconds <= 0 {
+	case obs.CPUSeconds <= 0:
 		t.Errorf("%s: child CPU read as %.3f seconds: the instrument is what this gate would "+
 			"be passing, not the run", scenario, obs.CPUSeconds)
-		return
-	}
-	if obs.CPUSeconds >= budget {
+	case obs.CPUSeconds >= budget:
 		t.Errorf("%s: the child burned %.2f CPU seconds, reaching its %.2f second budget",
 			scenario, obs.CPUSeconds, budget)
-		return
+	default:
+		t.Logf("%s: %.2f CPU seconds, %.2f under the %.2f second budget",
+			scenario, obs.CPUSeconds, budget-obs.CPUSeconds, budget)
 	}
-	t.Logf("%s: %.2f CPU seconds, %.2f under the %.2f second budget",
-		scenario, obs.CPUSeconds, budget-obs.CPUSeconds, budget)
 }
 
 // --- what the run left behind ------------------------------------------------
@@ -306,7 +262,10 @@ func assertNoResidualScratch(t *testing.T, w *world) {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && isScratchName(d.Name()) {
+			// The shapes the shipper writes while a write is still in flight.
+			name := d.Name()
+			if !d.IsDir() && (strings.Contains(name, ".tmp-") || strings.HasSuffix(name, ".tmp") ||
+				strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".partial")) {
 				leftover = append(leftover, path)
 			}
 			return nil
@@ -318,21 +277,10 @@ func assertNoResidualScratch(t *testing.T, w *world) {
 	if len(leftover) == 0 {
 		return
 	}
-	sort.Strings(leftover)
-	shown := leftover
-	if len(shown) > 10 {
-		shown = shown[:10]
-	}
+	slices.Sort(leftover)
+	shown := leftover[:min(10, len(leftover))]
 	t.Errorf("a drained sync left %d scratch files behind, first %d: %s",
 		len(leftover), len(shown), strings.Join(shown, " "))
-}
-
-// The shapes the shipper writes while a write is still in flight.
-func isScratchName(name string) bool {
-	return strings.Contains(name, ".tmp-") ||
-		strings.HasSuffix(name, ".tmp") ||
-		strings.HasSuffix(name, ".part") ||
-		strings.HasSuffix(name, ".partial")
 }
 
 // --- the instruments, checked against a run that is not being measured ------
@@ -376,20 +324,7 @@ func TestTheHarnessObservesAChildRun(t *testing.T) {
 	assertPeakUnderBudget(t, selfTestScenario, obs, selfTestMemoryBudget)
 	assertNoResidualScratch(t, w)
 
-	recordResult(t, perfResult{
-		Scenario:          selfTestScenario,
-		CorpusFiles:       files,
-		ChildGOMAXPROCS:   w.gomaxprocs,
-		RepSeconds:        []float64{obs.Elapsed.Seconds()},
-		BestSeconds:       obs.Elapsed.Seconds(),
-		ProxiedBytesUp:    c.up,
-		ProxiedBytesDown:  c.down,
-		S3Requests:        c.requests,
-		Objects:           objects,
-		PeakRSSBytes:      obs.PeakRSS,
-		PeakRSSSource:     obs.PeakRSSSource,
-		MemoryBudgetBytes: selfTestMemoryBudget,
-		CPUSeconds:        obs.CPUSeconds,
-		ExitStatus:        obs.exitStatus(),
-	})
+	row := singleRun(obs, c, objects).row(w, selfTestScenario, files, 0, selfTestMemoryBudget)
+	row.ShapedRTTMillis = 0 // this run is unshaped
+	recordResult(t, row)
 }

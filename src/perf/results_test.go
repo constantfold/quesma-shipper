@@ -78,9 +78,7 @@ func recordResult(t *testing.T, r perfResult) {
 	if r.Scenario == "" {
 		t.Fatalf("a result row with no scenario name: nothing downstream can key on it")
 	}
-	if r.RecordedAt.IsZero() {
-		r.RecordedAt = time.Now().UTC()
-	}
+	r.RecordedAt = time.Now().UTC()
 	r.GitSHA = gitSHA(t)
 	r.GOOS, r.GOARCH = runtime.GOOS, runtime.GOARCH
 	r.GoVersion = runtime.Version()
@@ -150,8 +148,7 @@ func gitSHA(t *testing.T) string {
 	t.Helper()
 	shaOnce.Do(func() {
 		for _, name := range []string{shaEnv, "GITHUB_SHA"} {
-			if env := strings.TrimSpace(os.Getenv(name)); env != "" {
-				sha = env
+			if sha = strings.TrimSpace(os.Getenv(name)); sha != "" {
 				return
 			}
 		}

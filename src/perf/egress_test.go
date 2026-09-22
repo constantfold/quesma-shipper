@@ -73,8 +73,7 @@ func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 		t.Fatalf("create the second org's bucket: %v", err)
 	}
 	// Real, so the emptiness assertion below is an answer rather than a NoSuchBucket.
-	const slug = "nowhere"
-	w := stageWorldIn(t, slug, deadEndpoint, bucket)
+	w := stageWorldIn(t, "nowhere", deadEndpoint, bucket)
 	files := smallCorpusFiles
 	stageCorpusFiles(t, w, files)
 
