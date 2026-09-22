@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -76,20 +77,7 @@ func isAlnum(c byte) bool {
 // encodeSegment percent-encodes everything outside [A-Za-z0-9._~-], "%" included, so the
 // encoding is injective. Upper-case hex keeps the output byte-identical everywhere.
 func encodeSegment(s string) string {
-	const hexDigits = "0123456789ABCDEF"
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case isAlnum(c), c == '.', c == '_', c == '~', c == '-':
-			b.WriteByte(c)
-		default:
-			b.WriteByte('%')
-			b.WriteByte(hexDigits[c>>4])
-			b.WriteByte(hexDigits[c&0x0f])
-		}
-	}
-	return b.String()
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
 // MirrorName derives an object's leaf name: HMAC-SHA256(name_key, "mirror:" + canonical path).
