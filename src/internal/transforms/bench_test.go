@@ -20,6 +20,10 @@ import (
 // transcript-1MiB is many short lines, so per-line cost dominates, while bigvalue-8MiB is one
 // line whose payload sits in a single string, so the per-value matchers do.
 func BenchmarkScrubSynthetic(b *testing.B) {
+	benchmarkSynthetic(b, syntheticTranscript, syntheticBigValue)
+}
+
+func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
 	cfg := transforms.DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := transforms.New(cfg)
@@ -29,8 +33,8 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 		name    string
 		payload []byte
 	}{
-		{"transcript-1MiB", syntheticTranscript(1 << 20)},
-		{"bigvalue-8MiB", syntheticBigValue(8 << 20)},
+		{"transcript-1MiB", transcript(1 << 20)},
+		{"bigvalue-8MiB", bigValue(8 << 20)},
 	}
 
 	for _, tc := range cases {
@@ -53,6 +57,7 @@ func syntheticTranscript(size int) []byte {
 	rng := rand.New(rand.NewSource(20260816))
 	var b strings.Builder
 	b.Grow(size + 4096)
+	encoder := json.NewEncoder(&b)
 
 	for i := 0; b.Len() < size; i++ {
 		var line map[string]any
@@ -77,29 +82,7 @@ func syntheticTranscript(size int) []byte {
 				"timestamp": "2026-08-16T09:12:44.117Z",
 			}
 		case 1, 3:
-			line = map[string]any{
-				"parentUuid": randUUID(rng),
-				"cwd":        "/Users/devuser/git/trajectory-shipper",
-				"sessionId":  randUUID(rng),
-				"type":       "user",
-				"message": map[string]any{
-					"role": "user",
-					"content": []any{
-						map[string]any{
-							"type":        "tool_result",
-							"tool_use_id": "toolu_01" + randToken(rng, 22),
-							"content":     randCommandOutput(rng, 300+rng.Intn(900)),
-						},
-					},
-				},
-				"toolUseResult": map[string]any{
-					"stdout":      randCommandOutput(rng, 200+rng.Intn(400)),
-					"stderr":      "",
-					"tool_use_id": "toolu_01" + randToken(rng, 22),
-				},
-				"uuid":      randUUID(rng),
-				"timestamp": "2026-08-16T09:12:45.002Z",
-			}
+			line = syntheticToolResult(rng, randCommandOutput)
 		default:
 			line = map[string]any{
 				"parentUuid": randUUID(rng),
@@ -116,12 +99,9 @@ func syntheticTranscript(size int) []byte {
 					"export AWS_SECRET_ACCESS_KEY=" + randToken(rng, 40) + " && ./deploy.sh"
 			}
 		}
-		enc, err := json.Marshal(line)
-		if err != nil {
+		if err := encoder.Encode(line); err != nil {
 			panic(err)
 		}
-		b.Write(enc)
-		b.WriteByte('\n')
 	}
 	return []byte(b.String())
 }
@@ -129,8 +109,12 @@ func syntheticTranscript(size int) []byte {
 // syntheticBigValue is one record whose tool result holds the whole payload: the shape a
 // spilled build log or a big file read takes.
 func syntheticBigValue(size int) []byte {
-	rng := rand.New(rand.NewSource(20260817))
-	body := randCommandOutput(rng, size)
+	return syntheticBigValueWith(size, 20260817, randCommandOutput)
+}
+
+func syntheticBigValueWith(size int, seed int64, output func(*rand.Rand, int) string) []byte {
+	rng := rand.New(rand.NewSource(seed))
+	body := output(rng, size)
 	line, err := json.Marshal(map[string]any{
 		"type":          "user",
 		"uuid":          randUUID(rng),
@@ -143,6 +127,33 @@ func syntheticBigValue(size int) []byte {
 		panic(err)
 	}
 	return append(line, '\n')
+}
+
+// Both corpora draw fields in the same order, preserving their seeded byte streams.
+func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) map[string]any {
+	return map[string]any{
+		"parentUuid": randUUID(rng),
+		"cwd":        "/Users/devuser/git/trajectory-shipper",
+		"sessionId":  randUUID(rng),
+		"type":       "user",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": "toolu_01" + randToken(rng, 22),
+					"content":     output(rng, 300+rng.Intn(900)),
+				},
+			},
+		},
+		"toolUseResult": map[string]any{
+			"stdout":      output(rng, 200+rng.Intn(400)),
+			"stderr":      "",
+			"tool_use_id": "toolu_01" + randToken(rng, 22),
+		},
+		"uuid":      randUUID(rng),
+		"timestamp": "2026-08-16T09:12:45.002Z",
+	}
 }
 
 const hexDigits = "0123456789abcdef"

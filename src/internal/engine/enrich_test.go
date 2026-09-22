@@ -77,9 +77,7 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 		{"cursorDiskKV", "bubbleId:" + enrichConv + ":b2", `{"bubbleId":"b2","type":2,"text":"Listing the workspace folder contents."}`},
 		{
 			"cursorDiskKV", "bubbleId:" + enrichConv + ":b3",
-			`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
-				"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
-				"result":"total 24\n-rw-r--r-- 1 jane staff 812 main.go"}}`,
+			toolResult("total 24\n-rw-r--r-- 1 jane staff 812 main.go"),
 		},
 		// A checkpoint row, outside the declared keyspaces entirely.
 		{"cursorDiskKV", "checkpointId:" + enrichConv + ":x", `{"` + unusedRowMarker + `":"y"}`},
@@ -184,41 +182,33 @@ func TestEnrichedPairContract(t *testing.T) {
 	assert.NotContainsf(t, p.DBPath, "/Users/"+os.Getenv("USER")+"/", "db_provenance leaks the username: %q", p.DBPath)
 }
 
-// THE OUTPUT-HASH PAIR: unchanged output does not re-ship, changed output does.
+// Recent transcripts are re-read for enrichment; only changed derived output uploads, onto the same key.
 func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 	f := newFixture(t)
 	db := cursorFixture(t, f)
-
 	first := runEnrich(t, f, enrichOpts(t, f, db, true))
-	require.Equalf(t, 2, first.Shipped, "first run shipped %d, want 2", first.Shipped)
-	keysAfterFirst := len(f.port.keys())
+	require.Equal(t, 2, first.Shipped)
+	keys := f.port.keys()
 
-	// Second run, nothing changed: determinism means the output hash matches and nothing uploads.
 	f.reopen()
 	second := runEnrich(t, f, enrichOpts(t, f, db, true))
-	assert.Equalf(t, 0, second.Shipped, "an unchanged run re-shipped %d objects", second.Shipped)
-	assert.Lenf(t, f.port.keys(), keysAfterFirst, "an unchanged run created new keys: %d -> %d", keysAfterFirst, len(f.port.keys()))
+	assert.Zero(t, second.Shipped)
+	assert.ElementsMatch(t, keys, f.port.keys())
 
-	// A DB-side-only change: the transcript is byte-identical, so only the derived object may move.
-	updateBubble(t, db, "bubbleId:"+enrichConv+":b3",
-		`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
-			"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
-			"result":"A LATE RESULT ARRIVED"}}`)
-
-	f.reopen()
-	third := runEnrich(t, f, enrichOpts(t, f, db, true))
-	require.Equalf(t, 1, third.Shipped, "a DB-side-only change shipped %d objects, want exactly the derived one: %+v", third.Shipped, third.Sources)
-	// Onto the SAME key: path-derived naming makes a revision a version, not a second object.
-	assert.Lenf(t, f.port.keys(), keysAfterFirst, "the re-ship created a new key: %d -> %d", keysAfterFirst, len(f.port.keys()))
-
-	found := false
-	for _, k := range f.port.keys() {
-		_, m, payload := f.openObject(t, k)
-		if m.Derived && strings.Contains(string(payload), "A LATE RESULT ARRIVED") {
-			found = true
+	for _, result := range []string{"A LATE RESULT ARRIVED", "LATE"} {
+		// Only the database changes: size/mtime filtering must still read the recent transcript.
+		updateBubble(t, db, "bubbleId:"+enrichConv+":b3", toolResult(result))
+		f.reopen()
+		rep := runEnrich(t, f, enrichOpts(t, f, db, true))
+		require.Equal(t, 1, rep.Shipped, "only the derived revision may ship")
+		assert.ElementsMatch(t, keys, f.port.keys())
+		found := false
+		for _, k := range f.port.keys() {
+			_, m, payload := f.openObject(t, k)
+			found = found || (m.Derived && strings.Contains(string(payload), fmt.Sprintf(`"result":%q`, result)))
 		}
+		assert.True(t, found, "late result %q never reached the sink", result)
 	}
-	assert.True(t, found, "the late result never reached the sink")
 }
 
 // THE DISABLED-ENRICHER GATE: byte-identical to a raw-only run.
@@ -321,9 +311,7 @@ func TestTheDerivedPayloadIsScrubbed(t *testing.T) {
 	// the derived object, so it is what an unredacted derived path would leak.
 	const planted = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"
 	updateBubble(t, db, "bubbleId:"+enrichConv+":b3",
-		`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
-			"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
-			"result":"exported GITHUB_TOKEN=`+planted+`"}}`)
+		toolResult("exported GITHUB_TOKEN="+planted))
 
 	runEnrich(t, f, enrichOpts(t, f, db, true))
 
@@ -333,26 +321,11 @@ func TestTheDerivedPayloadIsScrubbed(t *testing.T) {
 	}
 }
 
-// The recompute window: an unchanged transcript is still read while it is recent.
-func TestAnUnchangedTranscriptIsStillEnrichedInsideTheRecomputeWindow(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-
-	runEnrich(t, f, enrichOpts(t, f, db, true))
-	f.reopen()
-
-	// The transcript is untouched and the store gained a late result: without the recompute window
-	// its size and mtime never move, so it would never be read again.
-	updateBubble(t, db, "bubbleId:"+enrichConv+":b3",
-		`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
-			"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
-			"result":"LATE"}}`)
-
-	rep := runEnrich(t, f, enrichOpts(t, f, db, true))
-	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the derived object: %+v", rep.Shipped, rep.Sources)
+func toolResult(result string) string {
+	return fmt.Sprintf(`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
+		"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
+		"result":%q}}`, result)
 }
-
-// --- helpers ---------------------------------------------------------------
 
 func updateBubble(t *testing.T, dbPath, key, value string) {
 	t.Helper()

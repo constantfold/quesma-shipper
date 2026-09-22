@@ -12,10 +12,9 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// fileJob is one candidate, complete.
+// fileJob identifies a candidate and snapshots its committed state before concurrent preparation.
 type fileJob struct {
 	idx  int
-	cand sources.Candidate
 	fp   Fingerprint
 	seen bool
 }
@@ -29,9 +28,6 @@ type fileResult struct {
 
 	// unit is the raw bytes staged for the enricher, carried out through every later exit.
 	unit *transforms.RawUnit
-
-	// bytes is the candidate's size, released back to the in-flight gate when folded.
-	bytes int64
 
 	// pending owns ciphertext until upload or abandonment.
 	pending *pendingPut
@@ -145,17 +141,17 @@ func (p *sourcePass) run(ctx context.Context) error {
 	// settle releases a decided file's slot and gate share, then folds it; every exit ends here.
 	settle := func(r fileResult) {
 		inFlight--
-		p.inFlightBytes -= r.bytes
+		p.inFlightBytes -= p.disc.Candidates[r.idx].Size
 		p.fold(r)
 	}
 	for {
 		for inFlight < limit && p.canAdmit(ctx, next, inFlight, &stopped) {
-			job := fileJob{idx: next, cand: p.disc.Candidates[next]}
+			job := fileJob{idx: next}
 			job.fp, job.seen = p.store.Get(Key{
 				SourceID:   p.src.ID,
-				NativePath: job.cand.Path,
+				NativePath: p.disc.Candidates[next].Path,
 			})
-			p.inFlightBytes += job.cand.Size
+			p.inFlightBytes += p.disc.Candidates[next].Size
 			go func() {
 				computeSlots <- struct{}{}
 				r := p.o.prepareFile(ctx, job, p.src, p.disc, p.staging)

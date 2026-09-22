@@ -33,8 +33,8 @@ func (o Options) prepareFile(
 	disc sources.Discovery,
 	staging bool,
 ) (res fileResult) {
-	cand := job.cand
-	res = fileResult{idx: job.idx, bytes: cand.Size}
+	cand := disc.Candidates[job.idx]
+	res = fileResult{idx: job.idx}
 	out := &res.outcome
 	*out = FileOutcome{
 		SourceID:   src.ID,
