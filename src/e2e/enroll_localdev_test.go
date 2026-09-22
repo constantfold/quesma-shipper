@@ -47,32 +47,35 @@ func TestLocalDevMintsIdentityAndKeepsItOnRerun(t *testing.T) {
 	assert.Equalf(t, string(own), string(cfgAfter), "re-run rewrote the user's own config file")
 }
 
-func TestLoginWithoutTokenOrServerFails(t *testing.T) {
-	w := stageBareWorld(t)
-
-	out, err := runExpectingFailure(t, "login")
-	require.Errorf(t, err, "login with nothing succeeded:\n%s", out)
-	assert.Containsf(t, err.Error(), "login <token>", "error does not show how to pass the token: %v", err)
-
-	out, err = runExpectingFailure(t, "login", "tsg1.payload.sig")
-	require.Errorf(t, err, "login with a token and no server succeeded:\n%s", out)
-	assert.Containsf(t, err.Error(), "--server", "error does not name the missing server: %v", err)
-	assert.NoFileExistsf(t, filepath.Join(statePath(w), identity.FileName), "a refused login minted an identity anyway")
-}
-
-func TestLocalDevRefusesLoggedInInstall(t *testing.T) {
-	w := stageBareWorld(t)
-
-	rec := backend.Enrollment{InstallID: testInstallID, Organization: "acme", Endpoint: "https://cp.example"}
-	require.NoError(t, os.MkdirAll(statePath(w), 0o700))
-	require.NoError(t, rec.Save(statePath(w)))
-
-	out, err := runExpectingFailure(t, "local-dev")
-	require.Errorf(t, err, "local-dev on a logged-in install succeeded:\n%s", out)
-	for _, want := range []string{"already logged in", "acme"} {
-		assert.Containsf(t, err.Error(), want, "refusal does not mention %q: %v", want, err)
+// Each refusal names what to fix, and none mints an identity on the way out.
+func TestRefusalsNameTheFixAndMintNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enrolled bool
+		args     []string
+		want     []string
+	}{
+		{"login with nothing", false, []string{"login"}, []string{"login <token>"}},
+		{"login without a server", false, []string{"login", "tsg1.payload.sig"}, []string{"--server"}},
+		{"local-dev on a logged-in install", true, []string{"local-dev"}, []string{"already logged in", "acme"}},
+		// Every release orders above a dev version, so a dev build must refuse and name the override.
+		{"update on a dev build", false, []string{"update"}, []string{"dev build", "make build"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := stageBareWorld(t)
+			if tc.enrolled {
+				rec := backend.Enrollment{InstallID: testInstallID, Organization: "acme", Endpoint: "https://cp.example"}
+				require.NoError(t, os.MkdirAll(statePath(w), 0o700))
+				require.NoError(t, rec.Save(statePath(w)))
+			}
+			out, err := runExpectingFailure(t, tc.args...)
+			require.Errorf(t, err, "%v succeeded:\n%s", tc.args, out)
+			for _, want := range tc.want {
+				assert.Containsf(t, err.Error(), want, "refusal does not mention %q", want)
+			}
+			assert.NoFileExists(t, filepath.Join(statePath(w), identity.FileName), "the refusal minted an identity")
+		})
 	}
-	assert.NoFileExistsf(t, filepath.Join(statePath(w), identity.FileName), "the refused local-dev minted an identity")
 }
 
 func TestLocalDevSurfacesUnreadableIdentity(t *testing.T) {
@@ -102,14 +105,4 @@ func assertWaitsForEnrollment(t *testing.T) {
 	out, err := runUntilCancelled(t, "run", "--once")
 	require.NoErrorf(t, err, "cancelled wait failed: %v", err)
 	assert.Truef(t, strings.Contains(out, "waiting for enrollment") && strings.Contains(out, "quesma-shipper login"), "the enrollment wait was not logged:\n%s", out)
-}
-
-func TestUpdateOnADevBuildRefusesAndNamesTheOverride(t *testing.T) {
-	stageBareWorld(t)
-
-	out, err := runExpectingFailure(t, "update")
-	require.Errorf(t, err, "update on a dev build succeeded:\n%s", out)
-	for _, want := range []string{"dev build", "make build"} {
-		assert.Containsf(t, err.Error(), want, "the refusal does not mention %q: %v", want, err)
-	}
 }
