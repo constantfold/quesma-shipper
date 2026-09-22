@@ -40,55 +40,46 @@ func TestAnOutOfOrderToolBubbleIsFoundBehindTheCursor(t *testing.T) {
 	assert.Contains(t, string(res.Objects[0].Payload), "task_777", "the tool block did not align to the bubble behind the cursor")
 }
 
-// A short argument value is a substring of half the store, so comparing whole values is what
-// refuses the bubble that merely starts with the same characters.
-func TestACoincidentalArgumentMatchDoesNotStealADistantBubble(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nfind the deny rules\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"deny","glob":"**/*","output_mode":"files_with_matches"}}]}}
+// Neither coincidental evidence nor identical arguments may bypass the forward window.
+func TestForwardWindowKeepsDistantCallsOut(t *testing.T) {
+	for _, tc := range []struct{ name, input, distantArgs string }{
+		{"substring coincidence", `{"pattern":"deny","glob":"**/*","output_mode":"files_with_matches"}`,
+			`{"pattern":"signed","glob":"**/*.{md,json,yaml,go}"}`},
+		{"identical arguments", `{"pattern":"deny_additions","path":"/work/api/internal/config"}`,
+			`{"pattern":"deny_additions","path":"/work/api/internal/config"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nfind the deny rules\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":` + tc.input + `}]}}
 `
-	headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"near","type":2}`}
-	rows := []storeRow{
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"find the deny rules",
+			headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"near","type":2}`}
+			rows := []storeRow{
+				bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"find the deny rules",
 				"createdAt":"2026-08-18T13:59:00.000Z"}`),
-		{
-			// The real bubble, recorded without arguments: positional evidence only.
-			key: "bubbleId:" + conv + ":near",
-			value: `{"bubbleId":"near","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:59:01.000Z",
-				"toolFormerData":{"toolCallId":"call_near","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{}","result":"the right result"}}`,
-		},
-	}
-	// Filler: enough real bubbles to put the coincidence beyond the forward window.
-	for i := 0; i < 20; i++ {
-		id := fmt.Sprintf("fill%02d", i)
-		headers = append(headers, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, id))
-		rows = append(rows, storeRow{
-			key: "bubbleId:" + conv + ":" + id,
-			value: fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:59:%02d.000Z",
-				"toolFormerData":{"toolCallId":"call_%s","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/f%02d.go\"}",
-					"result":"unrelated"}}`, id, i+2, id, i),
+				toolRow("near", "ripgrep_raw_search", `{}`, "the right result", "2026-08-18T13:59:01.000Z"),
+			}
+			// Twenty unrelated calls put the tempting match beyond the forward window.
+			for i := range 20 {
+				id := fmt.Sprintf("fill%02d", i)
+				headers = append(headers, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, id))
+				rows = append(rows, toolRow(id, "read_file_v2", fmt.Sprintf(`{"path":"/work/api/f%02d.go"}`, i),
+					"unrelated", fmt.Sprintf("2026-08-18T13:59:%02d.000Z", i+2)))
+			}
+			headers = append(headers, `{"bubbleId":"far","type":2}`)
+			rows = append(rows,
+				toolRow("far", "ripgrep_raw_search", tc.distantArgs, "the WRONG result", "2026-08-18T13:59:40.000Z"),
+				composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
+
+			res := run(t, newStore(t, rows), unit(t, transcript))
+			require.Lenf(t, res.Objects, 1, "objects = %d, mismatched %d, notes %v", len(res.Objects), res.Mismatched, res.Notes)
+			lines := decode(t, res.Objects[0].Payload)
+			enrich, _ := lines[1]["_enrich"].([]any)
+			require.Len(t, enrich, 1)
+			e, _ := enrich[0].(map[string]any)
+			require.Truef(t, e != nil && e["bubbleId"] == "near", "the call joined to %v, want the bubble at its own position", e)
+			assert.Equal(t, "the right result", e["result"])
 		})
 	}
-	// The coincidence: a DIFFERENT search, whose glob merely starts with the block's.
-	headers = append(headers, `{"bubbleId":"far","type":2}`)
-	rows = append(rows, bubbleRow("far", `{"bubbleId":"far","type":2,"capabilityType":15,
-			"createdAt":"2026-08-18T13:59:40.000Z",
-			"toolFormerData":{"toolCallId":"call_far","name":"ripgrep_raw_search",
-				"status":"completed","rawArgs":"{\"pattern\":\"signed\",\"glob\":\"**/*.{md,json,yaml,go}\"}",
-				"result":"the WRONG result"}}`))
-	rows = append(rows, composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
-
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	require.Lenf(t, res.Objects, 1, "objects = %d, mismatched %d, notes %v", len(res.Objects), res.Mismatched, res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "near", "the call joined to %v, want the bubble at its own position", e)
-	assert.Truef(t, e["result"] == "the right result", "result = %v", e["result"])
 }
 
 // A call recorded without arguments can never produce positive evidence, so when the header order
@@ -98,87 +89,23 @@ func TestATerminalBubbleLeftBehindTheCursorIsStillFound(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/work/api/internal/config/resolve.go"}},{"type":"tool_use","name":"Shell","input":{"command":"git status --short"}}]}}
 `
 	db := newStore(t, []storeRow{
-		{
-			// The store's order is reversed here: the read match steps over the shell.
-			key: "composerData:" + conv,
-			value: fmt.Sprintf(`{"composerId":%q,"createdAt":1755500000000,
-				"fullConversationHeadersOnly":[
+		// The store's order is reversed here: the read match steps over the shell.
+		composerAt(1755500000000, `[
 					{"bubbleId":"b1","type":1},
 					{"bubbleId":"shell","type":2},
-					{"bubbleId":"read","type":2}]}`, conv),
-		},
+					{"bubbleId":"read","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"what changed",
 				"createdAt":"2026-08-18T13:53:00.000Z"}`),
-		bubbleRow("shell", `{"bubbleId":"shell","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:01.000Z",
-				"toolFormerData":{"toolCallId":"call_shell","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"{}","result":" M internal/config/resolve.go"}}`),
-		bubbleRow("read", `{"bubbleId":"read","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:02.000Z",
-				"toolFormerData":{"toolCallId":"call_read","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config"}}`),
+		toolRow("shell", "run_terminal_command_v2", `{}`,
+			" M internal/config/resolve.go", "2026-08-18T13:53:01.000Z"),
+		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
+			"package config", "2026-08-18T13:53:02.000Z"),
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 2)
-	for i, want := range []string{"read", "shell"} {
-		e, _ := enrich[i].(map[string]any)
-		assert.Truef(t, e != nil && e["bubbleId"] == want, "block %d joined to %v, want %s", i, e, want)
-	}
+	enrich := matchedBubbles(t, lines[1], "read", "shell")
 	// The result is what this exists for: the terminal output the transcript has none of.
-	e, _ := enrich[1].(map[string]any)
-	assert.Truef(t, e["result"] == " M internal/config/resolve.go", "terminal result = %v", e["result"])
-}
-
-// Distance, not discrimination: the distant bubble has the same arguments as the block, so only
-// the window separates them. A conversation is not re-ordered by evidence.
-func TestArgumentEvidenceDoesNotReachPastTheForwardWindow(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nfind the deny rules\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"deny_additions","path":"/work/api/internal/config"}}]}}
-`
-	headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"near","type":2}`}
-	rows := []storeRow{
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"find the deny rules",
-				"createdAt":"2026-08-18T13:59:00.000Z"}`),
-		bubbleRow("near", `{"bubbleId":"near","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:59:01.000Z",
-				"toolFormerData":{"toolCallId":"call_near","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{}","result":"the right result"}}`),
-	}
-	// Calls the transcript does not mention, putting the identical one out of the window.
-	for i := 0; i < 20; i++ {
-		id := fmt.Sprintf("fill%02d", i)
-		headers = append(headers, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, id))
-		rows = append(rows, storeRow{
-			key: "bubbleId:" + conv + ":" + id,
-			value: fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:59:%02d.000Z",
-				"toolFormerData":{"toolCallId":"call_%s","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/f%02d.go\"}",
-					"result":"unrelated"}}`, id, i+2, id, i),
-		})
-	}
-	// The same search much later: identical arguments, so only the window keeps the join off it.
-	headers = append(headers, `{"bubbleId":"far","type":2}`)
-	rows = append(rows,
-		bubbleRow("far", `{"bubbleId":"far","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:59:40.000Z",
-				"toolFormerData":{"toolCallId":"call_far","name":"ripgrep_raw_search",
-					"status":"completed",
-					"rawArgs":"{\"pattern\":\"deny_additions\",\"path\":\"/work/api/internal/config\"}",
-					"result":"the WRONG result"}}`),
-		composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
-
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	require.Lenf(t, res.Objects, 1, "objects = %d, mismatched %d, notes %v", len(res.Objects), res.Mismatched, res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 1)
-	e, _ := enrich[0].(map[string]any)
-	require.Truef(t, e != nil && e["bubbleId"] == "near", "the call joined to %v, want the bubble at its own position", e)
-	assert.Truef(t, e["result"] == "the right result", "result = %v", e["result"])
+	assert.Equal(t, " M internal/config/resolve.go", enrich[1]["result"])
 }
 
 // Two argument-less shell bubbles behind the cursor, both name-compatible: nothing but position
@@ -199,15 +126,9 @@ func TestThePositionalLookBehindTakesTheNearestSiblingNotAnyOfThem(t *testing.T)
 				"createdAt":"2026-08-18T13:53:02.000Z",
 				"toolFormerData":{"toolCallId":"call_near","name":"run_terminal_command_v2",
 					"status":"completed","rawArgs":"{}","result":" M internal/config/resolve.go"}}`),
-		{
-			// Matching this one on its path carries the cursor past both shells.
-			key: "bubbleId:" + conv + ":read",
-			value: `{"bubbleId":"read","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:03.000Z",
-				"toolFormerData":{"toolCallId":"call_read","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config"}}`,
-		},
+		// Matching this one on its path carries the cursor past both shells.
+		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
+			"package config", "2026-08-18T13:53:03.000Z"),
 	})
 
 	lines := joined(t, db, transcript)
@@ -235,11 +156,8 @@ func TestATextBlockDoesNotClaimAPassedOverBubbleOnPositionAlone(t *testing.T) {
 			value: `{"bubbleId":"prose","type":2,"text":"Reading the resolver first.",
 				"createdAt":"2026-08-18T13:53:01.000Z"}`,
 		},
-		bubbleRow("read", `{"bubbleId":"read","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:02.000Z",
-				"toolFormerData":{"toolCallId":"call_read","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config"}}`),
+		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
+			"package config", "2026-08-18T13:53:02.000Z"),
 	})
 
 	lines := joined(t, db, transcript)

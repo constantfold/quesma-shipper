@@ -209,12 +209,7 @@ func TestServerHydratedReasoningIsDecodedNotDropped(t *testing.T) {
 
 	// Both reasoning bubbles carry their provenance, whichever writer produced them.
 	lines := decode(t, res.Objects[0].Payload)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 2)
-	for i, want := range []string{"b2", "b3"} {
-		e, _ := enrich[i].(map[string]any)
-		assert.Truef(t, e != nil && e["bubbleId"] == want, "block %d joined to %v, want %s", i, e, want)
-	}
+	matchedBubbles(t, lines[1], "b2", "b3")
 }
 
 // A thinking string that parses but not into a known field still carries prose: taking the text

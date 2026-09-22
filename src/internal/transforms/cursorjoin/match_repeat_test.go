@@ -23,26 +23,14 @@ func TestARepeatedCallTheStoreRecordedOnceIsNotAMismatch(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"grep","type":2},{"bubbleId":"argless","type":2},{"bubbleId":"purge","type":2},{"bubbleId":"a1","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"look twice"}`),
-		bubbleRow("grep", `{"bubbleId":"grep","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_grep","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"quoteETag|normaliseETag\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"etag.go:9"}}`),
-		{
-			// An argument-less same-named bubble right where a positional fallback would
-			// look. The repeat must not take it — its result is some other call's.
-			key: "bubbleId:" + conv + ":argless",
-			value: `{"bubbleId":"argless","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_argless","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{}","result":"NOT THE REPEAT'S RESULT"}}`,
-		},
-		{
-			// A following sibling of the same tool: the repeat must leave its bubble alone.
-			key: "bubbleId:" + conv + ":purge",
-			value: `{"bubbleId":"purge","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_purge","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"PurgePrefix|opts\\\\.Prefix\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"purge.go:14"}}`,
-		},
+		toolRow("grep", "ripgrep_raw_search", `{"pattern":"quoteETag|normaliseETag","path":"/work/api/internal/backends/s3"}`,
+			"etag.go:9", ""),
+		// An argument-less same-named bubble right where a positional fallback would
+		// look. The repeat must not take it — its result is some other call's.
+		toolRow("argless", "ripgrep_raw_search", `{}`, "NOT THE REPEAT'S RESULT", ""),
+		// A following sibling of the same tool: the repeat must leave its bubble alone.
+		toolRow("purge", "ripgrep_raw_search", `{"pattern":"PurgePrefix|opts\\.Prefix","path":"/work/api/internal/backends/s3"}`,
+			"purge.go:14", ""),
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Both live in etag.go."}`),
 	})
 
@@ -85,14 +73,10 @@ func TestAHoleBeforeARepeatIsAMismatchNotTail(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"grep","type":2},{"bubbleId":"purge","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"look around"}`),
-		bubbleRow("grep", `{"bubbleId":"grep","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_grep","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"quoteETag|normaliseETag\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"etag.go:9"}}`),
-		bubbleRow("purge", `{"bubbleId":"purge","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_purge","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"PurgePrefix|opts\\\\.Prefix\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"purge.go:14"}}`),
+		toolRow("grep", "ripgrep_raw_search", `{"pattern":"quoteETag|normaliseETag","path":"/work/api/internal/backends/s3"}`,
+			"etag.go:9", ""),
+		toolRow("purge", "ripgrep_raw_search", `{"pattern":"PurgePrefix|opts\\.Prefix","path":"/work/api/internal/backends/s3"}`,
+			"purge.go:14", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))
@@ -112,15 +96,10 @@ func TestAFallbackConsumerDoesNotMakeTheNextCallARepeat(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"etag","type":2},{"bubbleId":"a1","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"scan the backends"}`),
-		{
-			// The only tool bubble. It belongs to the second search, but the first
-			// reaches it first and the shared path keeps it un-contradicted.
-			key: "bubbleId:" + conv + ":etag",
-			value: `{"bubbleId":"etag","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_etag","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"quoteETag|normaliseETag\",\"path\":\"/work/s3\"}",
-					"result":"etag.go:9"}}`,
-		},
+		// The only tool bubble. It belongs to the second search, but the first
+		// reaches it first and the shared path keeps it un-contradicted.
+		toolRow("etag", "ripgrep_raw_search", `{"pattern":"quoteETag|normaliseETag","path":"/work/s3"}`,
+			"etag.go:9", ""),
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Both live in etag.go."}`),
 	})
 
@@ -140,23 +119,11 @@ func TestAnUndecidableRepeatAttachesNothingAndDoesNotCascade(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"t1","type":2},{"bubbleId":"t2","type":2},{"bubbleId":"t3","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"run the tests"}`),
-		bubbleRow("t1", `{"bubbleId":"t1","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_t1","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"{\"command\":\"npm test\"}",
-					"result":"FAIL: 3 failing"}}`),
-		{
-			// The re-run's bubble, recorded argument-less — indistinguishable from a
-			// neighbour's argument-less bubble when the run before it was deduped.
-			key: "bubbleId:" + conv + ":t2",
-			value: `{"bubbleId":"t2","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_t2","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"{}",
-					"result":"PASS all tests passed"}}`,
-		},
-		bubbleRow("t3", `{"bubbleId":"t3","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_t3","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"{}",
-					"result":" M internal/config/resolve.go"}}`),
+		toolRow("t1", "run_terminal_command_v2", `{"command":"npm test"}`, "FAIL: 3 failing", ""),
+		// The re-run's bubble, recorded argument-less — indistinguishable from a
+		// neighbour's argument-less bubble when the run before it was deduped.
+		toolRow("t2", "run_terminal_command_v2", `{}`, "PASS all tests passed", ""),
+		toolRow("t3", "run_terminal_command_v2", `{}`, " M internal/config/resolve.go", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))
@@ -190,10 +157,8 @@ func TestAStoreDedupedReRunFarBackIsStillARepeat(t *testing.T) {
 	headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"grep","type":2}`}
 	rows := []storeRow{
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"audit everything"}`),
-		bubbleRow("grep", `{"bubbleId":"grep","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_grep","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"quoteETag|normaliseETag\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"etag.go:9"}}`),
+		toolRow("grep", "ripgrep_raw_search", `{"pattern":"quoteETag|normaliseETag","path":"/work/api/internal/backends/s3"}`,
+			"etag.go:9", ""),
 	}
 	// 64 distinct consumed bubbles between the original and its re-run: one past the
 	// look-behind bound.
@@ -235,10 +200,7 @@ func TestARepeatWhoseOwnBubbleIsOutOfReachIsAMismatchNotARepeat(t *testing.T) {
 	headers := []string{`{"bubbleId":"b1","type":1}`, `{"bubbleId":"r1","type":2}`, `{"bubbleId":"prose","type":2}`}
 	rows := []storeRow{
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"check the resolver twice"}`),
-		bubbleRow("r1", `{"bubbleId":"r1","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_r1","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config"}}`),
+		toolRow("r1", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`, "package config", ""),
 		bubbleRow("prose", `{"bubbleId":"prose","type":2,"text":"The resolver is bounded."}`),
 	}
 	// Store-only bubbles a subagent left behind: the transcript never mentions them, and
@@ -256,10 +218,8 @@ func TestARepeatWhoseOwnBubbleIsOutOfReachIsAMismatchNotARepeat(t *testing.T) {
 	}
 	headers = append(headers, `{"bubbleId":"r2","type":2}`)
 	rows = append(rows,
-		bubbleRow("r2", `{"bubbleId":"r2","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_r2","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config, again"}}`),
+		toolRow("r2", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
+			"package config, again", ""),
 		composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
 
 	res := run(t, newStore(t, rows), unit(t, transcript))
@@ -280,10 +240,8 @@ func TestATrailingRepeatDoesNotTurnInjectedTurnsIntoMismatches(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"u1","type":1},{"bubbleId":"grep","type":2}]`),
 		bubbleRow("u1", `{"bubbleId":"u1","type":1,"text":"find the etag helpers"}`),
-		bubbleRow("grep", `{"bubbleId":"grep","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_grep","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"quoteETag|normaliseETag\",\"path\":\"/work/api/internal/backends/s3\"}",
-					"result":"etag.go:9"}}`),
+		toolRow("grep", "ripgrep_raw_search", `{"pattern":"quoteETag|normaliseETag","path":"/work/api/internal/backends/s3"}`,
+			"etag.go:9", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))

@@ -254,28 +254,8 @@ func (o Options) prepareDerived(
 		}
 	}
 
-	obj, sealed, err := transforms.Seal(m, res.Out, o.Recipients)
-	if err != nil {
-		return fail(err.Error())
-	}
-	fo.BytesOut = int64(len(obj))
-
-	if o.DryRun {
-		fo.Decision = auditlog.DecisionShipped
-		fo.Reason = "would ship derived object (preview)"
-		return fo, nil
-	}
-
-	return fo, &pendingPut{
-		key:       key,
-		objectKey: objectKey,
-		obj:       obj,
-		// ObjectMetadata carries derived=true in plaintext, so an erasure sweep needs only a HEAD.
-		md: sealed.ObjectMetadata(),
-		next: Fingerprint{
-			SourceHash: sourceHash,
-			OutputHash: d.OutputHash,
-			Enricher:   ref,
-		},
-	}
+	pending = o.sealPrepared(&fo, m, res.Out, Fingerprint{
+		SourceHash: sourceHash, OutputHash: d.OutputHash, Enricher: ref,
+	})
+	return fo, pending
 }

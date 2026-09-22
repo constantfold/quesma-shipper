@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
@@ -116,4 +117,32 @@ func joined(t *testing.T, db, transcript string) []map[string]any {
 	res := run(t, db, unit(t, transcript))
 	require.Lenf(t, res.Objects, 1, "mismatched %d, notes %v", res.Mismatched, res.Notes)
 	return decode(t, res.Objects[0].Payload)
+}
+
+// Completed calls use Cursor's standard bubble envelope.
+func toolRow(id, name, args, result, at string) storeRow {
+	body := map[string]any{
+		"bubbleId": id, "type": 2, "capabilityType": 15,
+		"toolFormerData": map[string]string{
+			"toolCallId": "call_" + id, "name": name, "status": "completed",
+			"rawArgs": args, "result": result,
+		},
+	}
+	if at != "" {
+		body["createdAt"] = at
+	}
+	encoded, _ := json.Marshal(body)
+	return bubbleRow(id, string(encoded))
+}
+
+func matchedBubbles(t *testing.T, line map[string]any, ids ...string) []map[string]any {
+	t.Helper()
+	items, _ := line["_enrich"].([]any)
+	require.Len(t, items, len(ids))
+	out := make([]map[string]any, len(items))
+	for i, item := range items {
+		out[i], _ = item.(map[string]any)
+		assert.Equal(t, ids[i], out[i]["bubbleId"], "block %d", i)
+	}
+	return out
 }

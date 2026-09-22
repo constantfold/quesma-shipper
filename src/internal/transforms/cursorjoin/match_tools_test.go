@@ -1,7 +1,6 @@
 package cursorjoin_test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,28 +17,14 @@ func TestADirectoryArgumentDoesNotMatchAFileBeneathIt(t *testing.T) {
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"grep","type":2},{"bubbleId":"read","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"audit the config package",
 				"createdAt":"2026-08-18T13:53:00.000Z"}`),
-		{
-			// Recorded without arguments, so only its position speaks for it.
-			key: "bubbleId:" + conv + ":grep",
-			value: `{"bubbleId":"grep","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:01.000Z",
-				"toolFormerData":{"toolCallId":"call_grep","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{}","result":"resolve.go:41"}}`,
-		},
-		bubbleRow("read", `{"bubbleId":"read","type":2,"capabilityType":15,
-				"createdAt":"2026-08-18T13:53:02.000Z",
-				"toolFormerData":{"toolCallId":"call_read","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"/work/api/internal/config/resolve.go\"}",
-					"result":"package config"}}`),
+		// Recorded without arguments, so only its position speaks for it.
+		toolRow("grep", "ripgrep_raw_search", `{}`, "resolve.go:41", "2026-08-18T13:53:01.000Z"),
+		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
+			"package config", "2026-08-18T13:53:02.000Z"),
 	})
 
 	lines := joined(t, db, transcript)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 2)
-	for i, want := range []string{"grep", "read"} {
-		e, _ := enrich[i].(map[string]any)
-		assert.Truef(t, e != nil && e["bubbleId"] == want, "block %d joined to %v, want %s", i, e, want)
-	}
+	matchedBubbles(t, lines[1], "grep", "read")
 }
 
 // Cursor rewrites a command between the transcript and the store, splicing in its attribution.
@@ -75,12 +60,7 @@ func TestAVendorRewrittenCommandStillAligns(t *testing.T) {
 	require.Equalf(t, 0, res.Mismatched, "the rewritten commands mismatched: %v", res.Notes)
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
-	enrich, _ := lines[1]["_enrich"].([]any)
-	require.Len(t, enrich, 2)
-	for i, want := range []string{"commit", "pr"} {
-		e, _ := enrich[i].(map[string]any)
-		assert.Truef(t, e != nil && e["bubbleId"] == want, "block %d joined to %v, want %s", i, e, want)
-	}
+	matchedBubbles(t, lines[1], "commit", "pr")
 }
 
 // An errored call is recorded with no argument values at all, and recording nothing contradicts
@@ -136,10 +116,7 @@ func TestTheTerminalParseTreeCannotSpeakForAnotherTool(t *testing.T) {
 					"params":"{\"command\":\"git show d63a490 -- render.yaml | head -30\",\"cwd\":\"\",\"parsingResult\":{\"commands\":[{\"words\":[\"git\",\"show\",\"d63a490\",\"render.yaml\",\"head\"]}]},\"requestedSandboxPolicy\":{\"workspace\":\"/work/api\"},\"commandDescription\":\"Inspect the pin commit\"}",
 					"result":"render.yaml | 2 +-"}}`,
 		},
-		bubbleRow("read", `{"bubbleId":"read","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_read","name":"read_file_v2",
-					"status":"completed","rawArgs":"{\"path\":\"render.yaml\"}",
-					"result":"services:\n  - type: web"}}`),
+		toolRow("read", "read_file_v2", `{"path":"render.yaml"}`, "services:\n  - type: web", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))
@@ -147,12 +124,7 @@ func TestTheTerminalParseTreeCannotSpeakForAnotherTool(t *testing.T) {
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
 	for i, want := range []string{"read", "shell"} {
-		enrich, _ := lines[i+1]["_enrich"].([]any)
-		require.Len(t, enrich, 1)
-		e, _ := enrich[0].(map[string]any)
-		if e == nil || e["bubbleId"] != want {
-			t.Errorf("line %d joined to %v, want %s", i+1, e, want)
-		}
+		matchedBubbles(t, lines[i+1], want)
 	}
 	// The theft's signature outcome: the shell call demoted to a repeat of nothing. Zero, or
 	// the misattribution shipped silently.
@@ -167,24 +139,16 @@ func TestALoneSharedValueAmongSeveralIsNotIdentity(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}}]}}
 `
 	db := newStore(t, []storeRow{
-		{
-			// purge before conflict: the reverse of the transcript's order.
-			key: "composerData:" + conv,
-			value: fmt.Sprintf(`{"composerId":%q,"createdAt":1755500000000,
-				"fullConversationHeadersOnly":[
+		// purge before conflict: the reverse of the transcript's order.
+		composerAt(1755500000000, `[
 					{"bubbleId":"b1","type":1},
 					{"bubbleId":"purge","type":2},
-					{"bubbleId":"conflict","type":2}]}`, conv),
-		},
+					{"bubbleId":"conflict","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"check the backends"}`),
-		bubbleRow("purge", `{"bubbleId":"purge","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_purge","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"PurgePrefix|VerifyCapabilities\",\"path\":\"/work/api\"}",
-					"result":"purge.go:14"}}`),
-		bubbleRow("conflict", `{"bubbleId":"conflict","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_conflict","name":"ripgrep_raw_search",
-					"status":"completed","rawArgs":"{\"pattern\":\"StatusConflict|409\",\"path\":\"/work/api\"}",
-					"result":"s3.go:88"}}`),
+		toolRow("purge", "ripgrep_raw_search", `{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}`,
+			"purge.go:14", ""),
+		toolRow("conflict", "ripgrep_raw_search", `{"pattern":"StatusConflict|409","path":"/work/api"}`,
+			"s3.go:88", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))
@@ -192,12 +156,7 @@ func TestALoneSharedValueAmongSeveralIsNotIdentity(t *testing.T) {
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
 	for i, want := range []string{"conflict", "purge"} {
-		enrich, _ := lines[i+1]["_enrich"].([]any)
-		require.Len(t, enrich, 1)
-		e, _ := enrich[0].(map[string]any)
-		if e == nil || e["bubbleId"] != want {
-			t.Errorf("line %d joined to %v, want %s", i+1, e, want)
-		}
+		matchedBubbles(t, lines[i+1], want)
 	}
 }
 
@@ -211,25 +170,13 @@ func TestABareStringStoreWithAttributionStillAligns(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"commit","type":2},{"bubbleId":"pr","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"commit and open a PR"}`),
-		{
-			// A bare string, not JSON: the executed command with the trailer spliced in.
-			key: "bubbleId:" + conv + ":commit",
-			value: `{"bubbleId":"commit","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_commit","name":"run_terminal_command_v2",
-					"status":"completed",
-					"rawArgs":"git commit --trailer \"Co-authored-by: Cursor <cursoragent@cursor.com>\" -m \"fix: bound the loader in the manifest reader\"",
-					"result":"1 file changed"}}`,
-		},
-		{
-			// A bare string holding JSON: the executed command appears escaped, footer
-			// included, so the escaped attribution form is the one that must strip.
-			key: "bubbleId:" + conv + ":pr",
-			value: `{"bubbleId":"pr","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_pr","name":"run_terminal_command_v2",
-					"status":"completed",
-					"rawArgs":"captured {\"command\":\"gh pr create --title \\\"Bound the loader\\\" --body \\\"## Summary\\n- bound it\\n\\nMade with [Cursor](https://cursor.com)\\\"\"} (exit 0)",
-					"result":"https://github.com/org/repo/pull/1"}}`,
-		},
+		// A bare string, not JSON: the executed command with the trailer spliced in.
+		toolRow("commit", "run_terminal_command_v2", `git commit --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>" -m "fix: bound the loader in the manifest reader"`,
+			"1 file changed", ""),
+		// A bare string holding JSON: the executed command appears escaped, footer
+		// included, so the escaped attribution form is the one that must strip.
+		toolRow("pr", "run_terminal_command_v2", `captured {"command":"gh pr create --title \"Bound the loader\" --body \"## Summary\n- bound it\n\nMade with [Cursor](https://cursor.com)\""} (exit 0)`,
+			"https://github.com/org/repo/pull/1", ""),
 	})
 
 	res := run(t, db, unit(t, transcript))
@@ -237,11 +184,6 @@ func TestABareStringStoreWithAttributionStillAligns(t *testing.T) {
 	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
 	lines := decode(t, res.Objects[0].Payload)
 	for i, want := range []string{"commit", "pr"} {
-		enrich, _ := lines[i+1]["_enrich"].([]any)
-		require.Len(t, enrich, 1)
-		e, _ := enrich[0].(map[string]any)
-		if e == nil || e["bubbleId"] != want {
-			t.Errorf("line %d joined to %v, want %s", i+1, e, want)
-		}
+		matchedBubbles(t, lines[i+1], want)
 	}
 }

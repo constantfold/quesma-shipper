@@ -131,35 +131,36 @@ func (o Options) prepareFile(
 	out.ObjectKey = objectKey
 
 	manifest := o.manifestFor(src, cand, disc, sourceHash, mtime, scrubbed)
-	obj, sealed, err := transforms.Seal(manifest, scrubbed.Out, o.Recipients)
+	res.pending = o.sealPrepared(out, manifest, scrubbed.Out, Fingerprint{
+		SourceSize: cand.Size, SourceMTime: cand.MTime, SourceHash: sourceHash,
+	})
+	return res
+}
+
+// Both paths seal before preview stops; only a real upload receives a pending commit.
+func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload []byte, next Fingerprint) *pendingPut {
+	obj, sealed, err := transforms.Seal(m, payload, o.Recipients)
 	if err != nil {
-		out.Decision = auditlog.DecisionFailed
-		out.Reason = err.Error()
-		return res
+		out.Decision, out.Reason = auditlog.DecisionFailed, err.Error()
+		return nil
 	}
 	out.BytesOut = int64(len(obj))
-
 	if o.DryRun {
-		// preview stops here: everything that would leave the machine is computed, and nothing has.
 		out.Decision = auditlog.DecisionShipped
-		if out.Reason == "" {
+		if out.Derived {
+			out.Reason = "would ship derived object (preview)"
+		} else if out.Reason == "" {
 			out.Reason = "would ship (preview)"
 		}
-		return res
+		return nil
 	}
-
-	res.pending = &pendingPut{
-		key:       key,
-		objectKey: objectKey,
+	return &pendingPut{
+		key:       Key{SourceID: out.SourceID, NativePath: out.NativePath},
+		objectKey: out.ObjectKey,
 		obj:       obj,
 		md:        sealed.ObjectMetadata(),
-		next: Fingerprint{
-			SourceSize:  cand.Size,
-			SourceMTime: cand.MTime,
-			SourceHash:  sourceHash,
-		},
+		next:      next,
 	}
-	return res
 }
 
 // keySpread is a cheap stable hash of a state key, used only to separate backoff wakeups.
