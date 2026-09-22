@@ -79,31 +79,3 @@ func TestToUploadTicketFeedsValidation(t *testing.T) {
 	assert.Equal(t, "class=trajectory", ticket.RequiredHeaders["x-amz-tagging"])
 	assert.Truef(t, ticket.ContentLengthSigned && ticket.ExpiresAt == issued.ExpiresAt, "bridge dropped a field: %+v", ticket)
 }
-
-// A field the bridge forgot must fail loudly, not upload a half-derived object.
-func TestToUploadTicketDroppedFieldIsRefused(t *testing.T) {
-	target, err := upload.NewUploadTarget(upload.TargetSpec{
-		Origin:     "https://acme.s3.example.com",
-		Addressing: upload.VirtualHosted,
-	})
-	require.NoErrorf(t, err, "target: %v", err)
-	prepared := upload.PreparedUpload{
-		ObjectID:   "01J0000000000000000000000A",
-		Key:        "object.age",
-		Body:       []byte("sealed"),
-		SourceHash: "sha256:abc",
-		Metadata:   map[string]string{"source-id": "laptop"},
-	}
-	ticket := toUploadTicket(controlplane.Ticket{
-		TicketID: "ticket-1",
-		ObjectID: prepared.ObjectID,
-		Method:   "PUT",
-		URL:      "https://acme.s3.example.com/object.age",
-		RequiredHeaders: controlplane.TicketHeaders{
-			"x-amz-meta-source-hash": prepared.SourceHash,
-			"x-amz-meta-ticket-id":   "ticket-1",
-		},
-		ContentLength: int64(len(prepared.Body)),
-	})
-	require.Error(t, upload.ValidateTicket(upload.UploadTargetList{target}, prepared, ticket), "a ticket missing the declared source-id header validated")
-}

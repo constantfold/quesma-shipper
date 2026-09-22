@@ -39,46 +39,24 @@ func pendingFile(doc engine.Document, src config.ResolvedSource, c sources.Candi
 	return !seen || fp.SourceSize != c.Size || fp.SourceMTime.UnixNano() != c.MTime.UnixNano()
 }
 
-type enricherProbe struct {
-	id string
-	e  transforms.Enricher
-	on bool
-	db string // resolved database path; empty means not found
-}
-
-func probeEnrichers(src config.ResolvedSource) []enricherProbe {
-	if len(src.Enrichers) == 0 {
-		return nil
-	}
-	compiled := Enrichers()
-	var out []enricherProbe
-	for _, id := range slices.Sorted(maps.Keys(src.Enrichers)) {
-		p := enricherProbe{id: id, e: compiled[id], on: src.Enrichers[id]}
-		if p.e != nil && p.on {
-			p.db = firstExistingDB(p.e)
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
 func enricherIssues(name string, src config.ResolvedSource) []Row {
 	var rows []Row
-	for _, p := range probeEnrichers(src) {
-		switch {
-		case p.e == nil:
+	compiled := Enrichers()
+	for _, id := range slices.Sorted(maps.Keys(src.Enrichers)) {
+		switch e := compiled[id]; {
+		case e == nil:
 			rows = append(rows, Row{Sev: SevWarn, Sub: true, Label: "  database",
 				Brief:  name + ": enricher missing from this build",
-				Detail: "tool results and timestamps are not captured - enricher " + p.id + " is not in this build",
+				Detail: "tool results and timestamps are not captured - enricher " + id + " is not in this build",
 				Fix:    "`quesma-shipper update` may carry it"})
-		case !p.on:
+		case !src.Enrichers[id]:
 			rows = append(rows, Row{Sev: SevDim, Label: "  database",
 				Detail: "enrichment disabled - no tool results, call ids or timestamps"})
-		case p.db == "":
+		case firstExistingDB(e) == "":
 			rows = append(rows, Row{Sev: SevWarn, Sub: true, Label: "  database",
 				Brief:  name + ": enrichment database not found",
 				Detail: "not found, raw files only, no tool results or timestamps",
-				Fix:    "looked for " + strings.Join(p.e.DBCandidates(), ", ")})
+				Fix:    "looked for " + strings.Join(e.DBCandidates(), ", ")})
 		}
 	}
 	return rows
@@ -162,20 +140,26 @@ func doctorReport(probes []sourceProbe) formats.Report {
 
 func enricherRows(src config.ResolvedSource) []Row {
 	var rows []Row
-	for _, p := range probeEnrichers(src) {
-		switch {
-		case p.e == nil:
-			rows = append(rows, Row{Sev: SevWarn, Label: "  enricher " + p.id,
-				Detail: fmt.Sprintf("declared but not in this build: enrich: no enricher %q in this build", p.id)})
-		case !p.on:
-			rows = append(rows, Row{Sev: SevDim, Label: "  enricher " + p.id,
+	compiled := Enrichers()
+	for _, id := range slices.Sorted(maps.Keys(src.Enrichers)) {
+		e := compiled[id]
+		if e == nil {
+			rows = append(rows, Row{Sev: SevWarn, Label: "  enricher " + id,
+				Detail: fmt.Sprintf("declared but not in this build: enrich: no enricher %q in this build", id)})
+			continue
+		}
+		if !src.Enrichers[id] {
+			rows = append(rows, Row{Sev: SevDim, Label: "  enricher " + id,
 				Detail: "disabled - no tool results, call ids or timestamps will be collected"})
-		case p.db == "":
-			rows = append(rows, Row{Sev: SevWarn, Label: fmt.Sprintf("  enricher %s@%d", p.id, p.e.Version()),
-				Detail: strings.Join(p.e.DBCandidates(), ", ") + " not found, raw files only"})
-		default:
-			rows = append(rows, Row{Sev: SevOK, Label: fmt.Sprintf("  enricher %s@%d", p.id, p.e.Version()),
-				Detail: fmt.Sprintf("reads %s (%s, keyspaces %v)", p.db, p.e.Table(), p.e.Keyspaces())})
+			continue
+		}
+		label := fmt.Sprintf("  enricher %s@%d", id, e.Version())
+		if db := firstExistingDB(e); db == "" {
+			rows = append(rows, Row{Sev: SevWarn, Label: label,
+				Detail: strings.Join(e.DBCandidates(), ", ") + " not found, raw files only"})
+		} else {
+			rows = append(rows, Row{Sev: SevOK, Label: label,
+				Detail: fmt.Sprintf("reads %s (%s, keyspaces %v)", db, e.Table(), e.Keyspaces())})
 		}
 	}
 	return rows

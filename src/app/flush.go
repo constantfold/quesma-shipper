@@ -31,20 +31,18 @@ func (r *Runtime) options(dryRun bool) engine.Options {
 	}
 }
 
-// Enrichers is the compiled enricher registry, shared with doctor so "in this build" cannot
-// drift from what the engine runs. Config can disable an entry; no layer can add one.
+// Enrichers is shared with doctor so "in this build" cannot drift from what the engine runs.
 func Enrichers() transforms.Registry {
 	return transforms.NewRegistry(cursorjoin.New())
 }
 
-// Flush opens the store, runs once, and closes. Every path goes through here, so all of them
-// share one flock and cannot interleave.
+// Flush runs once under the store's flock, which every path shares, so runs cannot interleave.
 func (r *Runtime) Flush(ctx context.Context, dryRun bool) (formats.Report, error) {
 	return r.flushWith(ctx, dryRun, false)
 }
 
 // Drain flushes everything pending on an ephemeral host, bounded by the deadline rather than by
-// max_files_per_run: the per-run bound is the wrong limit, and the deadline bounds a stuck hook.
+// max_files_per_run.
 func (r *Runtime) Drain(ctx context.Context) (formats.Report, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.eff.DrainDeadline)
 	defer cancel()
@@ -70,7 +68,6 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 		r.OnLocked()
 	}
 
-	// Raised at the one moment it matters; a preview never reaches here with it set.
 	if !dryRun && r.uploadErr != nil {
 		return formats.Report{}, r.uploadErr
 	}
@@ -80,20 +77,16 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 	o.Heartbeat = r.WriteHeartbeat
 	rep, err := engine.Run(ctx, store, o)
 
-	// Stamped even when the run shipped nothing: the marker answers "is the agent running at all",
-	// which the fingerprint document cannot.
+	// Stamped even when nothing shipped: the marker answers "is the agent running at all".
 	if !dryRun {
 		if markErr := packaging.RecordRun(r.eff.StateDir, time.Now()); markErr != nil && err == nil {
-			// A missing marker makes `status` report NEVER on a healthy install.
 			fmt.Fprintf(os.Stderr, "warning: could not stamp the last-run marker: %v\n", markErr)
 		}
 	}
 	return rep, err
 }
 
-// planFor is the one place configuration becomes something the loop can read: the core gets
-// values, never the resolver, so adding a config key does not touch the engine. The repo
-// attributor comes from the catalog alone: tracking is answered by marker files, not config.
+// planFor hands the engine values, never the resolver, so a new config key does not touch it.
 func planFor(eff *config.Effective) engine.Plan {
 	interval, _ := config.TickInterval(eff.Schedule)
 	return engine.Plan{

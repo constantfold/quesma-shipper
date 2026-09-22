@@ -35,7 +35,6 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 		return nil
 	}
 	if err == nil && rep.Shipped == 0 && rep.Failed > 0 {
-		// Distinguish upload refusals from an unreachable control plane.
 		err = fmt.Errorf("the run shipped nothing: all %d attempted uploads failed: %s",
 			rep.Failed, firstFailureReason(rep))
 	}
@@ -50,7 +49,6 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 		}
 
 		if err == nil {
-			// The next mid-flush heartbeat reads these facts from disk, including after a clean run.
 			rec.ConsecutiveFailures = 0
 		} else {
 			ev := newEvent(r.eff.StateDir, r.runID, kind, err.Error())
@@ -62,25 +60,21 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 	})
 
 	if err == nil {
-		// Kept for the stall heartbeat, which fires mid-tick when no fresh report exists yet.
 		r.lastRep = rep
 	}
-
-	// Report local failures immediately; retrying failed uploads or a terminating drain would add another timeout.
+	// Report local failures now; failed uploads or a terminating drain would only add another timeout.
 	if err != nil && kind != formats.FailureShutdown && rep.Failed == 0 {
 		r.shipFailureHeartbeat(context.Background(), rep, "failure record", os.Stderr)
 	}
 	return err
 }
 
-const failureHeartbeatTimeout = 30 * time.Second
-
 // Failure heartbeats leave the local mirror describing the last real flush; parent cancellation suppresses warnings.
 func (r *Runtime) shipFailureHeartbeat(parent context.Context, rep formats.Report, what string, errOut io.Writer) {
 	if r.upload == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(parent, failureHeartbeatTimeout)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if err := r.writeHeartbeat(ctx, rep, false); err != nil && parent.Err() == nil {
 		fmt.Fprintf(errOut, "warning: could not ship the %s: %v\n", what, err)
@@ -119,14 +113,13 @@ func (r *Runtime) WatchStalledTick(ctx context.Context, n int, every time.Durati
 // runFacts records resource use and limits on every outcome, providing the next run's baseline.
 func (r *Runtime) runFacts(rep formats.Report, mem platform.Delta) *formats.RunFacts {
 	return &formats.RunFacts{
-		GOMAXPROCS:       runtime.GOMAXPROCS(0),
-		MaxFilesPerRun:   r.eff.MaxFilesPerRun,
-		MaxInFlightBytes: platform.MaxInFlightBytes(),
-		SoftLimitBytes:   platform.SoftLimit(),
-		HeapInuseBytes:   mem.After.HeapInuse,
-		SysBytes:         mem.After.Sys,
-		GCCycles:         mem.After.NumGC - mem.Before.NumGC,
-
+		GOMAXPROCS:        runtime.GOMAXPROCS(0),
+		MaxFilesPerRun:    r.eff.MaxFilesPerRun,
+		MaxInFlightBytes:  platform.MaxInFlightBytes(),
+		SoftLimitBytes:    platform.SoftLimit(),
+		HeapInuseBytes:    mem.After.HeapInuse,
+		SysBytes:          mem.After.Sys,
+		GCCycles:          mem.After.NumGC - mem.Before.NumGC,
 		SlowestScrubNanos: rep.SlowestScrubNanos,
 		SlowestScrubBytes: rep.SlowestScrubBytes,
 	}

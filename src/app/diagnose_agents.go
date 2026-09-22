@@ -38,12 +38,9 @@ func agentRows(probes []sourceProbe, names map[string]string, up lastUpload, now
 
 func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Time, verbose bool) (rows []Row, collecting bool, files int) {
 	var parts []string
-	var issues []Row
-	var disabled []Row
-	var deferred []Row
-	sniffed := ""
-	absent := 0
+	var issues, disabled, deferred []Row
 	var noMatch []config.ResolvedSource
+	sniffed, absent := "", 0
 
 	// Every per-part warning is the same row shape; short is what the rollup line says went wrong.
 	warn := func(part, short, detail, fix string) Row {

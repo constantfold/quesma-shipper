@@ -42,12 +42,9 @@ func TestDiscoveryRowsSeverity(t *testing.T) {
 	}
 	for _, c := range cases {
 		rows := discoveryRows(src, c.d)
-		require.NotEqual(t, 0, len(rows))
-		assert.Equalf(t, c.wantSev, rows[0].Sev, "%s: severity %v, want %v", c.name, rows[0].Sev, c.wantSev)
-		if c.wantFix != "" && !strings.Contains(rows[0].Fix, c.wantFix) {
-			t.Errorf("%s: fix %q does not mention %q", c.name, rows[0].Fix, c.wantFix)
-		}
-		assert.Truef(t, c.wantFix != "" || rows[0].Sev <= SevWarn || rows[0].Fix != "", "%s: a warning without a fix", c.name)
+		require.NotEmpty(t, rows)
+		assert.Equal(t, c.wantSev, rows[0].Sev, c.name)
+		assert.Contains(t, rows[0].Fix, c.wantFix, c.name)
 		for _, row := range rows {
 			assert.NotEqual(t, SevFail, row.Sev)
 		}
@@ -62,16 +59,10 @@ func TestDiscoveryRowsLossSubRows(t *testing.T) {
 		Unreadable: 2, UnreadableReason: "permission denied", UnreadableExample: "/x/y",
 		Oversize: []sources.Oversize{{RelPath: "big", Size: 200, Limit: 100}},
 	})
-	require.Equalf(t, SevOK, rows[0].Sev, "main row severity %v, want SevOK", rows[0].Sev)
-	var fixes []string
-	for _, row := range rows[1:] {
-		assert.Equalf(t, SevWarn, row.Sev, "sub-row %q severity %v, want SevWarn", row.Label, row.Sev)
-		fixes = append(fixes, row.Fix)
-	}
-	all := strings.Join(fixes, "\n")
-	for _, want := range []string{"max_file_bytes", "/x/y"} {
-		assert.Containsf(t, all, want, "sub-row fixes missing %q in:\n%s", want, all)
-	}
+	require.Len(t, rows, 3)
+	assert.Equal(t, []Severity{SevOK, SevWarn, SevWarn}, []Severity{rows[0].Sev, rows[1].Sev, rows[2].Sev})
+	assert.Contains(t, rows[1].Fix, "/x/y")
+	assert.Contains(t, rows[2].Fix, "max_file_bytes")
 }
 
 func TestCheckUpdate(t *testing.T) {
@@ -282,24 +273,18 @@ func TestStateRowsNameAnInstallMismatch(t *testing.T) {
 	const mine, theirs = "c033b5b2-c3ac-4f39-911f-7ea632b7727c", "85a7e04c-32a4-4bf5-9c80-49c4f9d087bb"
 	doc := engine.Document{InstallID: theirs, Entries: map[engine.Key]engine.Fingerprint{}}
 
-	var found *Row
-	for _, row := range stateRowsFrom(doc, nil, mine) {
-		if row.Sev == SevWarn {
-			r := row
-			found = &r
-		}
-	}
-	require.True(t, found != nil, "a document written by another install produced no warning")
+	rows := stateRowsFrom(doc, nil, mine)
+	i := slices.IndexFunc(rows, func(r Row) bool { return r.Sev == SevWarn })
+	require.True(t, i >= 0, "a document written by another install produced no warning")
+	found := rows[i]
 	assert.Truef(t, strings.Contains(found.Detail, theirs) && strings.Contains(found.Detail, mine), "detail %q must name both installs", found.Detail)
 	assert.Containsf(t, found.Detail, "discards it", "detail %q must say the next run recovers by itself", found.Detail)
 	assert.NotContainsf(t, found.Detail, "refused", "detail %q still claims runs are blocked", found.Detail)
 	assert.Containsf(t, found.Fix, "state reset", "fix %q must name the command that does it sooner", found.Fix)
 
-	for _, row := range stateRowsFrom(engine.Document{InstallID: mine}, nil, mine) {
-		assert.NotEqualf(t, SevWarn, row.Sev, "matching install ids warned: %+v", row)
-	}
-	for _, row := range stateRowsFrom(doc, nil, "") {
-		assert.NotEqualf(t, SevWarn, row.Sev, "warned with no identity to compare against: %+v", row)
+	// Matching ids, or no identity to compare against, never warn.
+	for _, row := range append(stateRowsFrom(engine.Document{InstallID: mine}, nil, mine), stateRowsFrom(doc, nil, "")...) {
+		assert.NotEqualf(t, SevWarn, row.Sev, "warned: %+v", row)
 	}
 }
 

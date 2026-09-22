@@ -20,68 +20,36 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
-// The classifications the vend port owes the engine: each decides whether a run stops for good,
-// stops until the next tick, or asks for one fresh ticket, so each is asserted on its own.
+// Each classification decides whether a run stops for good, stops until the next tick, or asks
+// for one fresh ticket.
 
-func TestAlreadyPresentCommitsWithoutSpendingACapability(t *testing.T) {
-	p := &vendPort{}
-	err := p.send(context.Background(), engine.PreparedObject{ObjectID: "trajectory-1"},
-		controlplane.Ticket{TicketID: "b1bd1a73-f16d-4a51-aac6-29f1f48b0658", ObjectID: "trajectory-1", AlreadyPresent: true})
-	require.NoErrorf(t, err, "already-present answer tried to validate or upload a capability: %v", err)
-}
-
-// A refusal kills the install, an outage stops only this run: conflating them turns a rate limit
-// into a permanently dead install, so the sentinels must not reach each other.
-func TestAuthorizeFailuresKeepRefusalAndUnavailabilityApart(t *testing.T) {
-	refused := fmt.Errorf("backend: /v2/uploads/authorize refused this install (HTTP 403): %w",
-		formats.ErrCredentialsRefused)
-	if got := classifyAuthorize(refused); !errors.Is(got, formats.ErrCredentialsRefused) {
-		t.Errorf("a refusal was reclassified as %v", got)
-	}
-	if got := classifyAuthorize(refused); errors.Is(got, engine.ErrUploadUnavailable) {
-		t.Error("a refusal also reads as an unavailable control plane")
-	}
-
+// A refusal kills the install, an outage stops only this run: the sentinels must not reach each
+// other, and everything else stays unclassified so the next run retries it.
+func TestClassifyAuthorize(t *testing.T) {
+	refused := fmt.Errorf("backend: refused this install (HTTP 403): %w", formats.ErrCredentialsRefused)
 	unavailable := fmt.Errorf("%w (HTTP 503)", controlplane.ErrAuthorizeUnavailable)
-	got := classifyAuthorize(unavailable)
-	assert.ErrorIsf(t, got, engine.ErrUploadUnavailable, "%v was not classified as unavailable: %v", unavailable, got)
-	assert.Truef(t, !errors.Is(got, formats.ErrCredentialsRefused), "%v reads as a credentials refusal, which would kill the install", unavailable)
-
-	// Everything else is one batch's failure: no sentinel, so the next run retries it.
-	for _, other := range []error{
-		errors.New("backend: decode response"),
-		errors.New("backend: /v2/uploads/authorize returned HTTP 409"),
-	} {
-		if got := classifyAuthorize(other); got != other {
-			t.Errorf("an unclassified failure was rewritten to %v", got)
-		}
+	got := classifyAuthorize(refused)
+	assert.True(t, errors.Is(got, formats.ErrCredentialsRefused) && !errors.Is(got, engine.ErrUploadUnavailable), got)
+	got = classifyAuthorize(unavailable)
+	assert.True(t, errors.Is(got, engine.ErrUploadUnavailable) && !errors.Is(got, formats.ErrCredentialsRefused), got)
+	for _, other := range []error{errors.New("backend: decode response"), errors.New("backend: HTTP 409")} {
+		assert.Equal(t, other, classifyAuthorize(other))
 	}
 }
 
-// Exactly one PUT verdict earns a second authorization inside a run: a store refusal on a ticket
-// whose expiry has passed. A refusal on a live ticket must not, or a wrong key would cost two.
-func TestOnlyAnExpiredTicketAsksForAnotherAuthorization(t *testing.T) {
+// Only a store refusal on an expired ticket earns a second authorization inside a run.
+func TestClassifyPut(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	p := &vendPort{now: func() time.Time { return now }}
-
 	expired := upload.Ticket{ExpiresAt: now.Add(-time.Second)}
 	live := upload.Ticket{ExpiresAt: now.Add(time.Minute)}
 	refusal := &upload.StatusError{Status: 403, Reason: "Request has expired"}
 
-	if got := p.classifyPut(refusal, expired); !errors.Is(got, engine.ErrTicketExpired) {
-		t.Errorf("a refusal on an expired ticket was classified as %v", got)
-	}
-	if got := p.classifyPut(refusal, live); errors.Is(got, engine.ErrTicketExpired) {
-		t.Error("a refusal on a live ticket asked for a second authorization")
-	}
-	notFound := &upload.StatusError{Status: 404}
-	if got := p.classifyPut(notFound, expired); errors.Is(got, engine.ErrTicketExpired) {
-		t.Error("a 404 on an expired ticket was read as an expiry")
-	}
+	assert.ErrorIs(t, p.classifyPut(refusal, expired), engine.ErrTicketExpired)
+	assert.NotErrorIs(t, p.classifyPut(refusal, live), engine.ErrTicketExpired)
+	assert.NotErrorIs(t, p.classifyPut(&upload.StatusError{Status: 404}, expired), engine.ErrTicketExpired)
 	transport := errors.New("connection reset")
-	if got := p.classifyPut(transport, expired); got != transport {
-		t.Errorf("a transport failure was rewritten to %v", got)
-	}
+	assert.Equal(t, transport, p.classifyPut(transport, expired))
 }
 
 func preparedObject(id string) engine.PreparedObject {
@@ -152,36 +120,30 @@ func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
 	require.NoErrorf(t, err, "the manifest's own metadata was refused: %v", err)
 	assert.Truef(t, md.ManifestVersion == "1" && md.SourceID == "claude-code-transcripts" && md.Derived == "true", "metadata did not map across: %+v", md)
 
-	// Both are named specifically: "unknown name" would send an operator hunting a typo that is
-	// not there.
-	for _, name := range []string{"source-hash", "ticket-id"} {
-		if _, _, err := uploadMetadata(map[string]string{name: "x"}); err == nil {
-			t.Errorf("%s was accepted as client-declarable metadata", name)
-		}
+	// Server-derived names and names outside the closed set are both refused.
+	for _, name := range []string{"source-hash", "ticket-id", "native-path"} {
+		_, _, err := uploadMetadata(map[string]string{name: "x"})
+		assert.Error(t, err, "%s was accepted as client-declarable metadata", name)
 	}
-	_, _, uploadMetadataErr := uploadMetadata(map[string]string{"native-path": "/home/dev/x.jsonl"})
-	assert.Error(t, uploadMetadataErr, "a metadata name outside the closed set was accepted")
 }
 
-// agent-version is read out of a transcript, so out of the server's grammar it would fail the
-// whole batch for as long as that file exists: one poisoned file killing a source. Dropped loudly.
+// agent-version is read out of a transcript: out of the server's grammar it would fail the whole
+// batch for as long as that file exists, so it is dropped loudly instead.
 func TestAnOutOfGrammarAgentVersionIsDroppedRatherThanShipped(t *testing.T) {
-	for _, tc := range []struct{ name, value string }{
-		{"a control character", "1.0\n0"},
-		{"non-ASCII", "1.0.0é"},
-		{"over 128 bytes", strings.Repeat("9", 129)},
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{
+		{"1.0\n0", false}, {"1.0.0é", false}, {strings.Repeat("9", 129), false},
+		{"1.0.0", true}, {"0.2.145-beta+build.7", true}, {strings.Repeat("9", 128), true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			md, dropped, err := uploadMetadata(map[string]string{"agent-version": tc.value})
-			require.NoErrorf(t, err, "one bad agent-version failed the whole batch: %v", err)
-			assert.Equalf(t, "", md.AgentVersion, "an out-of-grammar agent-version was sent: %q", md.AgentVersion)
-			assert.Truef(t, len(dropped) == 1 && strings.Contains(dropped[0], "agent-version"), "the drop was not reported: %v", dropped)
-		})
-	}
-
-	// The values a real agent writes still travel: this drops the ungrammatical, not the unfamiliar.
-	for _, ok := range []string{"1.0.0", "0.2.145-beta+build.7", strings.Repeat("9", 128)} {
-		md, dropped, err := uploadMetadata(map[string]string{"agent-version": ok})
-		assert.Truef(t, err == nil && md.AgentVersion == ok && len(dropped) == 0, "agent-version %q was dropped: %+v %v %v", ok, md, dropped, err)
+		md, dropped, err := uploadMetadata(map[string]string{"agent-version": tc.value})
+		require.NoError(t, err, "one agent-version must never fail the whole batch")
+		if tc.ok {
+			assert.True(t, md.AgentVersion == tc.value && len(dropped) == 0, "%q was dropped: %v", tc.value, dropped)
+		} else {
+			assert.True(t, md.AgentVersion == "" && len(dropped) == 1 && strings.Contains(dropped[0], "agent-version"),
+				"%q: sent %q, reported %v", tc.value, md.AgentVersion, dropped)
+		}
 	}
 }

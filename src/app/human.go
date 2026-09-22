@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 )
 
@@ -64,19 +64,12 @@ func Plural(n int, noun string) string {
 }
 
 func HumanCount(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if n < 0 || len(s) <= 3 {
+	s := strconv.Itoa(n)
+	if n < 0 {
 		return s
 	}
-	var b strings.Builder
-	lead := len(s) % 3
-	if lead == 0 {
-		lead = 3
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
 	}
-	b.WriteString(s[:lead])
-	for i := lead; i < len(s); i += 3 {
-		b.WriteString(",")
-		b.WriteString(s[i : i+3])
-	}
-	return b.String()
+	return s
 }

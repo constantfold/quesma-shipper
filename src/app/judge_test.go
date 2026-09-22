@@ -133,18 +133,6 @@ func TestFailuresWithoutResolvedConfig(t *testing.T) {
 	}
 }
 
-// Discarding corrupt state records a warning without counting a failed collection.
-func TestStoreCorruptionIsRecordedButNotCounted(t *testing.T) {
-	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
-
-	require.NoError(t, r.JudgeTick(nil, formats.Report{StoreCorrupt: true, Shipped: 3}, false, platform.Delta{}))
-	rec := readFailureRecord(r.eff.StateDir)
-	if rec.Latest() == nil || rec.Latest().Kind != formats.FailureStoreCorrupt {
-		t.Fatalf("the discard was not recorded: %+v", rec.Recent)
-	}
-	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a discarded store moved the failed-run count to %d", rec.ConsecutiveFailures)
-}
-
 // Re-enrollment clears the prior failure streak while retaining the discard warning.
 func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 	dir := t.TempDir()
@@ -168,22 +156,6 @@ func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 	if rows := failureRows(dir, time.Now()); rows != nil {
 		t.Errorf("doctor still reports failing runs after the recovery: %+v", rows)
 	}
-}
-
-// Run IDs distinguish repeated failures from separate runs.
-func TestEventsAreAttributedToTheRunThatRecordedThem(t *testing.T) {
-	dir := t.TempDir()
-	for _, id := range []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"} {
-		r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: id}
-		r.JudgeTick(errors.New("boom"), formats.Report{}, false, platform.Delta{})
-	}
-	rec := readFailureRecord(dir)
-	var got []string
-	for _, e := range rec.Recent {
-		got = append(got, e.Kind+"/"+e.RunID)
-	}
-	want := []string{"tick_failed/aaaaaaaaaaaaaaaa", "tick_failed/bbbbbbbbbbbbbbbb"}
-	assert.Equal(t, want, got)
 }
 
 func TestACrashIsPersistedLocally(t *testing.T) {

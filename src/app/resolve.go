@@ -41,12 +41,12 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		return nil, paths, controlplane.Remote{}, err
 	}
 
-	// Known BEFORE the remote layer is fetched, because the enrollment record and the config cache
-	// live in it; only local layers may set state_dir, so the remote layer cannot move it after.
+	// Known before the remote fetch, since the enrollment and config cache live there; only local
+	// layers may set state_dir.
 	paths.StateDir = stateDirFrom(layers, paths.StateDir)
 
-	// A MISSING record means standalone, a complete configuration. Anything else is refused, not
-	// swallowed: swallowing silently downgrades an enrolled install to "no backend".
+	// A missing record means standalone; an unusable one is refused, or an enrolled install would
+	// silently downgrade to "no backend".
 	enrollment, err := controlplane.LoadEnrollment(paths.StateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, paths, controlplane.Remote{}, fmt.Errorf(
@@ -62,11 +62,7 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 	})
 
 	if remote.Doc != nil {
-		// Fetched or read back from the cache; either way it came from the enrolled control plane.
-		layers = append(layers, config.LayeredDocument{
-			Layer: config.LayerRemote,
-			Doc:   remote.Doc,
-		})
+		layers = append(layers, config.LayeredDocument{Layer: config.LayerRemote, Doc: remote.Doc})
 	}
 
 	eff, err := config.Resolve(config.Input{
@@ -79,14 +75,12 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 	if err != nil {
 		return nil, paths, remote, err
 	}
-	// paths.StateDir now means "the state directory in force": the identity unit and the
-	// fingerprint document persist together or not at all.
+	// The identity unit and the fingerprint document persist together in the directory in force.
 	paths.StateDir = eff.StateDir
 	return eff, paths, remote, nil
 }
 
-// stateDirFrom returns the state directory the layers set, or the default. Layers arrive in
-// precedence order, lowest first, so the last one that mentions it wins, as Resolve does.
+// stateDirFrom lets the last layer that sets state_dir win, as Resolve does.
 func stateDirFrom(layers []config.LayeredDocument, def string) string {
 	out := def
 	for _, ld := range layers {

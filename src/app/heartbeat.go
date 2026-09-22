@@ -12,9 +12,8 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// WriteHeartbeat publishes discovery health as an install-owned state object: under state/ but
-// inside the install prefix, so one erasure sweep takes it too, and carrying no transcript bytes.
-// `doctor` probes the write path with it, as it is the only state object the protocol authorizes.
+// WriteHeartbeat publishes discovery health as a state object inside the install prefix, so one
+// erasure sweep takes it too. It carries no transcript bytes.
 func (r *Runtime) WriteHeartbeat(ctx context.Context, rep formats.Report) error {
 	return r.writeHeartbeat(ctx, rep, true)
 }
@@ -30,9 +29,7 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 		ConfigVersion:  r.eff.ConfigVersion,
 		ConfigExpired:  r.eff.ConfigExpired,
 		RunID:          r.runID,
-		// The crash comes from this process reading the journal; the failures come from the
-		// record, which may include this very run's judgement.
-		FailureRecord: r.failureRecord(),
+		FailureRecord:  r.failureRecord(),
 	}).WithReport(rep, now)
 	body, err := hb.Encode()
 	if err != nil {
@@ -40,14 +37,11 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 	}
 	hash := transforms.Hash(body)
 
-	// Mirrored in the clear (counts and versions, never payload bytes) so `quesma-shipper doctor` needs
-	// no network call. Best-effort: a reporting nicety must never fail a flush.
+	// Mirrored in the clear (counts and versions only) so doctor needs no network; best-effort.
 	if mirror {
 		_ = platform.WriteAtomic(filepath.Join(r.eff.StateDir, engine.Name), body, 0o600)
 	}
 
-	// The resolved organization, not a literal: the heartbeat has to land in the same subtree as
-	// its mirror objects, or one erasure sweep would miss it.
 	key, err := formats.StateKey(r.eff.OrganizationID, r.unit.InstallID.String(), engine.Name+".age")
 	if err != nil {
 		return err
@@ -63,22 +57,19 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 		SourceHash:      hash,
 		SealedAt:        time.Now().UTC().Format(time.RFC3339),
 		ShapeSniff:      string(formats.SniffOK),
-		// The same config fields every mirror manifest carries, so no reader special-cases this one.
-		ConfigVersion: r.eff.ConfigVersion,
-		ConfigExpired: r.eff.ConfigExpired,
-		Client:        clientBlock(),
-		RunID:         r.runID,
+		ConfigVersion:   r.eff.ConfigVersion,
+		ConfigExpired:   r.eff.ConfigExpired,
+		Client:          clientBlock(),
+		RunID:           r.runID,
 	}, body, r.recipients)
 	if err != nil {
 		return err
 	}
 
-	// The assembly failure first: a nil port and a recorded uploadErr are the same condition.
 	if r.uploadErr != nil {
 		return r.uploadErr
 	}
-	// The heartbeat goes down the trajectory path exactly: one authorization, the same validation,
-	// the same PUT. No second way to reach the store, which a revocation would have to learn about.
+	// The same authorization, validation and PUT as trajectories: no second way to reach the store.
 	outcomes := r.upload.AuthorizeAndUpload(ctx, []engine.PreparedObject{{
 		ObjectID:   "heartbeat",
 		Key:        key,
@@ -96,8 +87,7 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 	return outcomes[0]
 }
 
-// clientBlock is the build identity stamped into every object. One place, because it is a wire
-// contract the ETL groups on: a second construction site is how two objects disagree.
+// clientBlock is the build identity the ETL groups on, built in one place so objects cannot disagree.
 func clientBlock() transforms.Client {
 	b := platform.Current()
 	return transforms.Client{

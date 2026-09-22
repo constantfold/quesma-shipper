@@ -18,16 +18,13 @@ type lastUpload struct {
 }
 
 func loadLastUpload(stateDir string) lastUpload {
-	raw, err := os.ReadFile(filepath.Join(stateDir, engine.Name))
-	if err != nil {
-		return lastUpload{}
-	}
 	var hb engine.Heartbeat
-	if err := json.Unmarshal(raw, &hb); err != nil {
-		return lastUpload{}
+	raw, err := os.ReadFile(filepath.Join(stateDir, engine.Name))
+	if err == nil {
+		err = json.Unmarshal(raw, &hb)
 	}
-	at, err := time.Parse(time.RFC3339, hb.At)
-	if err != nil {
+	at, parseErr := time.Parse(time.RFC3339, hb.At)
+	if err != nil || parseErr != nil {
 		return lastUpload{}
 	}
 	up := lastUpload{at: at, bySource: map[string]engine.SourceHealth{}}
@@ -69,25 +66,18 @@ func scheduleRows(stateDir string, now time.Time) []Row {
 
 	rows = append(rows, failureRows(stateDir, now)...)
 
-	st := packaging.ServiceState(stateDir)
-	switch {
+	svc := Row{Sev: SevWarn, Label: "background service", Fix: "re-run the Quesma Shipper installer"}
+	switch st := packaging.ServiceState(stateDir); {
 	case st.Loaded && st.LastRun.IsZero():
-		rows = append(rows, Row{Sev: SevWarn, Label: "background service", Brief: "background service never ran",
-			Detail: "loaded but it has never completed a run",
-			Fix:    fixSeeRunLog})
+		svc.Brief, svc.Detail, svc.Fix = "background service never ran", "loaded but it has never completed a run", fixSeeRunLog
 	case st.Loaded:
-		rows = append(rows, Row{Sev: SevOK, Label: "background service",
-			Detail: "running"})
+		svc = Row{Sev: SevOK, Label: "background service", Detail: "running"}
 	case st.Installed:
-		rows = append(rows, Row{Sev: SevWarn, Label: "background service", Brief: "background service not loaded",
-			Detail: "installed but not loaded",
-			Fix:    "re-run the Quesma Shipper installer"})
+		svc.Brief, svc.Detail = "background service not loaded", "installed but not loaded"
 	default:
-		rows = append(rows, Row{Sev: SevWarn, Label: "background service", Brief: "no background service",
-			Detail: "not installed, nothing is sent on its own",
-			Fix:    "re-run the Quesma Shipper installer"})
+		svc.Brief, svc.Detail = "no background service", "not installed, nothing is sent on its own"
 	}
-	return rows
+	return append(rows, svc)
 }
 
 // A loaded service whose every tick fails looks identical to a healthy one from the outside.

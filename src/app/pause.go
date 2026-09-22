@@ -49,8 +49,7 @@ func ParsePauseUntil(args []string, now time.Time) (time.Time, error) {
 	return time.Time{}, errors.New(PauseUsage)
 }
 
-// pauseStateDir does not require valid config because pause and resume must remain usable
-// when configuration is broken.
+// pauseStateDir falls back to the default so pause and resume work with a broken configuration.
 func pauseStateDir() (dir, warning string, err error) {
 	_, paths, resolveErr := ResolveEffective()
 	if resolveErr == nil {
@@ -69,9 +68,7 @@ func pauseStateDir() (dir, warning string, err error) {
 		resolveErr, fallback), nil
 }
 
-// StateDirWithoutConfig resolves the state directory the way pause does. The diagnostics record
-// needs it for the same reason: a config too broken to load must not also hide the record of what
-// broke.
+// StateDirWithoutConfig resolves like pause, so a broken config cannot hide the record of what broke.
 func StateDirWithoutConfig() (string, error) {
 	dir, _, err := pauseStateDir()
 	return dir, err

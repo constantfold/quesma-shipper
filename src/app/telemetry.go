@@ -16,23 +16,19 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
 
-// telemetrySubmitter is the one call this package needs from a control-plane client, as an
-// interface so a test can watch what a tick would send.
+// telemetrySubmitter is an interface so a test can watch what a tick would send.
 type telemetrySubmitter interface {
 	SubmitTelemetry(ctx context.Context, path, batchID string, issuedAt time.Time, payload json.RawMessage) error
 }
 
-// InstallHealthEvent is the one event this build produces, and its name is the contract with the
-// collector: an unrecognised event is counted rather than rendered, so a rename goes silent.
+// InstallHealthEvent's name is the contract with the collector: an unrecognised event is counted
+// rather than rendered, so a rename goes silent.
 const InstallHealthEvent = "install_health"
 
-// maxTelemetryMessage bounds one fault's text on the wire. The collector cuts much shorter again
-// when it renders, so this only keeps a pathological message from crowding the envelope.
+// maxTelemetryMessage only keeps a pathological message from crowding the envelope.
 const maxTelemetryMessage = 400
 
-// telemetryEvent is what the collector reads. Field names match its own, and unknown fields are
-// ignored at both ends, so this may grow without a release on the other side. Hostname is here
-// because the body is forwarded verbatim: without it every alert names a machine by a UUID.
+// telemetryEvent matches the collector's field names; unknown fields are ignored at both ends.
 type telemetryEvent struct {
 	Event string `json:"event"`
 
@@ -44,17 +40,14 @@ type telemetryEvent struct {
 	LastCrash     *telemetryCrash  `json:"last_crash,omitempty"`
 }
 
-// telemetryCrash is how the previous run died. Projected rather than embedding the record's own
-// type, so a field added there for the sealed heartbeat does not start crossing in the clear.
-// Phase is a closed vocabulary, "tick N".
+// telemetryCrash is projected rather than embedded, so a field added to the sealed heartbeat's type
+// does not start crossing in the clear.
 type telemetryCrash struct {
 	RunID       string `json:"run_id"`
 	Phase       string `json:"phase"`
 	Consecutive int    `json:"consecutive,omitempty"`
 }
 
-// telemetryFault is one failure, as the collector groups them. Kind comes from the closed set in
-// formats, so the far end groups on it without parsing prose.
 type telemetryFault struct {
 	At      string `json:"at"`
 	Kind    string `json:"kind"`
@@ -62,14 +55,13 @@ type telemetryFault struct {
 	Message string `json:"message,omitempty"`
 }
 
-// SubmitTelemetry sends health after the tick is judged, outside the upload path.
-// It fails open; the next tick sends a new batch rather than retrying this one.
+// SubmitTelemetry sends health after the tick is judged. It fails open; the next tick sends a new
+// batch rather than retrying this one.
 func (r *Runtime) SubmitTelemetry(ctx context.Context) {
 	if r.eff.TelemetryEndpoint == "" || r.telemetry == nil || r.telemetryOff {
 		return
 	}
 
-	// One instant for both stamps: two clock reads would make them disagree for no reason.
 	now := time.Now().UTC()
 	batch, payload, err := r.installHealth(now)
 	if err == nil {
@@ -78,17 +70,14 @@ func (r *Runtime) SubmitTelemetry(ctx context.Context) {
 	switch {
 	case err == nil:
 	case errors.Is(err, controlplane.ErrTelemetryDisabled):
-		// Turned off, or revoked: either way nothing changes until the next configuration load.
-		r.telemetryOff = true
+		r.telemetryOff = true // nothing changes until the next configuration load
 	default:
-		// Rejected or undeliverable are the same here: say so and carry on collecting.
 		fmt.Fprintf(os.Stderr, "warning: telemetry: %v\n", err)
 	}
 }
 
-// installHealth is the event, built from the record the heartbeat also reads. The id and the body
-// are returned together because an id minted at send time would identify the request rather than
-// the event, which is what makes it useful when a resend arrives.
+// installHealth returns the batch id with the body: an id minted at send time would identify the
+// request rather than the event.
 func (r *Runtime) installHealth(now time.Time) (batchID string, payload []byte, err error) {
 	record := r.failureRecord()
 	event := telemetryEvent{
@@ -114,16 +103,13 @@ func (r *Runtime) installHealth(now time.Time) (batchID string, payload []byte, 
 	return controlplane.NewBatchID(), payload, nil
 }
 
-// telemetryMessage is what a fault's text becomes on the way out. The username is already a
-// placeholder; what is left in an absolute path is the directory it sat in, which on a working
-// machine names a project or a client, and an alert has never needed that.
+// telemetryMessage shortens paths, which on a working machine name a project or a client.
 func telemetryMessage(message string) string {
 	message = shortenTelemetryPaths(message)
 	if len(message) <= maxTelemetryMessage {
 		return message
 	}
-	// Cut from the FRONT: a wrapped error's cause is at the end. The marker counts against the
-	// bound, and the cut is walked forward off any rune it landed inside.
+	// Cut from the front, since a wrapped error's cause is at the end, and off any split rune.
 	const marker = "…"
 	tail := message[len(message)-(maxTelemetryMessage-len(marker)):]
 	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
@@ -132,12 +118,10 @@ func telemetryMessage(message string) string {
 	return marker + tail
 }
 
-// absolutePath is a run of three or more slash-prefixed segments. Three leaves a short system path
-// and a fraction alone; a route long enough to reach it is shortened too, which costs nothing.
+// absolutePath is three or more slash-prefixed segments, leaving short system paths and fractions.
 var absolutePath = regexp.MustCompile(`(?:/[^/ \t\n"',;:)]+){3,}`)
 
-// shortenTelemetryPaths keeps the last two segments of any absolute path, so a message says which
-// file without saying where on the machine it lived.
+// shortenTelemetryPaths keeps the last two segments of any absolute path.
 func shortenTelemetryPaths(message string) string {
 	if !strings.Contains(message, "/") {
 		return message

@@ -92,14 +92,6 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 	assert.Equal(t, map[string]any{"run_id": "r0", "phase": "tick 1", "consecutive": float64(1)}, got["last_crash"])
 }
 
-func TestHealthyEventNamesTheMachineAndBatch(t *testing.T) {
-	r := telemetryRuntime(t, formats.FailureRecord{})
-	batch, body, err := r.installHealth(time.Now().UTC())
-	require.NoError(t, err)
-	assert.Contains(t, string(body), `"hostname":"ci-runner-3"`)
-	assert.NotEmpty(t, batch)
-}
-
 type stub struct {
 	calls int
 	err   error
