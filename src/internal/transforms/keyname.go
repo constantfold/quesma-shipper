@@ -9,14 +9,12 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// keyNameMatcher redacts a value because of the name attached to it, not its shape (`printenv`
-// output has no value shape). It scans exempt fields too; the key name survives.
+// keyNameMatcher redacts a value for the name attached to it (`printenv` output has no shape), exempt fields too.
 type keyNameMatcher struct {
 	re    *regexp.Regexp
 	names []configuredName
 
-	// Lower-cased literal cores ("_token" for *_TOKEN) for the prefilter, nil when one has no sound
-	// literal. Accepted: the (?i) regex also folds non-ASCII runes the byte automaton never fires on.
+	// Lower-cased literal cores ("_token" for *_TOKEN) for the prefilter, nil when one has no sound literal.
 	stems []string
 }
 
@@ -60,8 +58,7 @@ func newKeyNameMatcher(names []string) *keyNameMatcher {
 	if unfiltered || len(stems) == 0 {
 		stems = nil
 	}
-	// NAME=value, NAME: value, NAME = "value"; the value stops at whitespace, quotes and
-	// separators so one redaction cannot swallow a whole line.
+	// NAME=value, NAME: value, NAME = "value"; stopping at separators keeps one redaction off the whole line.
 	pattern := `(?i)\b(?:` + strings.Join(alts, "|") + `)\b\s*[:=]\s*"?([^\s"',;)]+)"?`
 	return &keyNameMatcher{re: regexp.MustCompile(pattern), names: configured, stems: stems}
 }
@@ -76,9 +73,7 @@ func (m *keyNameMatcher) MatchScannedIn(value string, _ *packs.ValueScan) []Span
 	return out
 }
 
-// MatchesKeyName reports whether a JSON key names a secret, in which case the whole value goes.
-// Field names a program chose (`apiKey`, `x-api-key`) match as words, since `*_API_KEY` compiles
-// to `_API_KEY`, which `API_KEY` lacks; configured names match as the environment spells them.
+// MatchesKeyName reports a key naming a secret: `apiKey` by its words, configured names as spelled.
 func (m *keyNameMatcher) MatchesKeyName(key string) bool {
 	if key == "" {
 		return false
@@ -87,47 +82,26 @@ func (m *keyNameMatcher) MatchesKeyName(key string) bool {
 		return true
 	}
 	upper := strings.ToUpper(key)
-	for _, n := range m.names {
-		if n.suffix && strings.HasSuffix(upper, n.upper) || !n.suffix && upper == n.upper {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m.names, func(n configuredName) bool {
+		return n.suffix && strings.HasSuffix(upper, n.upper) || !n.suffix && upper == n.upper
+	})
 }
 
 func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(s, func(r rune) bool { return r >= utf8.RuneSelf })
 }
 
 func isAlnumByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
-// secretWords mean "the value is a credential" as the LAST word of a key, not any word:
-// `secret_scanning_enabled` is a setting and `token_count` is a number.
+// secretWords name a credential as the LAST word (`secret_scanning_enabled` is a setting); "session" is an id.
 var secretWords = map[string]bool{
-	"password":    true,
-	"passwd":      true,
-	"pwd":         true,
-	"secret":      true,
-	"token":       true,
-	"apikey":      true,
-	"credential":  true,
-	"credentials": true,
-	"auth":        true,
-	// A logged request header is the most common way a credential reaches a transcript.
-	"authorization": true,
-	"cookie":        true,
-	// "session" is deliberately absent: alone it is an id, not a credential.
+	"password": true, "passwd": true, "pwd": true, "secret": true, "token": true, "apikey": true,
+	"credential": true, "credentials": true, "auth": true, "authorization": true, "cookie": true,
 }
 
-// keyQualifiers make a trailing "key" a credential: alone it is too common (object_key,
-// cache_key), so it counts only when the word before says which kind.
+// keyQualifiers make a trailing "key" a credential; alone it is too common (object_key, cache_key).
 var keyQualifiers = []string{"api", "secret", "private", "access", "signing", "encryption", "auth"}
 
 func matchesSecretKeyName(key string) bool {
@@ -138,14 +112,10 @@ func matchesSecretKeyName(key string) bool {
 	last := words[len(words)-1]
 
 	// The exact word only: input_tokens and max_tokens are counts (TestFieldNamesThatOnlyLookLikeCredentials).
-	if secretWords[last] {
-		return true
-	}
-	return last == "key" && len(words) >= 2 && slices.Contains(keyQualifiers, words[len(words)-2])
+	return secretWords[last] || last == "key" && len(words) >= 2 && slices.Contains(keyQualifiers, words[len(words)-2])
 }
 
-// splitKeyWords lowercases a field name into words split on separators and camelCase humps, a run
-// of capitals staying together: `AWSSecretKey` is aws, secret, key. Every predicate is ASCII-only.
+// splitKeyWords lowercases a key into words on separators and camel humps: `AWSSecretKey` is aws, secret, key.
 func splitKeyWords(key string) []string {
 	var buf [8]string // covers a real field name without growing
 	words := buf[:0]

@@ -1,10 +1,7 @@
 package packs
 
-import "fmt"
-
-// One classification walk for the three keywordless PII rules (card-pan, iban, pesel). Each byte
-// walk returns exactly the spans its regex returns, in the same order; the regex stays compiled as
-// the reference and pii_test.go replays it. Go's \b is ASCII-only, so a byte test decides it.
+// One classification walk for the keywordless PII rules (card-pan, iban, pesel), returning exactly
+// their regexes' spans in order; pii_test.go replays the regexes. Go's \b is ASCII-only, a byte test.
 
 // One bit per class, so a run's classes accumulate with an AND.
 const (
@@ -33,10 +30,7 @@ var piiClass = func() (t [256]uint8) {
 func isWordByte(c byte) bool { return piiClass[c]&piiWord != 0 }
 
 // The card-pan pattern's bounds: 12 to 18 repetitions, so 13 to 19 digits.
-const (
-	panMaxDigits = 19
-	panMinReps   = 12
-)
+const panMaxDigits, panMinReps = 19, 12
 
 type fusedKind uint8
 
@@ -51,17 +45,11 @@ const (
 type ValueScan struct {
 	value string
 	done  bool
-
-	pesel []Span
-	iban  []Span
-	pan   []Span
+	lists [fusedCardPAN + 1][]Span // candidates by fusedKind
 }
 
 // Reset points the scan at a new value; the walk waits until a rule asks.
-func (c *ValueScan) Reset(value string) {
-	c.value = value
-	c.done = false
-}
+func (c *ValueScan) Reset(value string) { c.value, c.done = value, false }
 
 // candidates walks the value on the first ask. The slice aliases the scan's storage until the next Reset.
 func (c *ValueScan) candidates(kind fusedKind) []Span {
@@ -69,24 +57,14 @@ func (c *ValueScan) candidates(kind fusedKind) []Span {
 		c.walk()
 		c.done = true
 	}
-	switch kind {
-	case fusedPESEL:
-		return c.pesel
-	case fusedIBAN:
-		return c.iban
-	case fusedCardPAN:
-		return c.pan
-	default:
-		panic(fmt.Sprintf("packs: fused kind %d has no candidate list", kind))
-	}
+	return c.lists[kind]
 }
 
-// walk produces all three candidate lists in one pass over maximal \w runs: PESEL an all-digit run
-// of eleven, IBAN an upper-alnum run of 15-34 shaped AANN, card-pan a digit-led run across separators.
+// walk fills all lists in one pass over \w runs: PESEL 11 digits, IBAN 15-34 shaped AANN, card-pan digit-led.
 func (c *ValueScan) walk() {
-	c.pesel = c.pesel[:0]
-	c.iban = c.iban[:0]
-	c.pan = c.pan[:0]
+	for k := range c.lists {
+		c.lists[k] = c.lists[k][:0]
+	}
 
 	value := c.value
 	// panCursor reproduces FindAll's non-overlap for card-pan: a match consumes its bytes.
@@ -110,28 +88,25 @@ func (c *ValueScan) walk() {
 		n := i - start
 
 		if acc&piiDigit != 0 && n == 11 {
-			c.pesel = append(c.pesel, Span{Start: start, End: i})
+			c.lists[fusedPESEL] = append(c.lists[fusedPESEL], Span{Start: start, End: i})
 		}
 		if acc&piiUpper != 0 && n >= 15 && n <= 34 &&
 			first&piiAlpha != 0 &&
 			piiClass[value[start+1]]&piiAlpha != 0 &&
 			piiClass[value[start+2]]&piiDigit != 0 &&
 			piiClass[value[start+3]]&piiDigit != 0 {
-			c.iban = append(c.iban, Span{Start: start, End: i})
+			c.lists[fusedIBAN] = append(c.lists[fusedIBAN], Span{Start: start, End: i})
 		}
 		if first&piiDigit != 0 && start >= panCursor {
 			if end, ok := scanCardPANFrom(value, start); ok {
-				c.pan = append(c.pan, Span{Start: start, End: end})
+				c.lists[fusedCardPAN] = append(c.lists[fusedCardPAN], Span{Start: start, End: end})
 				panCursor = end
 			}
 		}
 	}
 }
 
-// scanCardPANFrom returns the end of the match `\b(?:[0-9][ -]?){12,18}[0-9]\b` makes starting at
-// a digit with \b in front, and whether there is one. The digit chain is determined; the only
-// freedom is the repetition count, greedy from 18 down to 12, and the first count whose trailing
-// digit sits on a \b wins, since a separator satisfies \b and a chain can match its own prefix.
+// scanCardPANFrom ends `\b(?:[0-9][ -]?){12,18}[0-9]\b` from a \b digit: greedy, the first count ending on \b.
 func scanCardPANFrom(value string, start int) (int, bool) {
 	var chain [panMaxDigits]int
 	n := 0

@@ -29,8 +29,7 @@ const (
 	maxDecompressedBytes = 8 << 30
 )
 
-// Seal builds one mirror object and returns the manifest as sealed, with ShippedHash, PayloadSize
-// and (unless the caller set it) Encryption filled: object metadata comes from the returned copy.
+// Seal builds one object and returns the manifest as sealed (hashes, size, Encryption), for object metadata.
 func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manifest, error) {
 	if len(recipients) == 0 {
 		return nil, Manifest{}, errors.New("seal: no age recipients: encryption is not optional")
@@ -38,8 +37,7 @@ func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manif
 	if m.SealedAt == "" {
 		return nil, Manifest{}, errors.New("seal: sealed_at must be set by the caller")
 	}
-	m.ShippedHash = Hash(payload)
-	m.PayloadSize = int64(len(payload))
+	m.ShippedHash, m.PayloadSize = Hash(payload), int64(len(payload))
 	if m.Encryption == nil {
 		m.Encryption = &Encryption{Scheme: "age"}
 	}
@@ -61,23 +59,40 @@ func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manif
 	return obj, m, nil
 }
 
-// writeContainer streams all three layers into one pre-sized buffer, with no staging copy.
+// writeContainer streams age(zstd(tar)) into one pre-sized buffer; the USTAR headers carry no machine bytes.
 func writeContainer(manifestJSON, payload []byte, payloadMTime *time.Time, recipients []age.Recipient) ([]byte, error) {
 	out := bytes.NewBuffer(make([]byte, 0, ciphertextHint(len(manifestJSON), len(payload), len(recipients))))
 	ageWriter, err := age.Encrypt(out, recipients...)
 	if err != nil {
 		return nil, fmt.Errorf("seal: age encrypt: %w", err)
 	}
-	zstdWriter, err := zstd.NewWriter(ageWriter,
-		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(ZstdLevel)),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithZeroFrames(true),
-	)
+	zstdWriter, err := zstd.NewWriter(ageWriter, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(ZstdLevel)),
+		zstd.WithEncoderConcurrency(1), zstd.WithZeroFrames(true))
 	if err != nil {
 		return nil, fmt.Errorf("seal: zstd writer: %w", err)
 	}
-	if err := writeTar(zstdWriter, manifestJSON, payload, payloadMTime); err != nil {
-		return nil, err
+
+	tw := tar.NewWriter(zstdWriter)
+	mtime := time.Unix(0, 0).UTC()
+	if payloadMTime != nil {
+		mtime = payloadMTime.UTC().Truncate(time.Second)
+	}
+	entries := []struct {
+		name  string
+		body  []byte
+		mtime time.Time
+	}{{ManifestEntry, manifestJSON, time.Unix(0, 0).UTC()}, {PayloadEntry, payload, mtime}}
+	for _, e := range entries {
+		hdr := &tar.Header{Typeflag: tar.TypeReg, Name: e.name, Size: int64(len(e.body)), Mode: 0o600, ModTime: e.mtime, Format: tar.FormatUSTAR}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("seal: tar header %s: %w", e.name, err)
+		}
+		if _, err := tw.Write(e.body); err != nil {
+			return nil, fmt.Errorf("seal: tar write %s: %w", e.name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("seal: tar close: %w", err)
 	}
 	if err := zstdWriter.Close(); err != nil {
 		return nil, fmt.Errorf("seal: zstd close: %w", err)
@@ -89,63 +104,14 @@ func writeContainer(manifestJSON, payload []byte, payloadMTime *time.Time, recip
 }
 
 func ciphertextHint(manifestLen, payloadLen, recipients int) int {
-	const (
-		tarBlock  = 512
-		zstdBlock = 128 << 10
-		ageChunk  = 64 << 10
-	)
-	round := func(n, block int) int {
-		if rem := n % block; rem != 0 {
-			return n + block - rem
-		}
-		return n
-	}
+	const tarBlock, zstdBlock, ageChunk = 512, 128 << 10, 64 << 10
+	round := func(n, block int) int { return (n + block - 1) / block * block }
 	tarLen := 4*tarBlock + round(manifestLen, tarBlock) + round(payloadLen, tarBlock)
 	zstdLen := tarLen + 3*(tarLen/zstdBlock+1) + 32
 	return zstdLen + 256 + 256*recipients + 16*(zstdLen/ageChunk+1)
 }
 
-// writeTar writes the two entries, manifest first, with headers normalised so the tar layer adds
-// no machine-specific bytes. USTAR, since PAX headers would push the manifest deeper.
-func writeTar(w io.Writer, manifestJSON, payload []byte, payloadMTime *time.Time) error {
-	tw := tar.NewWriter(w)
-
-	mtime := time.Unix(0, 0).UTC()
-	if payloadMTime != nil {
-		mtime = payloadMTime.UTC().Truncate(time.Second)
-	}
-
-	entries := []struct {
-		name  string
-		body  []byte
-		mtime time.Time
-	}{
-		{ManifestEntry, manifestJSON, time.Unix(0, 0).UTC()},
-		{PayloadEntry, payload, mtime},
-	}
-	for _, e := range entries {
-		if err := tw.WriteHeader(&tar.Header{
-			Typeflag: tar.TypeReg,
-			Name:     e.name,
-			Size:     int64(len(e.body)),
-			Mode:     0o600,
-			ModTime:  e.mtime,
-			Format:   tar.FormatUSTAR,
-		}); err != nil {
-			return fmt.Errorf("seal: tar header %s: %w", e.name, err)
-		}
-		if _, err := tw.Write(e.body); err != nil {
-			return fmt.Errorf("seal: tar write %s: %w", e.name, err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("seal: tar close: %w", err)
-	}
-	return nil
-}
-
-// Open decrypts a whole object and returns its manifest and payload. A first entry other than the
-// manifest means the container was not built by this code, so its layout cannot be trusted.
+// Open decrypts a whole object into manifest and payload; a first entry other than the manifest is untrusted.
 func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 	if len(identities) == 0 {
 		return Manifest{}, nil, errors.New("seal: no age identity supplied")
@@ -166,18 +132,15 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 		return Manifest{}, nil, fmt.Errorf("read first tar entry: %w", err)
 	}
 	if hdr.Name != ManifestEntry {
-		return Manifest{}, nil, fmt.Errorf("first entry is %q, want %q: manifest-first is the container contract",
-			hdr.Name, ManifestEntry)
+		return Manifest{}, nil, fmt.Errorf("first entry is %q, want %q: manifest-first is the container contract", hdr.Name, ManifestEntry)
 	}
 	if hdr.Size > maxManifestBytes {
 		return Manifest{}, nil, fmt.Errorf("manifest claims %d bytes, over the %d limit", hdr.Size, maxManifestBytes)
 	}
+	// A short entry is io.ErrUnexpectedEOF from the tar reader.
 	raw, err := io.ReadAll(io.LimitReader(tr, hdr.Size))
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("read manifest entry: %w", err)
-	}
-	if int64(len(raw)) < hdr.Size {
-		return Manifest{}, nil, fmt.Errorf("manifest entry truncated: %d of %d bytes", len(raw), hdr.Size)
 	}
 	m, err := DecodeManifest(raw)
 	if err != nil {
@@ -196,8 +159,7 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 	}
 	// The manifest describes bytes; verify it describes these bytes.
 	if got := Hash(payload); got != m.ShippedHash {
-		return Manifest{}, nil, fmt.Errorf("seal: payload hash %s does not match manifest shipped_hash %s",
-			got, m.ShippedHash)
+		return Manifest{}, nil, fmt.Errorf("seal: payload hash %s does not match manifest shipped_hash %s", got, m.ShippedHash)
 	}
 	return m, payload, nil
 }

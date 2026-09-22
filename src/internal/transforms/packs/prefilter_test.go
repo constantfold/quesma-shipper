@@ -75,9 +75,7 @@ func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 		value := sb.String()
 		seen := p.Scan(value)
 		for j, kws := range keywordSets {
-			if got, want := seen.Has(gates[j]), containsAny(value, kws); got != want {
-				t.Fatalf("gate %d (%v) on %q: prefilter %v, containsAny %v", j, kws, value, got, want)
-			}
+			require.Equal(t, containsAny(value, kws), seen.Has(gates[j]), "gate %d (%v) on %q", j, kws, value)
 		}
 	}
 }
@@ -91,28 +89,22 @@ func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 	p := b.Build()
 
 	for _, value := range []string{"apikey", "APIKEY", "ApiKey", "KUBECTL", "xxKubectl xx"} {
-		if seen := p.Scan(value); !seen.Has(gate) {
-			t.Errorf("gate did not fire on %q", value)
-		}
-		assert.Truef(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
+		seen := p.Scan(value)
+		assert.True(t, seen.Has(gate), "gate did not fire on %q", value)
+		assert.True(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 
 	for _, value := range []string{"AP" + testDottedI + "KEY", testKelvin + "UBECTL", "ap" + testLongS + "key"} {
-		if seen := p.Scan(value); seen.Has(gate) {
-			t.Errorf("the fold is ASCII only: a keyword gate must not fire on %q", value)
-		}
-		assert.Truef(t, !containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
+		seen := p.Scan(value)
+		assert.False(t, seen.Has(gate), "the fold is ASCII only: a keyword gate must not fire on %q", value)
+		assert.False(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 }
 
 func TestPrefilterRejectsNonASCIIKeywords(t *testing.T) {
 	b := NewPrefilterBuilder()
-	bad := "cl" + testNonASCII
-	if _, err := b.AddKeywords([]string{"ok", bad}); err == nil {
-		t.Fatal("expected a non-ASCII keyword to fail the build")
-	} else if !strings.Contains(err.Error(), bad) {
-		t.Errorf("the error must name the offending keyword, got %v", err)
-	}
-	_, addKeywordsErr := b.AddKeywords([]string{""})
-	require.Error(t, addKeywordsErr, "expected an empty keyword to fail the build")
+	_, err := b.AddKeywords([]string{"ok", "cl" + testNonASCII})
+	require.ErrorContains(t, err, "cl"+testNonASCII, "a non-ASCII keyword must fail the build, naming it")
+	_, err = b.AddKeywords([]string{""})
+	require.Error(t, err, "expected an empty keyword to fail the build")
 }

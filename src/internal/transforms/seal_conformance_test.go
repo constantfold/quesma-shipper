@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"filippo.io/age"
@@ -46,12 +44,7 @@ type tarVector struct {
 }
 
 func TestConformanceContainerLayout(t *testing.T) {
-	if *update {
-		require.NoError(t, os.MkdirAll(filepath.Dir(vectorPath), 0o755))
-		require.NoError(t, os.WriteFile(vectorPath, generateContainerVectors(t), 0o644))
-		t.Logf("regenerated %s", vectorPath)
-	}
-
+	updateVectors(t, vectorPath, generateContainerVectors)
 	var v containerVectors
 	readVectors(t, vectorPath, &v)
 
@@ -68,8 +61,7 @@ func TestConformanceContainerLayout(t *testing.T) {
 	}
 }
 
-// tarBytesFor recovers the tar layer from a real sealed object, so the vector checks what Seal
-// writes rather than a reimplementation.
+// tarBytesFor recovers the tar layer from a real sealed object, so the vector checks what Seal writes.
 func tarBytesFor(t *testing.T, manifestJSON, payload []byte) []byte {
 	t.Helper()
 

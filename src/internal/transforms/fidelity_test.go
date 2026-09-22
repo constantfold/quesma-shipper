@@ -46,12 +46,8 @@ func TestScrubPreservesCleanRecords(t *testing.T) {
 
 // When a record IS modified, key order and number literals still survive.
 func TestModifiedRecordsPreserveKeyOrderAndNumbers(t *testing.T) {
-	s := newScrubber(t)
-
 	payload := `{"zeta":1,"alpha":"ghp_abcdefghijklmnopqrstuvwxyz0123456789","mid":1234567890123456789,"beta":true}` + "\n"
-	res := scrubJSONL(t, s, "claude-code", payload)
-	out := string(res.Out)
-
+	out := string(scrubJSONL(t, newScrubber(t), "claude-code", payload).Out)
 	assert.Truef(t, strings.Index(out, `"zeta"`) <= strings.Index(out, `"alpha"`), "key order was not preserved:\n%s", out)
 	assert.Containsf(t, out, "1234567890123456789", "a large integer lost precision:\n%s", out)
 }

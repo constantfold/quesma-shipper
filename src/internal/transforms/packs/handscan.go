@@ -2,11 +2,10 @@ package packs
 
 import "strings"
 
-// Hand scanner for the email rule, whose keyword "@" fires on nearly every value. It reproduces
-// the corpus pattern's leftmost-first semantics; pii_test.go replays both, so a corpus edit
-// cannot leave the scanner behind.
+// Hand scanner for the email rule, whose keyword "@" fires on nearly every value, reproducing the corpus
+// pattern's leftmost-first semantics; pii_test.go replays both, so a corpus edit cannot leave it behind.
 
-// The email pattern's character classes plus \w for \b, which is ASCII-only, so a byte test answers it.
+// The email pattern's character classes plus \w for the ASCII-only \b.
 const (
 	clsLocal  = 1 << 0 // [A-Za-z0-9._%+-], the local part
 	clsDomain = 1 << 1 // [A-Za-z0-9.-], the domain
@@ -32,9 +31,7 @@ var emailClass = func() (t [256]uint8) {
 	return t
 }()
 
-// scanEmail anchors on the '@' signs. The local run ends exactly at one, so leftmost is the first
-// position in it where \b holds; the domain split is the last '.' that works, and the TLD can only be
-// the whole letter run.
+// scanEmail anchors on '@': start at the local run's first \b, split at the last working '.', TLD all letters.
 func scanEmail(value string) []Span {
 	var out []Span
 	// from is where FindAll would resume; at is the '@' cursor, which also passes failed candidates.

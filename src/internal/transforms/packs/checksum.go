@@ -35,8 +35,7 @@ func luhnValid(d string) bool {
 	return sum%10 == 0
 }
 
-// panValid checks card grouping, a real PAN length and the issuer range before Luhn, which alone
-// passes one in ten random digit runs.
+// panValid checks grouping, PAN length and issuer range before Luhn, which alone passes one run in ten.
 func panValid(s string) bool {
 	groups := []int{0}
 	sep := byte(0)
@@ -54,7 +53,9 @@ func panValid(s string) bool {
 		groups = append(groups, 0)
 	}
 
-	if len(groups) > 1 && !groupingIsCardShaped(groups) {
+	// Card groupings: 4-4-4-4, amex 4-6-5, and 4-4-4-4-3.
+	if len(groups) > 1 && !slices.Equal(groups, []int{4, 4, 4, 4}) && !slices.Equal(groups, []int{4, 6, 5}) &&
+		!slices.Equal(groups, []int{4, 4, 4, 4, 3}) {
 		return false
 	}
 
@@ -83,12 +84,6 @@ func panValid(s string) bool {
 	}
 
 	return luhnValid(d)
-}
-
-func groupingIsCardShaped(groups []int) bool {
-	return slices.Equal(groups, []int{4, 4, 4, 4}) ||
-		slices.Equal(groups, []int{4, 6, 5}) ||
-		slices.Equal(groups, []int{4, 4, 4, 4, 3})
 }
 
 // peselValid implements the Polish national identity number check digit.

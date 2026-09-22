@@ -11,8 +11,7 @@ import (
 // ManifestVersion is the wire-contract version; downstream hard-errors on an unknown value.
 const ManifestVersion = 1
 
-// Manifest is the first tar entry of every mirror object, and the only place the native path
-// exists on the wire. manifest.schema.json is the authority, validated on seal and on open.
+// Manifest is every object's first tar entry, the only wire carrier of the native path; schema-validated.
 type Manifest struct {
 	ManifestVersion int `json:"manifest_version"`
 
@@ -25,8 +24,7 @@ type Manifest struct {
 	Gather        string `json:"gather"`
 	ArtifactClass string `json:"artifact_class"`
 
-	// SourceHash covers the raw pre-redaction bytes, ShippedHash the archived ones: redaction
-	// changes bytes, so the shipped hash is not an identity.
+	// SourceHash covers the raw pre-redaction bytes, ShippedHash the archived ones, which are no identity.
 	SourceHash  string `json:"source_hash"`
 	ShippedHash string `json:"shipped_hash"`
 
@@ -62,8 +60,7 @@ type Manifest struct {
 	EnrichLineDecodeErrors int `json:"enrich_line_decode_errors,omitempty"`
 }
 
-// RedactionSummary is rule-id and count granularity, never byte ranges, which would
-// fingerprint where and how large each secret was.
+// RedactionSummary is rule-id and count granularity, never byte ranges, which fingerprint each secret.
 type RedactionSummary struct {
 	Density  float64        `json:"density"`
 	RuleHits map[string]int `json:"rule_hits,omitempty"`
@@ -124,8 +121,7 @@ func DecodeManifest(raw []byte) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("seal: decode manifest: %w", err)
 	}
 	if m.ManifestVersion != ManifestVersion {
-		return Manifest{}, fmt.Errorf("seal: manifest_version %d, this client speaks %d",
-			m.ManifestVersion, ManifestVersion)
+		return Manifest{}, fmt.Errorf("seal: manifest_version %d, this client speaks %d", m.ManifestVersion, ManifestVersion)
 	}
 	return m, nil
 }

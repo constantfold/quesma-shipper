@@ -23,8 +23,7 @@ func TestJSONTextAcceptanceMatchesEncodingJSON(t *testing.T) {
 		var scan packs.ValueScan
 		var walker jsonWalker
 		walker.reset(s, "claude-code", &scan, []byte(line))
-		got := walker.walkLine() == nil
-		assert.Equal(t, got, json.Valid([]byte(line)))
+		assert.Equal(t, json.Valid([]byte(line)), walker.walkLine() == nil, "%q", line)
 	}
 }
 

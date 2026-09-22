@@ -6,8 +6,7 @@ import (
 	"encoding/json"
 )
 
-// line is one JSONL record, decoded only as far as the join needs. Scalars are flexString: a
-// drifted field shape would otherwise ship the line as native_invalid, silently unenriched.
+// line is one JSONL record, decoded as far as the join needs; flexString keeps a drifted line enrichable.
 type line struct {
 	Role    flexString `json:"role"`
 	Message *message   `json:"message"`
@@ -24,8 +23,7 @@ type block struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// outLine is one derived line: the original bytes verbatim, or as a string when they are not valid
-// JSON (a torn tail is expected), and enrichments index-aligned to the native content blocks.
+// outLine is the original line verbatim (a string when not valid JSON) plus enrichments index-aligned to its blocks.
 type outLine struct {
 	Native        json.RawMessage `json:"native,omitempty"`
 	NativeInvalid string          `json:"native_invalid,omitempty"`
@@ -47,10 +45,7 @@ type blockEnrich struct {
 	ModelName      string `json:"modelName,omitempty"`
 }
 
-// alignAndRender walks the transcript and the ordered bubbles together, advancing the bubble cursor
-// only on a match. The transcript is the authority: an event the store cannot account for is a
-// mismatch, a bubble the transcript does not mention is skipped. Tail (the store ends first, as with
-// injected turns), repeats and ambiguous events ship native-only and are counted apart.
+// alignAndRender walks transcript and bubbles together; the transcript is the authority on what is a mismatch.
 func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
@@ -58,8 +53,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var a alignment
 	state := make([]bubbleState, len(events))
 	// A consuming match turns all preceding unmatched blocks into gaps; only the remainder can be tail.
-	cursor, unmatched := 0, 0
-	lastLineInvalid := false
+	cursor, unmatched, lastLineInvalid := 0, 0, false
 
 	for raw := range bytes.SplitSeq(content, []byte{'\n'}) {
 		trimmed := bytes.TrimSpace(raw)
@@ -96,8 +90,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 				}
 				a.mismatches += unmatched
 				unmatched = 0
-				state[idx].used = true
-				state[idx].ev, state[idx].n = ev, n
+				state[idx].used, state[idx].ev, state[idx].n = true, ev, n
 				cursor = max(cursor, idx+1)
 				if record.Enrich == nil {
 					record.Enrich = make([]*blockEnrich, len(l.Message.Content))
@@ -135,19 +128,10 @@ func fromBubble(b *bubble) *blockEnrich {
 	if b.ModelInfo != nil {
 		model = cmp.Or(model, b.ModelInfo.ModelName)
 	}
-	e := &blockEnrich{
-		BubbleID:       b.BubbleID,
-		CreatedAt:      b.CreatedAt,
-		RequestID:      b.RequestID,
-		CheckpointID:   b.CheckpointID,
-		TurnDurationMs: b.TurnDurationMs,
-		ModelName:      model,
-	}
+	e := &blockEnrich{BubbleID: b.BubbleID, CreatedAt: b.CreatedAt, RequestID: b.RequestID,
+		CheckpointID: b.CheckpointID, TurnDurationMs: b.TurnDurationMs, ModelName: model}
 	if t := b.ToolFormerData; t != nil {
-		e.ToolCallID = t.ToolCallID
-		e.ToolName = cmp.Or(t.Name, string(t.Tool))
-		e.Status = t.Status
-		e.Result = t.Result
+		e.ToolCallID, e.ToolName, e.Status, e.Result = t.ToolCallID, cmp.Or(t.Name, string(t.Tool)), t.Status, t.Result
 	}
 	return e
 }

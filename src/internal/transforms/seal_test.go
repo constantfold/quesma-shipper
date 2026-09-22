@@ -45,10 +45,8 @@ func TestSealOpenRoundTrip(t *testing.T) {
 		{"jsonl", []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"), manifest().Client},
 		{"empty", nil, manifest().Client},
 		{"metadata hash", []byte("{\"line\":\"one\"}\n"), manifest().Client},
-		{"stamped build", []byte("{}\n"), Client{
-			Version: "0.0.0-d5f735643cbd+dirty", Commit: "d5f735643cbd3c70f71d2ed52746be1cadfe3a15",
-			Modified: true, GoVersion: "go1.25.0", OS: "linux", Arch: "amd64",
-		}},
+		{"stamped build", []byte("{}\n"), Client{Version: "0.0.0-d5f735643cbd+dirty", Commit: "d5f735643cbd3c70f71d2ed52746be1cadfe3a15",
+			Modified: true, GoVersion: "go1.25.0", OS: "linux", Arch: "amd64"}},
 		{"unstamped build", []byte("{}\n"), Client{Version: "unknown"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,26 +71,19 @@ func TestSealOpenRoundTrip(t *testing.T) {
 // Uploaded bytes are ciphertext, unparseable without the matching identity.
 func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	id := identity(t)
-	stranger := identity(t)
-	secretPath := "/Users/jane/.claude/projects/-Users-jane-work-secret/s.jsonl"
-
 	m := manifest()
-	m.NativePath = secretPath
+	m.NativePath = "/Users/jane/.claude/projects/-Users-jane-work-secret/s.jsonl"
 	payload := []byte(`{"text":"a distinctive sentence that must not appear in ciphertext"}`)
 
 	obj, _, err := Seal(m, payload, []age.Recipient{id.Recipient()})
 	require.NoError(t, err)
-
-	for _, needle := range []string{
-		secretPath, "distinctive sentence", "claude-code-transcripts",
-		"manifest.json", "jane", "payload",
-	} {
+	for _, needle := range []string{m.NativePath, "distinctive sentence", "claude-code-transcripts", "manifest.json", "jane", "payload"} {
 		assert.NotContainsf(t, string(obj), needle, "ciphertext leaks %q in plaintext", needle)
 	}
-	_, _, openErr := Open(obj, stranger)
-	require.Error(t, openErr, "an object must not open with an unrelated identity")
-	_, _, excludedIdentityErr := Open(obj)
-	require.Error(t, excludedIdentityErr, "opening with no identity must fail")
+	_, _, err = Open(obj, identity(t))
+	require.Error(t, err, "an object must not open with an unrelated identity")
+	_, _, err = Open(obj)
+	require.Error(t, err, "opening with no identity must fail")
 }
 
 // A manifest that would fail downstream validation must not reach a bucket.
@@ -117,8 +108,7 @@ func TestSealValidatesTheManifestAgainstItsSchema(t *testing.T) {
 func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	id := identity(t)
 	m := manifest()
-	m.ShippedHash = strings.Repeat("b", 64)
-	m.PayloadSize = 1
+	m.ShippedHash, m.PayloadSize = strings.Repeat("b", 64), 1
 	raw, err := m.Encode()
 	require.NoError(t, err)
 	obj, err := writeContainer(raw, []byte("different"), nil, []age.Recipient{id.Recipient()})
@@ -140,9 +130,7 @@ func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"source-hash", "shipped-hash", "artifact-class", "manifest-version"} {
-		if _, ok := md[want]; !ok {
-			t.Errorf("object metadata should carry %q for HEAD-side dedupe", want)
-		}
+		assert.Contains(t, md, want, "object metadata should carry it for HEAD-side dedupe")
 	}
 }
 
@@ -156,10 +144,9 @@ func TestTheManifestCarriesExplainedEnrichShortfalls(t *testing.T) {
 	m.EnrichStatus = "ok"
 	raw, err := m.Encode()
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "enrich_repeats")
-	assert.NotContains(t, string(raw), "enrich_tail")
-	assert.NotContains(t, string(raw), "enrich_ambiguous")
-	assert.NotContains(t, string(raw), "enrich_line_decode_errors")
+	for _, field := range []string{"enrich_repeats", "enrich_tail", "enrich_ambiguous", "enrich_line_decode_errors"} {
+		assert.NotContains(t, string(raw), field)
+	}
 
 	m.EnrichRepeats, m.EnrichTail, m.EnrichAmbiguous, m.EnrichLineDecodeErrors = 3, 1, 2, 4
 	raw, err = m.Encode()

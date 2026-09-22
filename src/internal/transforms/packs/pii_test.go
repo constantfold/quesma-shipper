@@ -3,7 +3,6 @@ package packs
 import (
 	"fmt"
 	"math/rand"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,8 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Scanners replay against their regex, comparing raw candidates too, so a divergence the checksum
-// happens to mask still fails.
+// Scanners replay against their regex on raw candidates too, so a checksum cannot mask a divergence.
 
 // piiScannerRules returns the loaded rules that carry a hand scanner.
 func piiScannerRules(t *testing.T) []*Rule {
@@ -42,19 +40,14 @@ func compareScannerAndRegex(t *testing.T, r *Rule, value string) {
 	t.Helper()
 
 	// Candidates first: the spans before the checksum, where leftmost-first and non-overlap live.
-	want := r.re.FindAllStringIndex(value, -1)
 	var got [][]int
 	for _, s := range scanCandidates(r, value) {
 		got = append(got, []int{s.Start, s.End})
 	}
-	if !reflect.DeepEqual(want, got) {
-		t.Fatalf("%s candidates on %q: regex %v, scanner %v", r.id, value, want, got)
-	}
+	require.Equal(t, r.re.FindAllStringIndex(value, -1), got, "%s candidates on %q", r.id, value)
 
 	// Then the rule's answer, checksum and rule id included.
-	if w, g := r.matchSweep(value), r.MatchScanned(value); !reflect.DeepEqual(w, g) {
-		t.Fatalf("%s spans on %q: regex %v, scanner %v", r.id, value, w, g)
-	}
+	require.Equal(t, r.matchSweep(value), r.MatchScanned(value), "%s spans on %q", r.id, value)
 }
 
 // Cases the fuzz would reach only by luck: value ends, separator positions, runs either side of bounds.
@@ -98,21 +91,15 @@ var piiEdgeValues = []string{
 	"aaaa@bbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 }
 
-func TestPIIScannersAgreeWithTheirRegexOnEdges(t *testing.T) {
-	for _, r := range piiScannerRules(t) {
-		for _, v := range piiEdgeValues {
-			compareScannerAndRegex(t, r, v)
-		}
-	}
-}
-
-// The volume half: digit soup with separators everywhere, valid and invalid checksums.
-func TestPIIScannersAgreeWithTheirRegexOnFuzz(t *testing.T) {
-	rules := piiScannerRules(t)
+// The edges, then the volume: digit soup with separators everywhere, valid and invalid checksums.
+func TestPIIScannersAgreeWithTheirRegex(t *testing.T) {
+	values := slices.Clone(piiEdgeValues)
 	rng := rand.New(rand.NewSource(20260816))
 	for i := 0; i < 40000; i++ {
-		v := randPIIValue(rng)
-		for _, r := range rules {
+		values = append(values, randPIIValue(rng))
+	}
+	for _, r := range piiScannerRules(t) {
+		for _, v := range values {
 			compareScannerAndRegex(t, r, v)
 		}
 	}
@@ -169,9 +156,7 @@ func TestFusedScanAgreesWithStandaloneScanners(t *testing.T) {
 			scan.Reset(v)
 			for k := range rules {
 				r := rules[(first+k)%len(rules)]
-				if want, got := r.MatchScanned(v), r.MatchScannedIn(v, &scan); !reflect.DeepEqual(want, got) {
-					t.Fatalf("%s on %q after %s asked first: standalone %v, fused %v", r.id, v, rules[first].id, want, got)
-				}
+				require.Equal(t, r.MatchScanned(v), r.MatchScannedIn(v, &scan), "%s on %q after %s asked first", r.id, v, rules[first].id)
 			}
 		}
 	}
@@ -184,24 +169,18 @@ func TestNonFusedRuleIgnoresTheScan(t *testing.T) {
 	scan.candidates(fusedPESEL) // force the walk, so the slots are non-empty
 	const v = "mail jane@example.com and 4111111111111111"
 	for _, r := range loadedRules(t, PIICore) {
-		if r.fused != fusedNone {
-			continue
-		}
-		if want, got := r.MatchScanned(v), r.MatchScannedIn(v, &scan); !reflect.DeepEqual(want, got) {
-			t.Fatalf("%s: standalone %v, with a stale scan %v", r.id, want, got)
+		if r.fused == fusedNone {
+			require.Equal(t, r.MatchScanned(v), r.MatchScannedIn(v, &scan), "%s with a stale scan", r.id)
 		}
 	}
 }
 
 // The one combination that would redact a different span than the pattern must not compile.
 func TestPIIScannerRejectsACaptureGroup(t *testing.T) {
-	spec := ruleSpec{ID: "x", Regex: `\b[0-9]{11}\b`, Scanner: "pesel", Capture: 1}
-	_, compileSpecErr := compileSpec(spec)
-	require.Error(t, compileSpecErr, "a scanner paired with a capture group must not compile")
-	spec.Scanner = "nope"
-	spec.Capture = 0
-	_, unknownScannerErr := compileSpec(spec)
-	require.Error(t, unknownScannerErr, "an unknown scanner must not compile")
+	_, err := compileSpec(ruleSpec{ID: "x", Regex: `\b[0-9]{11}\b`, Scanner: "pesel", Capture: 1})
+	require.Error(t, err, "a scanner paired with a capture group must not compile")
+	_, err = compileSpec(ruleSpec{ID: "x", Regex: `\b[0-9]{11}\b`, Scanner: "nope"})
+	require.Error(t, err, "an unknown scanner must not compile")
 }
 
 var piiFragments = []string{

@@ -40,12 +40,7 @@ type scrubVector struct {
 }
 
 func TestConformanceRedaction(t *testing.T) {
-	if *update {
-		require.NoError(t, os.MkdirAll(filepath.Dir(scrubVectorPath), 0o755))
-		require.NoError(t, os.WriteFile(scrubVectorPath, generateScrubVectors(t), 0o644))
-		t.Logf("regenerated %s", scrubVectorPath)
-	}
-
+	updateVectors(t, scrubVectorPath, generateScrubVectors)
 	var v scrubVectors
 	readVectors(t, scrubVectorPath, &v)
 	assert.Equalf(t, Sentinel("{rule_id}"), v.Sentinel, "sentinel form drifted: vector %q, code %q", v.Sentinel, Sentinel("{rule_id}"))
@@ -113,6 +108,15 @@ func generateScrubVectors(t *testing.T) []byte {
 		c.After, c.RuleHits, c.ScanMode = string(res.Out), res.RuleHits, res.ScanMode
 	}
 	return encodeVectors(t, out)
+}
+
+// updateVectors rewrites path from generate under -update only.
+func updateVectors(t *testing.T, path string, generate func(*testing.T) []byte) {
+	if *update {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, generate(t), 0o644))
+		t.Logf("regenerated %s", path)
+	}
 }
 
 func readVectors(t *testing.T, path string, into any) {
