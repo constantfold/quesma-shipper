@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -358,4 +360,14 @@ func (w *world) versionCounts(t *testing.T) map[string]int {
 		}
 		in.KeyMarker, in.VersionIdMarker = out.NextKeyMarker, out.NextVersionIdMarker
 	}
+}
+
+// An unchanged run preserves every transcript version, including the set of transcript keys.
+func (w *world) assertTranscriptVersions(t *testing.T, before map[string]int) {
+	t.Helper()
+	before, after := maps.Clone(before), w.versionCounts(t)
+	for _, counts := range []map[string]int{before, after} {
+		maps.DeleteFunc(counts, func(key string, _ int) bool { return !strings.Contains(key, transcriptPrefix) })
+	}
+	assert.Equal(t, before, after, "an unchanged transcript was removed or re-shipped")
 }

@@ -232,15 +232,7 @@ func smokeSteady(t *testing.T, m *smokeMachine, backlog smokeBacklogResult) {
 			t.Errorf("the second run took %v against the backlog's %v, over a third: "+
 				"discovery is costing what shipping cost", meas.best, backlog.best)
 		}
-		for key, after := range m.w.versionCounts(t) {
-			if !strings.Contains(key, transcriptPrefix) {
-				continue
-			}
-			if before := backlog.versions[key]; after != before {
-				t.Errorf("%s: %d versions after the backlog, %d after the no-op runs; "+
-					"an unchanged file was re-shipped", key, before, after)
-			}
-		}
+		m.w.assertTranscriptVersions(t, backlog.versions)
 
 		// Rewriting the heartbeat and project map is where an unrenamed temp file would show up.
 		assertNoResidualScratch(t, m.w)

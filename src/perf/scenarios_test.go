@@ -8,7 +8,6 @@ package perf
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -103,15 +102,7 @@ func TestSteadyStateSyncMakesAlmostNoNetworkCalls(t *testing.T) {
 			"discovery is costing what shipping cost", steadyElapsed, backlogElapsed)
 	}
 
-	for key, after := range w.versionCounts(t) {
-		if !strings.Contains(key, transcriptPrefix) {
-			continue
-		}
-		if before := versionsAfterBacklog[key]; after != before {
-			t.Errorf("%s: %d versions after the backlog, %d after the second run; "+
-				"an unchanged file was re-shipped", key, before, after)
-		}
-	}
+	w.assertTranscriptVersions(t, versionsAfterBacklog)
 }
 
 // Walks the bound up the latency scale: one rtt could be a coincidence, the curve is the evidence.
@@ -170,8 +161,5 @@ func assertSameKeys(t *testing.T, a, b []string) {
 	t.Helper()
 	slices.Sort(a)
 	slices.Sort(b)
-	require.Falsef(t, len(a) != len(b), "the two runs landed %d and %d keys", len(a), len(b))
-	for i := range a {
-		require.Falsef(t, a[i] != b[i], "the two runs disagree at key %d: %q and %q", i, a[i], b[i])
-	}
+	require.Equal(t, a, b, "the two runs landed different object keys")
 }
