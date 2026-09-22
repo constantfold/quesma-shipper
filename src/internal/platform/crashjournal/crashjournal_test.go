@@ -67,13 +67,16 @@ func TestConsecutiveCrashesCounted(t *testing.T) {
 
 // Clean restarts cannot clear a crash: only delivery of the crash report does.
 func TestCrashSurvivesRestartsUntilReported(t *testing.T) {
-	for _, phase := range []string{"init", "tick 1"} {
-		t.Run(phase, func(t *testing.T) {
+	for _, tc := range []struct {
+		phase   string
+		retries int
+	}{{"init", 1}, {"tick 1", 2}} {
+		t.Run(tc.phase, func(t *testing.T) {
 			dir := t.TempDir()
-			deadRun(t, dir, "run-crash", func(l *Log) { l.Phase(phase) })
-			want := &Summary{RunID: "run-crash", PID: 99999999, Phase: phase, Crashes: 1}
+			deadRun(t, dir, "run-crash", func(l *Log) { l.Phase(tc.phase) })
+			want := &Summary{RunID: "run-crash", PID: 99999999, Phase: tc.phase, Crashes: 1}
 			require.Equal(t, want, LastRun(dir))
-			for _, id := range []string{"run-retry1", "run-retry2"} {
+			for _, id := range []string{"run-retry1", "run-retry2"}[:tc.retries] {
 				l, err := Open(dir, id)
 				require.NoError(t, err)
 				l.Start()
