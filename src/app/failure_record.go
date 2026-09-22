@@ -31,8 +31,7 @@ func (r *Runtime) loadRecordLocked() *formats.FailureRecord {
 	return r.rec
 }
 
-// persistRecord merges with disk unless a failed write left a newer in-memory record.
-// Writes run outside the mutex so a wedged fsync cannot block heartbeat readers.
+// persistRecord writes outside the mutex, so a wedged fsync cannot block heartbeat readers.
 func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*formats.FailureRecord)) {
 	r.recMu.Lock()
 	rec := r.loadRecordLocked()
@@ -81,8 +80,7 @@ func RecordStartupFailure(verb, runID string, cause error) {
 	if cause == nil {
 		return
 	}
-	recordWithoutRuntime(runID, formats.FailureInit,
-		fmt.Sprintf("%s could not start: %v", verb, cause))
+	recordWithoutRuntime(runID, formats.FailureInit, fmt.Sprintf("%s could not start: %v", verb, cause))
 }
 
 // RecordUpdateFailure records a failed remediation attempt without counting it as a collection failure.
@@ -101,8 +99,7 @@ func recordWithoutRuntime(runID, kind, message string) {
 	})
 }
 
-// appendWithoutRuntime resolves state independently so broken configuration cannot hide its own
-// failure; the directory may not exist yet when a verb fails before minting an identity.
+// appendWithoutRuntime resolves state itself, so broken configuration cannot hide its own failure.
 func appendWithoutRuntime(what string, mutate func(dir string, rec *formats.FailureRecord) bool) {
 	dir, _, err := pauseStateDir()
 	if err != nil || dir == "" || platform.EnsureDir(dir, 0o700) != nil {
@@ -119,12 +116,8 @@ func appendWithoutRuntime(what string, mutate func(dir string, rec *formats.Fail
 
 // Apply the username placeholder to every persisted event.
 func newEvent(stateDir, runID, kind, message string) formats.FailureEvent {
-	return formats.FailureEvent{
-		At:      time.Now().UTC().Format(time.RFC3339),
-		Kind:    kind,
-		RunID:   runID,
-		Message: formats.ApplyUserPlaceholder(message, engine.UsernameFromStateDir(stateDir)),
-	}
+	return formats.FailureEvent{At: time.Now().UTC().Format(time.RFC3339), Kind: kind, RunID: runID,
+		Message: formats.ApplyUserPlaceholder(message, engine.UsernameFromStateDir(stateDir))}
 }
 
 // What the heartbeat carries: the in-memory failures, plus the crash read out of the journal.

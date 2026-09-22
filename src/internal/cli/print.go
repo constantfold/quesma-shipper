@@ -81,22 +81,18 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 		fmt.Fprintf(w, "  %s\t%d %s over the %s cap, not collected\n",
 			s.SourceID, s.Oversize, app.Plural(s.Oversize, "file"), app.HumanBytes(s.OversizeLimit))
-		fmt.Fprintf(w, "  \tlargest %s  %s\n",
-			app.HumanBytes(s.OversizeLargest), s.OversizeExample)
-		fmt.Fprintf(w, "  \tnever collected; raise sources[%s].max_file_bytes to change that\n",
-			s.SourceID)
+		fmt.Fprintf(w, "  \tlargest %s  %s\n", app.HumanBytes(s.OversizeLargest), s.OversizeExample)
+		fmt.Fprintf(w, "  \tnever collected; raise sources[%s].max_file_bytes to change that\n", s.SourceID)
 	}
 	if rep.Parked > 0 {
 		fmt.Fprintf(w, "  note\tparked entries need attention: see `quesma-shipper doctor`\n")
 	}
 	for _, s := range rep.Sources {
 		if s.Enriched > 0 {
-			fmt.Fprintf(w, "  %s\tenriched %d via %s@%d\n", s.SourceID, s.Enriched,
-				s.EnricherID, s.EnricherVersion)
+			fmt.Fprintf(w, "  %s\tenriched %d via %s@%d\n", s.SourceID, s.Enriched, s.EnricherID, s.EnricherVersion)
 		}
 		if s.EnrichMismatch > 0 {
-			fmt.Fprintf(w, "  %s\t%d files sent without their database details\n",
-				s.SourceID, s.EnrichMismatch)
+			fmt.Fprintf(w, "  %s\t%d files sent without their database details\n", s.SourceID, s.EnrichMismatch)
 		}
 		if s.EnrichErrors > 0 {
 			fmt.Fprintf(w, "  %s\tenrich errors ×%d\n", s.SourceID, s.EnrichErrors)

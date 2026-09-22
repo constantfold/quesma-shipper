@@ -21,8 +21,7 @@ type telemetrySubmitter interface {
 	SubmitTelemetry(ctx context.Context, path, batchID string, issuedAt time.Time, payload json.RawMessage) error
 }
 
-// InstallHealthEvent's name is the contract with the collector: an unrecognised event is counted
-// rather than rendered, so a rename goes silent.
+// The collector counts rather than renders an unrecognised event name, so a rename goes silent.
 const InstallHealthEvent = "install_health"
 
 // maxTelemetryMessage only keeps a pathological message from crowding the envelope.
@@ -40,8 +39,7 @@ type telemetryEvent struct {
 	LastCrash     *telemetryCrash  `json:"last_crash,omitempty"`
 }
 
-// telemetryCrash is projected rather than embedded, so a field added to the sealed heartbeat's type
-// does not start crossing in the clear.
+// telemetryCrash is projected, so a new field on the sealed heartbeat's type never crosses in the clear.
 type telemetryCrash struct {
 	RunID       string `json:"run_id"`
 	Phase       string `json:"phase"`
@@ -55,8 +53,7 @@ type telemetryFault struct {
 	Message string `json:"message,omitempty"`
 }
 
-// SubmitTelemetry sends health after the tick is judged. It fails open; the next tick sends a new
-// batch rather than retrying this one.
+// SubmitTelemetry fails open; the next tick sends a new batch rather than retrying this one.
 func (r *Runtime) SubmitTelemetry(ctx context.Context) {
 	if r.eff.TelemetryEndpoint == "" || r.telemetry == nil || r.telemetryOff {
 		return
@@ -76,25 +73,17 @@ func (r *Runtime) SubmitTelemetry(ctx context.Context) {
 	}
 }
 
-// installHealth returns the batch id with the body: an id minted at send time would identify the
-// request rather than the event.
+// installHealth mints the batch id with the body, so the id names the event rather than the request.
 func (r *Runtime) installHealth(now time.Time) (batchID string, payload []byte, err error) {
 	record := r.failureRecord()
-	event := telemetryEvent{
-		Event:         InstallHealthEvent,
-		Hostname:      r.hostname,
-		At:            now.Format(time.RFC3339),
-		ClientVersion: r.build.Version,
-		Consecutive:   record.ConsecutiveFailures,
-	}
+	event := telemetryEvent{Event: InstallHealthEvent, Hostname: r.hostname, At: now.Format(time.RFC3339),
+		ClientVersion: r.build.Version, Consecutive: record.ConsecutiveFailures}
 	if c := record.LastCrash; c != nil {
 		event.LastCrash = &telemetryCrash{RunID: c.RunID, Phase: c.Phase, Consecutive: c.Consecutive}
 	}
 	event.Faults = make([]telemetryFault, 0, len(record.Recent))
 	for _, f := range record.Recent {
-		event.Faults = append(event.Faults, telemetryFault{
-			At: f.At, Kind: f.Kind, RunID: f.RunID, Message: telemetryMessage(f.Message),
-		})
+		event.Faults = append(event.Faults, telemetryFault{At: f.At, Kind: f.Kind, RunID: f.RunID, Message: telemetryMessage(f.Message)})
 	}
 	payload, err = json.Marshal(event)
 	if err != nil {

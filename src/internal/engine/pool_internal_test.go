@@ -99,9 +99,8 @@ func TestSpentBudgetDoesNotLoadCandidates(t *testing.T) {
 		t.Error("loaded a candidate without an upload slot")
 		return sources.Payload{}, nil
 	}
-	if err := p.run(context.Background()); err != nil || !p.rep.Truncated || p.out.Remaining != 1 {
-		t.Fatalf("budget: %+v, %v", p.out, err)
-	}
+	err := p.run(context.Background())
+	require.Truef(t, err == nil && p.rep.Truncated && p.out.Remaining == 1, "budget: %+v, %v", p.out, err)
 	assert.Nil(t, p.out.Files, "unadmitted candidates have no outcome")
 }
 

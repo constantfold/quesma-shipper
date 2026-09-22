@@ -56,8 +56,7 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 			continue
 		}
 		if pr.err != nil {
-			issues = append(issues, warn(part, "discovery error",
-				fmt.Sprintf("error: %v", pr.err),
+			issues = append(issues, warn(part, "discovery error", fmt.Sprintf("error: %v", pr.err),
 				fmt.Sprintf("check sources[%s] in config", src.ID)))
 			continue
 		}
@@ -87,18 +86,15 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 			}
 			noMatch = append(noMatch, src)
 		case formats.MatchPresentUnreadable:
-			issues = append(issues, warn(part, "unreadable",
-				"found but unreadable, "+d.Reason,
+			issues = append(issues, warn(part, "unreadable", "found but unreadable, "+d.Reason,
 				"fix permissions on the store"))
 		default:
-			issues = append(issues, warn(part, string(d.Health),
-				string(d.Health)+", "+d.Reason, ""))
+			issues = append(issues, warn(part, string(d.Health), string(d.Health)+", "+d.Reason, ""))
 		}
 
 		if d.Unreadable > 0 && d.Health != formats.MatchPresentUnreadable {
 			issues = append(issues, warn(part, "some files unreadable",
-				fmt.Sprintf("%d files could not be read - %s", d.Unreadable, d.UnreadableReason),
-				"first failing path: "+d.UnreadableExample))
+				fmt.Sprintf("%d files could not be read - %s", d.Unreadable, d.UnreadableReason), "first failing path: "+d.UnreadableExample))
 		}
 		if len(d.Oversize) > 0 {
 			largest := largestOversize(d.Oversize)

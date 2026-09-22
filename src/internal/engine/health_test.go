@@ -13,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 )
 
-// The heartbeat answers "is this source still findable", never "what did you send": it carries
-// per-source state and counts, and no transcript bytes, object keys or paths.
+// The heartbeat carries per-source state and counts, never transcript bytes, object keys or paths.
 func TestHeartbeat(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	rep := formats.Report{
@@ -34,10 +33,8 @@ func TestHeartbeat(t *testing.T) {
 			{SourceID: "codex-rollouts", Family: "codex", Health: formats.AgentAbsent, Reason: "not installed"},
 		},
 	}
-	hb := (engine.Heartbeat{
-		OrganizationID: "default", InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-		ClientVersion: "0.1.0", ConfigVersion: 1,
-	}).WithReport(rep, now)
+	hb := (engine.Heartbeat{OrganizationID: "default", InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+		ClientVersion: "0.1.0", ConfigVersion: 1}).WithReport(rep, now)
 	body, err := hb.Encode()
 	require.NoError(t, err)
 

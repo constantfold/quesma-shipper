@@ -22,8 +22,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The suite's shared fixture: a minted install, an audit log, a fake port and a policy over one
-// Claude-Code-shaped source under a temporary home.
+// The suite's fixture: a minted install, an audit log, a fake port and one Claude Code source under a temp home.
 type fixture struct {
 	t        *testing.T
 	home     string
@@ -46,28 +45,16 @@ func newFixture(t *testing.T) *fixture {
 
 	f := &fixture{t: t, home: home, stateDir: stateDir, port: newPort(), unit: unit, log: log}
 	f.plan = engine.Options{
-		Interval:       config.DefaultTick,
-		StateDir:       stateDir,
-		MaxFilesPerRun: 64,
-		ConfigVersion:  1,
-		RulePacks:      []string{"gitleaks-core", "quesma-extra", "cloud-keys", "generic-entropy", "pii-core"},
+		Interval: config.DefaultTick, StateDir: stateDir, MaxFilesPerRun: 64, ConfigVersion: 1, Deny: sources.New(home),
+		RulePacks: []string{"gitleaks-core", "quesma-extra", "cloud-keys", "generic-entropy", "pii-core"},
 		StructuralEx: map[string][]string{
 			"claude-code": {"uuid", "parentUuid", "sessionId"},
 			"*":           {"timestamp", "version"},
 		},
-		Deny: sources.New(home),
 		Sources: []sources.Resolved{{
-			Source: sources.Source{
-				ID:            "claude-code-transcripts",
-				Family:        "claude-code",
-				Gather:        "file_glob",
-				ArtifactClass: "trajectory",
-				Include:       []string{"projects/**/*.jsonl"},
-				Sniff:         &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536},
-			},
-			Root:            filepath.Join(home, ".claude"),
-			Enabled:         true,
-			SpecFingerprint: strings.Repeat("a", 64),
+			Source: sources.Source{ID: "claude-code-transcripts", Family: "claude-code", Gather: "file_glob", ArtifactClass: "trajectory",
+				Include: []string{"projects/**/*.jsonl"}, Sniff: &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536}},
+			Root: filepath.Join(home, ".claude"), Enabled: true, SpecFingerprint: strings.Repeat("a", 64),
 		}},
 	}
 	f.reopen()

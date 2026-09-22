@@ -43,14 +43,8 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 		return LoginResult{}, err
 	}
 	hostname, _ := os.Hostname()
-	req := controlplane.EnrollRequest{
-		InstallID:       unit.InstallID.String(),
-		DevicePublicKey: controlplane.EncodeKey(pub),
-		AgeRecipient:    unit.Recipient().String(),
-		Hostname:        hostname,
-		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
-	}
-	req.Invite = token
+	req := controlplane.EnrollRequest{InstallID: unit.InstallID.String(), DevicePublicKey: controlplane.EncodeKey(pub),
+		AgeRecipient: unit.Recipient().String(), Hostname: hostname, Platform: runtime.GOOS + "/" + runtime.GOARCH, Invite: token}
 	resp, err := c.Enroll(ctx, req)
 	if errors.Is(err, formats.ErrCredentialsRefused) {
 		req.Invite, req.Grant = "", token
@@ -59,13 +53,8 @@ func Login(ctx context.Context, server, token string) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
-	rec := controlplane.Enrollment{
-		InstallID:    unit.InstallID.String(),
-		Organization: resp.Organization,
-		Endpoint:     server,
-		DeviceKey:    controlplane.EncodeKey(priv),
-		EnrolledAt:   time.Now().UTC().Format(time.RFC3339),
-	}
+	rec := controlplane.Enrollment{InstallID: unit.InstallID.String(), Organization: resp.Organization, Endpoint: server,
+		DeviceKey: controlplane.EncodeKey(priv), EnrolledAt: time.Now().UTC().Format(time.RFC3339)}
 	if err := rec.Save(paths.StateDir); err != nil {
 		return LoginResult{}, err
 	}

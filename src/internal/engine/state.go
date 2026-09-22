@@ -37,8 +37,7 @@ type Key struct {
 
 // Fingerprint is what the store remembers about one file.
 type Fingerprint struct {
-	// Size and mtime are the cheap pre-filter; the content hash is the authority. SourceHash also
-	// marks a completed ship: only the post-verified-PUT commit may write it, never a failure path.
+	// Size and mtime pre-filter; SourceHash is the authority, written only after a confirmed PUT.
 	SourceSize  int64
 	SourceMTime time.Time
 	SourceHash  string
@@ -128,8 +127,7 @@ func (s *Store) Close() error {
 	return err
 }
 
-// editStore is the shell both operator overrides share. A discarded document is always written
-// back: the override is the operator's chance to replace it.
+// editStore runs an operator override; a discarded document is always written back, even unchanged.
 func editStore(stateDir, installID string, dryRun bool, edit func(*Store) int) (int, error) {
 	s, err := open(stateDir, installID, pruneMaxDocumentBytes)
 	if err != nil {
@@ -143,8 +141,7 @@ func editStore(stateDir, installID string, dryRun bool, edit func(*Store) int) (
 	return changed, s.flush()
 }
 
-// Prune removes entries whose file is gone. A file on an unmounted volume reads as gone, which is
-// why it stays a command.
+// Prune removes entries whose file is gone; an unmounted volume reads as gone, so it stays a command.
 func Prune(stateDir, installID string, dryRun bool) (removed, kept int, err error) {
 	removed, err = editStore(stateDir, installID, dryRun, func(s *Store) int {
 		before := len(s.entries)
@@ -158,8 +155,7 @@ func Prune(stateDir, installID string, dryRun bool) (removed, kept int, err erro
 	return removed, kept, err
 }
 
-// Reset forgets every fingerprint; unchanged bytes come back already_present, so it never forces a
-// re-seal. The document is replaced rather than deleted, so the install id survives.
+// Reset forgets every fingerprint but keeps the document, and with it the install id.
 func Reset(stateDir, installID string, dryRun bool) (removed int, err error) {
 	return editStore(stateDir, installID, dryRun, func(s *Store) int {
 		removed := len(s.entries)
@@ -180,15 +176,13 @@ func (s *Store) Get(k Key) (Fingerprint, bool) {
 
 func (s *Store) Len() int { return len(s.entries) }
 
-// CommitAll records several fingerprints in one document replacement.
-// A crash before the replace re-runs those files onto their existing keys. Never make this a database.
+// CommitAll records fingerprints in one document replacement; a crash re-runs them onto the same keys.
 func (s *Store) CommitAll(updates map[Key]Fingerprint) error {
 	maps.Copy(s.entries, updates)
 	return s.flush()
 }
 
-// EnsureSpec records which spec generation a source's entries belong to, dropping them all when it
-// differs. Per source, never the global config_version, which would invalidate the whole fleet.
+// EnsureSpec drops a source's entries when its spec changes; per source, never per config_version.
 func (s *Store) EnsureSpec(sourceID, specFP string) (dropped int, err error) {
 	stored, known := s.specs[sourceID]
 	if known && stored == specFP {

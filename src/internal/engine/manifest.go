@@ -8,26 +8,13 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// baseManifest fills the fields raw and derived objects share, so a wire-contract field added once
-// cannot miss one path. The manifest is the only place a native path exists on the wire, so the
-// username placeholder applies here too. Seal fills the hashes, size and recipient ids.
+// baseManifest fills the fields raw and derived objects share, so a new field cannot miss one path.
 func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash string, res transforms.Result) transforms.Manifest {
-	m := transforms.Manifest{
-		ManifestVersion: transforms.ManifestVersion,
-		OrganizationID:  o.org(),
-		InstallID:       o.Identity.InstallID.String(),
-		SourceID:        src.ID,
-		SourceFamily:    src.Family,
-		NativePath:      formats.ApplyUserPlaceholder(nativePath, o.user),
-		Gather:          src.Gather,
-		ArtifactClass:   src.ArtifactClass,
-		SealedAt:        o.Now().Format(time.RFC3339),
-		ConfigVersion:   o.ConfigVersion,
-		ConfigExpired:   o.ConfigExpired,
-		Client:          o.Client,
-		RunID:           o.RunID,
-		SourceHash:      sourceHash,
-		ShapeSniff:      string(formats.SniffOK),
+	m := transforms.Manifest{ManifestVersion: transforms.ManifestVersion, OrganizationID: o.org(), InstallID: o.Identity.InstallID.String(),
+		SourceID: src.ID, SourceFamily: src.Family, Gather: src.Gather, ArtifactClass: src.ArtifactClass,
+		SealedAt: o.Now().Format(time.RFC3339), ConfigVersion: o.ConfigVersion, ConfigExpired: o.ConfigExpired,
+		Client: o.Client, RunID: o.RunID, SourceHash: sourceHash, ShapeSniff: string(formats.SniffOK),
+		NativePath: formats.ApplyUserPlaceholder(nativePath, o.user), // the only native path on the wire
 	}
 	if src.Scrub == nil || *src.Scrub {
 		m.Redaction = &transforms.RedactionSummary{Density: res.Density(), RuleHits: res.RuleHits}

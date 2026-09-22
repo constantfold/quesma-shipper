@@ -13,10 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// --- the parallel pass ------------------------------------------------------
-//
-// Files in a source overlap; the loop thread still owns every decision. These tests pin what
-// overlap must not change: the budget, the report's order, the fatal stop, and that it overlaps.
+// Files in a source overlap while the loop thread still owns every decision.
 
 // peak records the most callers inside at once.
 type peak struct {
@@ -57,8 +54,7 @@ func (r *slowRecipient) Wrap(fileKey []byte) ([]*age.Stanza, error) {
 	return r.inner.Wrap(fileKey)
 }
 
-// slowPort holds the first authorization group until a second arrives: only a network leg folded
-// back into a compute slot runs into the timeout.
+// slowPort holds the first group until a second arrives, so a network leg holding a compute slot times out.
 type slowPort struct {
 	*fakePort
 	peak
@@ -94,8 +90,7 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 	assert.Truef(t, slow.max() >= 2, "peak concurrent seals %d; the pass ran sequentially", slow.max())
 }
 
-// Authorization groups are not bound by the compute pool: a sealed object leaves its compute slot
-// before its group touches the network. The 70 files and the wide upload pool put two in flight.
+// A sealed object leaves its compute slot before its group touches the network, so groups overlap.
 func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	f := newFixture(t)
 	const files = 70

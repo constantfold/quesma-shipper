@@ -129,13 +129,10 @@ type rowJSON struct {
 }
 
 func toDoctorJSON(build app.Build, rep *app.Report, fails int, issues []string) doctorJSON {
-	out := doctorJSON{
-		SchemaVersion: 1, ClientVersion: build.Version,
+	out := doctorJSON{SchemaVersion: 1, ClientVersion: build.Version,
 		Update:           updateJSON{Status: rep.Update.State, Latest: rep.Update.Latest, Detail: rep.Update.Detail},
 		AgentsCollecting: rep.AgentsCollecting, FilesFound: rep.FilesFound,
-		Problems: fails, Attention: len(issues) - fails,
-		Verdict: verdict(fails, len(issues)-fails),
-	}
+		Problems: fails, Attention: len(issues) - fails, Verdict: verdict(fails, len(issues)-fails)}
 	for _, issue := range issues {
 		out.Issues = append(out.Issues, app.Plain(issue))
 	}

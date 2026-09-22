@@ -11,10 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A reachable dynamic reflect.Value.MethodByName makes the linker keep every
-// exported method of every reachable type; an earlier change paid 9 MB for it via cobra
-// help templates. The linker tags such calls <ReflectMethod> in -dumpdep
-// (constant-name lookups it can track are not tagged and stay harmless).
+// A dynamic reflect.Value.MethodByName keeps every exported method alive (9 MB once, via cobra
+// templates); the linker tags it <ReflectMethod> in -dumpdep.
 func TestNoDynamicMethodByName(t *testing.T) {
 	build := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "quesma-shipper"), "-ldflags=-dumpdep", ".")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")

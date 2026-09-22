@@ -20,8 +20,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
 )
 
-// End-to-end checks: a raw + derived pair through the real loop, the derived object taking the
-// same scrub/seal/send path, and the invariant that matters most: NO SQLite rows in the sink.
+// A raw + derived pair through the real loop: the derived object is scrubbed and sealed, and no SQLite row ships.
 
 const enrichConv = "5d1f7b3e-9a2c-4e8f-b1d0-3c4a5b6c7d8e"
 
@@ -87,18 +86,10 @@ func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine
 	t.Helper()
 	o := f.opts()
 	o.Sources = []sources.Resolved{{
-		Source: sources.Source{
-			ID:            "cursor-transcripts",
-			Family:        "cursor",
-			Gather:        "file_glob",
-			ArtifactClass: "trajectory",
-			Include:       []string{"**/agent-transcripts/**/*.jsonl"},
-			Enrichers:     map[string]bool{"cursor-transcript-join": enricherOn},
-			Sniff:         &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536},
-		},
-		Root:            filepath.Join(f.home, ".cursor", "projects"),
-		Enabled:         true,
-		SpecFingerprint: strings.Repeat("c", 64),
+		Source: sources.Source{ID: "cursor-transcripts", Family: "cursor", Gather: "file_glob", ArtifactClass: "trajectory",
+			Include: []string{"**/agent-transcripts/**/*.jsonl"}, Sniff: &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536},
+			Enrichers: map[string]bool{"cursor-transcript-join": enricherOn}},
+		Root: filepath.Join(f.home, ".cursor", "projects"), Enabled: true, SpecFingerprint: strings.Repeat("c", 64),
 	}}
 	o.Enrichers = transforms.NewRegistry(&fixtureEnricher{Enricher: cursorjoin.New(), db: dbPath})
 	env, err := sources.OSEnv()
@@ -107,8 +98,7 @@ func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine
 	return o
 }
 
-// fixtureEnricher is the real join with only the database LOCATION overridden: the join, the read
-// ladder and the compiled filter must stay the shipping code.
+// fixtureEnricher overrides only the database location; the join and its filter stay the shipping code.
 type fixtureEnricher struct {
 	*cursorjoin.Enricher
 	db string
@@ -209,10 +199,7 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 	}
 }
 
-// Raw collection is the same whatever the enricher does: disabled, drifted or without a database,
-// exactly the raw object ships, so a drifted join is never a collection outage. A mismatch raises
-// the alarm at run and source level; a missing database has nothing to derive from, and counting
-// it would bury the real alarm.
+// Whatever the enricher does, exactly the raw object ships; only a mismatch, not a missing database, raises the alarm.
 func TestRawShipsAloneWhenThereIsNoJoin(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

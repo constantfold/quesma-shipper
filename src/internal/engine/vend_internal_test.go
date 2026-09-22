@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The authorization accumulator, exercised directly: the byte bound needs objects too large to
-// produce through the loop, and overshooting it loses a whole group.
+// The authorization accumulator, exercised directly: the byte bound needs objects too large for the loop.
 
 // okPort confirms every object.
 type okPort struct{}
@@ -24,10 +23,7 @@ func stagedFor(idx, size int) fileResult {
 	return fileResult{
 		idx:     idx,
 		outcome: FileOutcome{ObjectKey: fmt.Sprintf("v1/o/%d.age", idx)},
-		pending: &pendingPut{
-			obj: make([]byte, size),
-			md:  map[string]string{"source-hash": "deadbeef"},
-		},
+		pending: &pendingPut{obj: make([]byte, size), md: map[string]string{"source-hash": "deadbeef"}},
 	}
 }
 

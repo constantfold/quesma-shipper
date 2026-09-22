@@ -8,8 +8,7 @@ import (
 // fold is the only place a raw result touches the report, store, audit log and progress stream.
 func (p *sourcePass) fold(r fileResult) {
 	p.store.applyIntent(&r)
-	// Only the first refusal or unavailable verdict counts, or rep.Failed becomes a function of
-	// GOMAXPROCS. The duplicates' commits still apply: one may have shipped before the refusal.
+	// Only the first stop verdict counts; duplicates still commit, since one may have shipped first.
 	if (r.outcome.Fatal && p.fatal) || (r.unavailable && p.uploadHalted) {
 		return
 	}
@@ -54,16 +53,9 @@ func (p *sourcePass) fold(r fileResult) {
 		p.unchangedElided++
 		return
 	}
-	p.o.auditSource(r.outcome.SourceID, auditlog.Entry{
-		Decision:         r.outcome.Decision,
-		File:             r.outcome.NativePath,
-		BytesIn:          r.outcome.BytesIn,
-		BytesOut:         r.outcome.BytesOut,
-		RedactionDensity: r.outcome.Density,
-		RuleHits:         r.outcome.RuleHits,
-		ObjectKey:        r.outcome.ObjectKey,
-		Reason:           r.outcome.Reason,
-	})
+	fo := r.outcome
+	p.o.auditSource(fo.SourceID, auditlog.Entry{Decision: fo.Decision, File: fo.NativePath, BytesIn: fo.BytesIn, BytesOut: fo.BytesOut,
+		RedactionDensity: fo.Density, RuleHits: fo.RuleHits, ObjectKey: fo.ObjectKey, Reason: fo.Reason})
 }
 
 // stageUpload adds a sealed object to the accumulator; a true final means it was decided here.

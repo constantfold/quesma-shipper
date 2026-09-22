@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"runtime"
@@ -24,8 +25,7 @@ type fileResult struct {
 	idx     int
 	outcome FileOutcome
 
-	// commit is the fingerprint the outcome asks to make durable, keyed by the outcome's path.
-	// Only the loop thread applies it.
+	// commit is the fingerprint to make durable under the outcome's path; only the loop thread applies it.
 	commit *Fingerprint
 
 	// unit is the raw bytes staged for the enricher; pending owns ciphertext until upload or abandonment.
@@ -66,17 +66,9 @@ type sourcePass struct {
 
 func (p *sourcePass) run(ctx context.Context) error {
 	n := len(p.disc.Candidates)
-	// Reading, scrubbing and sealing are pure CPU; an upload holds no core, so 8x compute lets PUTs
-	// overlap sealing.
-	workers := p.o.Workers
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
-	computeLimit := max(1, min(workers, n))
-	uploadLimit := p.o.UploadWorkers
-	if uploadLimit <= 0 {
-		uploadLimit = 8 * computeLimit
-	}
+	// Reading, scrubbing and sealing are CPU; an upload holds no core, so 8x compute overlaps PUTs.
+	computeLimit := max(1, min(cmp.Or(p.o.Workers, runtime.GOMAXPROCS(0)), n))
+	uploadLimit := cmp.Or(p.o.UploadWorkers, 8*computeLimit)
 	// A file in flight holds one slot at a time, so channels sized to this never block a sender.
 	limit := computeLimit + uploadLimit
 	p.slots = make([]FileOutcome, n)
@@ -156,10 +148,8 @@ func (p *sourcePass) run(ctx context.Context) error {
 		if p.unchangedElided == 1 {
 			noun = "file"
 		}
-		p.o.auditSource(p.src.ID, auditlog.Entry{
-			Decision: auditlog.DecisionUnchanged,
-			Reason:   fmt.Sprintf("%d %s unchanged by size and mtime, not opened; per-file entries elided", p.unchangedElided, noun),
-		})
+		p.o.auditSource(p.src.ID, auditlog.Entry{Decision: auditlog.DecisionUnchanged,
+			Reason: fmt.Sprintf("%d %s unchanged by size and mtime, not opened; per-file entries elided", p.unchangedElided, noun)})
 	}
 
 	if p.fatal {
@@ -201,8 +191,7 @@ func (p *sourcePass) canAdmit(ctx context.Context, next, inFlight int, stopped *
 	if *p.budget <= 0 {
 		return false
 	}
-	// The memstat limit was derived from one worst-case file, so raw bytes in flight are held to
-	// the same figure. A file larger than the limit runs alone.
+	// Raw bytes in flight stay under the memstat limit; a file larger than the limit runs alone.
 	if sz := p.disc.Candidates[next].Size; inFlight > 0 && p.inFlightBytes+sz > platform.MaxInFlightBytes() {
 		return false
 	}

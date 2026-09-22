@@ -13,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// reportPanic prints the stack to stderr only, since it can carry payload strings; the fact of the
-// crash is persisted and rides the next heartbeat.
+// reportPanic prints the stack to stderr only, since it can carry payload strings, and persists the fact.
 func reportPanic(errOut io.Writer, args []string, r any) {
 	fmt.Fprintf(errOut, "panic: %v\n\n%s", r, debug.Stack())
 	app.RecordPanic(verbOf(args), r)

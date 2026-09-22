@@ -45,8 +45,7 @@ type Runtime struct {
 	// OnProgress is the per-file hook a verb registers before flushing; nil is silent.
 	OnProgress formats.Progress
 
-	// OnLocked runs once a flush holds the non-blocking store lock, so a verb resets per-run
-	// artifacts there rather than at startup, where it would reset another process's.
+	// OnLocked runs once a flush holds the store lock, so per-run artifacts reset there, not another process's.
 	OnLocked func()
 
 	runID     string
@@ -56,8 +55,7 @@ type Runtime struct {
 	recMu sync.Mutex
 	rec   *formats.FailureRecord
 
-	// lastRep is the last completed tick's report, reused by the stall heartbeat; the watchdog is
-	// joined before judging, so the two never overlap.
+	// lastRep is the last completed tick's report, for the stall heartbeat; the watchdog is joined before judging.
 	lastRep formats.Report
 
 	// OnCrashShipped fires once, when a heartbeat carrying the crash report reached the sink.
@@ -102,8 +100,7 @@ func NewFrom(build Build, eff *config.Effective, paths config.Paths, remote cont
 		return nil, err
 	}
 
-	// The port is assigned only on success: a failed *vendPort would box a typed nil and panic on
-	// first use instead of reporting uploadErr. The client is kept even when the port is not.
+	// Assigned only on success, since a nil *vendPort boxed in the interface would panic instead of reporting uploadErr.
 	var up engine.UploadPort
 	var telemetry telemetrySubmitter
 	client, upErr := newControlPlaneClient(paths.StateDir)
@@ -146,8 +143,7 @@ func recipientsFor(eff *config.Effective, unit *identity.Unit) ([]age.Recipient,
 
 func (r *Runtime) Effective() *config.Effective { return r.eff }
 
-// RefreshAbsentRoots re-picks roots that did not resolve at startup and reports the source ids that
-// now do; every flush rebuilds the engine options, so the next tick collects them.
+// RefreshAbsentRoots re-picks roots that did not resolve at startup and returns the ids that now do.
 func (r *Runtime) RefreshAbsentRoots() []string { return config.RefreshAbsentRoots(r.eff, r.env) }
 
 func (r *Runtime) Remote() controlplane.Remote { return r.remote }

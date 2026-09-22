@@ -10,8 +10,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// Every run closes its clock and totals its bytes; the defer runs after the store flush, because
-// the run is not over while state is still being written.
+// Every run closes its clock and totals its bytes, after the store flush.
 func TestARunReportsItsFinishTimeAndItsBytes(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/a.jsonl", line1)

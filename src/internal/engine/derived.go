@@ -14,11 +14,10 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// Enrichment: running an enricher and shipping what it derived. A derived object takes the same
-// scrub, seal and upload path a raw file takes, being built from a database that holds auth material.
+// Enrichment: a derived object takes the raw file's scrub, seal and upload path, being built from a
+// database that holds auth material.
 
-// recomputeWindow is how recently a source file must have changed for its enrichment to be
-// recomputed anyway: the DB side moves on its own, and a late tool result would never be collected.
+// recomputeWindow re-enriches recently changed files anyway, since a late tool result moves only the DB.
 const recomputeWindow = 24 * time.Hour
 
 // enrichersFor returns a source's enabled enrichers sorted by id, so every flush runs them in one order.
@@ -34,15 +33,8 @@ func (o Options) enrichersFor(src sources.Resolved) []transforms.Enricher {
 }
 
 // enrichSource runs one enricher and ships whatever it derived. A non-nil error stops the run.
-func (o Options) enrichSource(
-	ctx context.Context,
-	store *commitBuffer,
-	src sources.Resolved,
-	e transforms.Enricher,
-	staged []transforms.RawUnit,
-	out *SourceOutcome,
-	rep *Report,
-) error {
+func (o Options) enrichSource(ctx context.Context, store *commitBuffer, src sources.Resolved, e transforms.Enricher,
+	staged []transforms.RawUnit, out *SourceOutcome, rep *Report) error {
 	out.EnricherID, out.EnricherVersion = e.ID(), e.Version()
 	// The first declared database candidate that exists; empty means absent, which is not an error.
 	dbPath := o.Env.FirstExistingFile(e.DBCandidates())
@@ -55,8 +47,7 @@ func (o Options) enrichSource(
 	out.EnrichInfos = append(out.EnrichInfos, res.Infos...)
 	rep.EnrichMismatch += res.Mismatched
 
-	// A lost window must appear in the audit log, not only a counter. Infos describe objects that
-	// ship, so only notes are recorded as skipped.
+	// Notes describe lost windows and go to the audit log; infos describe objects that ship.
 	for _, note := range res.Notes {
 		o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionSkipped, Reason: "enrich: " + note})
 	}
@@ -85,10 +76,8 @@ func (o Options) enrichSource(
 	}
 	for i, d := range res.Objects {
 		if halted != nil {
-			fos[i] = FileOutcome{
-				SourceID: src.ID, NativePath: d.NativePath, BytesIn: int64(len(d.Payload)), Derived: true,
-				Decision: auditlog.DecisionFailed, Reason: "not attempted: " + halted.Error(),
-			}
+			fos[i] = FileOutcome{SourceID: src.ID, NativePath: d.NativePath, BytesIn: int64(len(d.Payload)), Derived: true,
+				Decision: auditlog.DecisionFailed, Reason: "not attempted: " + halted.Error()}
 			continue
 		}
 		r := o.prepareDerived(store, src, e, dbPath, d)
@@ -150,12 +139,8 @@ func (o Options) prepareDerived(store *commitBuffer, src sources.Resolved, e tra
 	m.EnrichTail = d.Tail
 	m.EnrichAmbiguous = d.Ambiguous
 	m.EnrichLineDecodeErrors = d.LineDecodeErrors
-	m.DBProvenance = &transforms.DBProvenance{
-		DBPath:     formats.ApplyUserPlaceholder(dbPath, o.user),
-		ReadMethod: d.DBReadMethod,
-		Keyspaces:  d.DBKeyspaces,
-		RowsRead:   d.DBRowsRead,
-	}
+	m.DBProvenance = &transforms.DBProvenance{DBPath: formats.ApplyUserPlaceholder(dbPath, o.user),
+		ReadMethod: d.DBReadMethod, Keyspaces: d.DBKeyspaces, RowsRead: d.DBRowsRead}
 	r.pending = o.sealPrepared(fo, m, res.Out, Fingerprint{SourceHash: sourceHash, OutputHash: d.OutputHash, Enricher: ref})
 	return r
 }

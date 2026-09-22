@@ -47,24 +47,16 @@ func newControlPlaneClient(stateDir string) (*controlplane.Client, error) {
 	return enrollment.Client()
 }
 
-// newUploadPort assembles the write path. The enrollment record is mandatory, the allowlist is not:
-// with no upload_targets the tickets decide the destination, https only and exact key enforced.
+// newUploadPort needs no allowlist: without upload_targets, tickets decide, https only and exact key.
 func newUploadPort(client *controlplane.Client, eff *config.Effective) (*vendPort, error) {
 	targets, err := uploadTargets(eff)
 	if err != nil {
 		return nil, err
 	}
-	return &vendPort{
-		client:   client,
-		uploader: upload.New(),
-		targets:  targets,
-		writerID: controlplane.NewWriterID(),
-		now:      time.Now,
-	}, nil
+	return &vendPort{client: client, uploader: upload.New(), targets: targets, writerID: controlplane.NewWriterID(), now: time.Now}, nil
 }
 
-// AuthorizeAndUpload spends one bounded group: one authorization, then one PUT per ticket. The
-// batch is authorized whole or not at all; past that point the objects succeed or fail alone.
+// AuthorizeAndUpload authorizes the batch whole or not at all; past that, objects succeed or fail alone.
 func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
 	// Failures before the tickets carry no per-object information: one verdict for the group.
 	req, err := p.request(batch)
@@ -92,8 +84,7 @@ func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.Prepar
 	for i, obj := range batch {
 		issued, ok := tickets[obj.ObjectID]
 		if !ok {
-			out[i] = fmt.Errorf(
-				"upload: the control plane issued no ticket for object %q", obj.ObjectID)
+			out[i] = fmt.Errorf("upload: the control plane issued no ticket for object %q", obj.ObjectID)
 			continue
 		}
 		// The archive already holds these bytes: the sentinel commits the fingerprint without a PUT.
@@ -135,47 +126,25 @@ func (p *vendPort) request(batch []engine.PreparedObject) (controlplane.Authoriz
 		for _, d := range dropped {
 			fmt.Fprintf(os.Stderr, "warning: object %s: %s\n", o.Key, d)
 		}
-		objects[i] = controlplane.UploadObject{
-			ObjectID:   o.ObjectID,
-			Key:        o.Key,
-			Size:       int64(len(o.Body)),
-			SourceHash: o.SourceHash,
-			Metadata:   md,
-		}
+		objects[i] = controlplane.UploadObject{ObjectID: o.ObjectID, Key: o.Key, Size: int64(len(o.Body)), SourceHash: o.SourceHash, Metadata: md}
 	}
-	return controlplane.AuthorizeRequest{
-		WriterID: p.writerID,
-		IssuedAt: p.now().UTC(),
-		Objects:  objects,
-	}, nil
+	return controlplane.AuthorizeRequest{WriterID: p.writerID, IssuedAt: p.now().UTC(), Objects: objects}, nil
 }
 
-// uploadMetadata maps manifest metadata onto the closed request set, name by name. An unknown name
-// fails the whole batch: dropping it would ship plaintext metadata disagreeing with the manifest.
+// uploadMetadata refuses unknown names, since dropping one would disagree with the sealed manifest.
 func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string, error) {
 	for name := range md {
 		switch {
 		case name == "source-hash" || name == "ticket-id":
-			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
-				"metadata %q is derived by the server and may not be requested", name)
+			return controlplane.UploadMetadata{}, nil, fmt.Errorf("metadata %q is derived by the server and may not be requested", name)
 		case !slices.Contains(upload.MetadataNames, name):
-			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
-				"metadata %q is outside the closed request set", name)
+			return controlplane.UploadMetadata{}, nil, fmt.Errorf("metadata %q is outside the closed request set", name)
 		}
 	}
-	out := controlplane.UploadMetadata{
-		ManifestVersion: md["manifest-version"],
-		SourceID:        md["source-id"],
-		ShippedHash:     md["shipped-hash"],
-		ArtifactClass:   md["artifact-class"],
-		AgentVersion:    md["agent-version"],
-		ShapeSniff:      md["shape-sniff"],
-		Derived:         md["derived"],
-		EnrichStatus:    md["enrich-status"],
-		Kind:            md["kind"],
-	}
-	// A malformed agent version must not block the whole batch; the sealed manifest keeps it. The
-	// control plane accepts up to 128 bytes of printable ASCII.
+	out := controlplane.UploadMetadata{ManifestVersion: md["manifest-version"], SourceID: md["source-id"],
+		ShippedHash: md["shipped-hash"], ArtifactClass: md["artifact-class"], AgentVersion: md["agent-version"],
+		ShapeSniff: md["shape-sniff"], Derived: md["derived"], EnrichStatus: md["enrich-status"], Kind: md["kind"]}
+	// The control plane accepts up to 128 bytes of printable ASCII; the sealed manifest keeps anything else.
 	v := out.AgentVersion
 	if len(v) <= 128 && !strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
 		return out, nil, nil
@@ -185,8 +154,7 @@ func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string
 		"shipping without it (the sealed manifest keeps it)", v)}, nil
 }
 
-// classifyAuthorize keeps refused credentials (kills the install) apart from an outage (stops one
-// run); the unavailable wrapping drops the chain so neither can find the other.
+// classifyAuthorize drops the chain on an outage, so it can never read as refused credentials.
 func classifyAuthorize(err error) error {
 	if errors.Is(err, controlplane.ErrAuthorizeUnavailable) && !errors.Is(err, formats.ErrCredentialsRefused) {
 		return fmt.Errorf("%w: %v", engine.ErrUploadUnavailable, err)
@@ -194,8 +162,7 @@ func classifyAuthorize(err error) error {
 	return err
 }
 
-// classifyPut names the one PUT failure worth a second authorization inside a run: a store refusal
-// on a ticket whose own expiry has passed. Every other refusal waits for the next run.
+// classifyPut marks the only PUT failure worth reauthorizing: a refusal on a ticket past its expiry.
 func (p *vendPort) classifyPut(err error, ticket upload.Ticket) error {
 	var status *upload.StatusError
 	if !errors.As(err, &status) {
@@ -208,8 +175,7 @@ func (p *vendPort) classifyPut(err error, ticket upload.Ticket) error {
 	return err
 }
 
-// DescribeDestination names where objects go without printing a ticket URL, which is a credential.
-// The no-target wording also holds on a local-dev install, where nothing uploads.
+// DescribeDestination names where objects go without a ticket URL, which is a credential.
 func DescribeDestination(eff *config.Effective) string {
 	if len(eff.UploadTargets) == 0 {
 		return "presigned upload (no pinned origins; set upload_targets to pin)"
@@ -228,17 +194,12 @@ func DestinationHosts(destination, endpoint string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
 }
 
-// uploadTargets builds the allowlist; one bad entry refuses the whole list, or the operator's file
-// would disagree with the live origins.
+// uploadTargets refuses the whole list on one bad entry, so config never disagrees with live origins.
 func uploadTargets(eff *config.Effective) (upload.UploadTargetList, error) {
 	list := make(upload.UploadTargetList, 0, len(eff.UploadTargets))
 	for i, t := range eff.UploadTargets {
-		target, err := upload.NewUploadTarget(upload.TargetSpec{
-			Origin:            t.Origin,
-			Addressing:        upload.Addressing(t.Addressing),
-			PathPrefix:        t.PathPrefix,
-			AllowLoopbackHTTP: t.AllowLoopbackHTTP,
-		})
+		target, err := upload.NewUploadTarget(upload.TargetSpec{Origin: t.Origin, Addressing: upload.Addressing(t.Addressing),
+			PathPrefix: t.PathPrefix, AllowLoopbackHTTP: t.AllowLoopbackHTTP})
 		if err != nil {
 			return nil, fmt.Errorf("upload_targets entry %d: %w", i, err)
 		}
@@ -249,14 +210,6 @@ func uploadTargets(eff *config.Effective) (upload.UploadTargetList, error) {
 
 // toUploadTicket copies one issued ticket into the uploader's shape.
 func toUploadTicket(t controlplane.Ticket) upload.Ticket {
-	return upload.Ticket{
-		TicketID:            t.TicketID,
-		ObjectID:            t.ObjectID,
-		Method:              t.Method,
-		URL:                 t.URL,
-		ExpiresAt:           t.ExpiresAt,
-		RequiredHeaders:     maps.Clone(t.RequiredHeaders),
-		ContentLength:       t.ContentLength,
-		ContentLengthSigned: t.ContentLengthSigned,
-	}
+	return upload.Ticket{TicketID: t.TicketID, ObjectID: t.ObjectID, Method: t.Method, URL: t.URL, ExpiresAt: t.ExpiresAt,
+		RequiredHeaders: maps.Clone(t.RequiredHeaders), ContentLength: t.ContentLength, ContentLengthSigned: t.ContentLengthSigned}
 }

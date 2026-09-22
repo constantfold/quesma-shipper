@@ -56,7 +56,7 @@ type SourceHealth struct {
 	Oversize   int `json:"oversize,omitempty"`
 	Unreadable int `json:"unreadable,omitempty"`
 
-	// EnrichMismatch is a top-level alarm: the derived view is the only carrier of the DB-side fields.
+	// EnrichMismatch is an alarm: the derived view is the only carrier of the DB-side fields.
 	Enriched       int    `json:"enriched,omitempty"`
 	EnrichSkipped  int    `json:"enrich_skipped,omitempty"`
 	EnrichMismatch int    `json:"enrich_mismatch,omitempty"`
@@ -76,22 +76,9 @@ func (hb Heartbeat) WithReport(rep formats.Report, now time.Time) Heartbeat {
 	hb.Sources = []SourceHealth{}
 
 	for _, s := range rep.Sources {
-		sh := SourceHealth{
-			SourceID:     s.SourceID,
-			Family:       s.Family,
-			State:        string(s.Health),
-			Reason:       s.Reason,
-			Sniff:        string(s.Sniff),
-			AgentVersion: s.AgentVersion,
-			FilesSeen:    len(s.Files),
-			Oversize:     s.Oversize,
-			Unreadable:   s.Unreadable,
-
-			Enriched:       s.Enriched,
-			EnrichSkipped:  s.EnrichSkipped,
-			EnrichMismatch: s.EnrichMismatch,
-			EnrichErrors:   s.EnrichErrors,
-		}
+		sh := SourceHealth{SourceID: s.SourceID, Family: s.Family, State: string(s.Health), Reason: s.Reason,
+			Sniff: string(s.Sniff), AgentVersion: s.AgentVersion, FilesSeen: len(s.Files), Oversize: s.Oversize, Unreadable: s.Unreadable,
+			Enriched: s.Enriched, EnrichSkipped: s.EnrichSkipped, EnrichMismatch: s.EnrichMismatch, EnrichErrors: s.EnrichErrors}
 		if s.EnricherID != "" {
 			sh.Enricher = fmt.Sprintf("%s@%d", s.EnricherID, s.EnricherVersion)
 		}

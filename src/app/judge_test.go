@@ -236,10 +236,8 @@ func TestJudgeMergesEventsFromOtherWriters(t *testing.T) {
 func TestTheFactsRideACleanRunToo(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir, MaxFilesPerRun: 512}}
-	mem := platform.Delta{
-		Before: platform.Sample{HeapInuse: 1 << 20, NumGC: 5},
-		After:  platform.Sample{HeapInuse: 9 << 20, Sys: 40 << 20, NumGC: 12},
-	}
+	mem := platform.Delta{Before: platform.Sample{HeapInuse: 1 << 20, NumGC: 5},
+		After: platform.Sample{HeapInuse: 9 << 20, Sys: 40 << 20, NumGC: 12}}
 
 	r.JudgeTick(nil, formats.Report{SlowestScrubNanos: 2_500_000, SlowestScrubBytes: 4096}, false, mem)
 

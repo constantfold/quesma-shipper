@@ -19,8 +19,7 @@ const (
 	barWidth          = 16
 )
 
-// progressStream shows the first per-file lines of a --once run, then a bar on a terminal or a
-// periodic counter line elsewhere; every line also goes to the run log.
+// progressStream shows the first per-file lines, then a bar or periodic counter; all go to the run log.
 type progressStream struct {
 	out     io.Writer // the console, always present: warnings go here even under --quiet
 	log     io.Writer // nil until the log opens, and again if writing to it fails

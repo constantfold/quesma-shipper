@@ -107,9 +107,8 @@ func logCmd() *cobra.Command {
 		defer w.Flush()
 		fmt.Fprintf(w, "WHEN\tDECISION\tSOURCE\tIN\tOUT\tDENSITY\tDETAIL\n")
 		for _, e := range entries {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%.4f\t%s\n",
-				e.At.Local().Format("15:04:05"), e.Decision, e.SourceID, e.BytesIn, e.BytesOut, e.RedactionDensity,
-				cmp.Or(e.Reason, e.File))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%.4f\t%s\n", e.At.Local().Format("15:04:05"), e.Decision, e.SourceID,
+				e.BytesIn, e.BytesOut, e.RedactionDensity, cmp.Or(e.Reason, e.File))
 		}
 		return nil
 	})

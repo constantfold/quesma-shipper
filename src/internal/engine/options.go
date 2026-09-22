@@ -16,8 +16,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// Options configures one run: the policy app resolved from configuration, which keeps the core
-// free of the config package, and the ports and hooks the run uses.
+// Options configures one run: resolved policy, so the core never imports config, plus ports and hooks.
 type Options struct {
 	// OrganizationID is the organization= key segment; empty means the standalone placeholder.
 	OrganizationID string
@@ -64,8 +63,7 @@ type Options struct {
 	RunID string
 	Now   func() time.Time
 
-	// Test knobs, zero for the defaults: fingerprints buffered per state write, compute
-	// workers (GOMAXPROCS), and PUTs in flight (eight times compute).
+	// Test knobs, zero for defaults: fingerprints per state write, compute workers, PUTs in flight.
 	CommitBatch   int
 	Workers       int
 	UploadWorkers int
@@ -79,8 +77,7 @@ type Options struct {
 	scrubErr error
 }
 
-// The run's vocabulary lives in the contract layer, aliased here so an adapter that needs one
-// of these types does not import the core.
+// Aliased from the contract layer, so an adapter that needs these types does not import the core.
 type (
 	FileOutcome   = formats.FileOutcome
 	SourceOutcome = formats.SourceOutcome
@@ -100,8 +97,7 @@ func (o Options) scrubber() (*transforms.Scrubber, error) {
 // org is the organization= key segment; the fallback keeps key depth constant.
 func (o Options) org() string { return cmp.Or(o.OrganizationID, "default") }
 
-// UsernameFromStateDir derives the OS user name for the path placeholder, from the state directory
-// where possible so redaction and the object key agree. Exported so doctor previews the same value.
+// UsernameFromStateDir is the path placeholder's user, from the state dir so redaction and keys agree.
 func UsernameFromStateDir(stateDir string) string {
 	if name := formats.UsernameFromPath(stateDir); name != "" {
 		return name

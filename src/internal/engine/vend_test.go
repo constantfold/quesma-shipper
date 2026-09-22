@@ -15,15 +15,13 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
 )
 
-// The upload path: bounded authorization groups, unconditional PUTs, per-object commits, run
-// through the real loop against fakePort.
+// The upload path through the real loop against fakePort.
 
 func workers(compute, upload int) func(*engine.Options) {
 	return func(o *engine.Options) { o.Workers, o.UploadWorkers = compute, upload }
 }
 
-// Every batch is bounded; each key uploads once, receives a durable fingerprint, and a second run
-// finds everything unchanged. The report reads in candidate order however the work interleaved.
+// Every group is bounded, each key uploads once and commits, and the report keeps candidate order.
 func TestUploadBatchContract(t *testing.T) {
 	for _, tc := range []struct{ files, workers, uploadWorkers int }{
 		{5, 4, 0}, {6, 1, 1}, {40, 8, 0}, {96, 8, 3},
@@ -161,8 +159,7 @@ func TestExpiredTicketRetryContract(t *testing.T) {
 	}
 }
 
-// A refused or unavailable enricher group commits nothing for itself while raw objects keep their
-// commits, stops the remaining enrichers, and comes back out of engine.Run.
+// A stopped enricher group commits nothing of its own, stops later enrichers, and fails the run.
 func TestAStoppedDerivedGroupStopsTheSource(t *testing.T) {
 	for _, stop := range []error{engine.ErrUploadUnavailable, formats.ErrCredentialsRefused} {
 		t.Run(stop.Error(), func(t *testing.T) {
