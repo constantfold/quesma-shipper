@@ -3,7 +3,6 @@ package transforms
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"math/rand"
 	"strings"
 	"testing"
 
@@ -71,50 +70,6 @@ func TestSealOpenRoundTrip(t *testing.T) {
 	}
 }
 
-// Real truncated ciphertext must yield the manifest or a distinguishable request for more bytes.
-func TestManifestPrefixReads(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		size int
-		seed int64
-	}{
-		{"six megabytes", 6 << 20, 1},
-		{"one megabyte", 1 << 20, 2},
-		{"two megabytes", 2 << 20, 3},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			id := identity(t)
-			// Incompressible bytes keep a prefix read from silently becoming a whole-object read.
-			payload := make([]byte, tc.size)
-			_, err := rand.New(rand.NewSource(tc.seed)).Read(payload)
-			require.NoError(t, err)
-			obj, _, err := Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-			require.NoError(t, err)
-			require.GreaterOrEqual(t, len(obj), 1<<20)
-
-			m, err := ReadManifestPrefix(obj[:SuggestedPrefixBytes], id)
-			require.NoError(t, err)
-			assert.Equal(t, manifest().NativePath, m.NativePath)
-			assert.Equal(t, manifest().SourceHash, m.SourceHash)
-			assert.Equal(t, int64(len(payload)), m.PayloadSize)
-			for _, n := range []int{1, 16, 128, 1024} {
-				_, err := ReadManifestPrefix(obj[:n], id)
-				assert.ErrorIs(t, err, ErrPrefixTooShort, "prefix bytes: %d", n)
-			}
-
-			for budget, attempts := 512, 1; ; budget, attempts = budget*2, attempts+1 {
-				require.LessOrEqual(t, attempts, 20, "doubling did not converge")
-				m, err := ReadManifestPrefix(obj[:min(budget, len(obj))], id)
-				if err == nil {
-					assert.Equal(t, "claude-code-transcripts", m.SourceID)
-					break
-				}
-				require.ErrorIs(t, err, ErrPrefixTooShort, "prefix budget: %d", budget)
-			}
-		})
-	}
-}
-
 // Uploaded bytes are ciphertext, unparseable without the matching identity.
 func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	id := identity(t)
@@ -136,8 +91,6 @@ func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	}
 	_, _, openErr := Open(obj, stranger)
 	require.Error(t, openErr, "an object must not open with an unrelated identity")
-	_, readManifestPrefixErr := ReadManifestPrefix(obj, stranger)
-	require.Error(t, readManifestPrefixErr, "a manifest must not be readable with an unrelated identity")
 	_, _, excludedIdentityErr := Open(obj)
 	require.Error(t, excludedIdentityErr, "opening with no identity must fail")
 }

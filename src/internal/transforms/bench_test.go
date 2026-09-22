@@ -18,10 +18,10 @@ import (
 // transcript-1MiB is many short lines, so per-line cost dominates, while bigvalue-8MiB is one
 // line whose payload sits in a single string, so the per-value matchers do.
 func BenchmarkScrubSynthetic(b *testing.B) {
-	benchmarkSynthetic(b, syntheticTranscript, syntheticBigValue)
+	benchmarkSynthetic(b, syntheticTranscript(1<<20), syntheticBigValue(8<<20, 20260817, randCommandOutput))
 }
 
-func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
+func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
 	cfg := DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := New(cfg)
@@ -31,8 +31,8 @@ func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
 		name    string
 		payload []byte
 	}{
-		{"transcript-1MiB", transcript(1 << 20)},
-		{"bigvalue-8MiB", bigValue(8 << 20)},
+		{"transcript-1MiB", transcript},
+		{"bigvalue-8MiB", bigValue},
 	}
 
 	for _, tc := range cases {
@@ -106,11 +106,7 @@ func syntheticTranscript(size int) []byte {
 
 // syntheticBigValue is one record whose tool result holds the whole payload: the shape a
 // spilled build log or a big file read takes.
-func syntheticBigValue(size int) []byte {
-	return syntheticBigValueWith(size, 20260817, randCommandOutput)
-}
-
-func syntheticBigValueWith(size int, seed int64, output func(*rand.Rand, int) string) []byte {
+func syntheticBigValue(size int, seed int64, output func(*rand.Rand, int) string) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	body := output(rng, size)
 	line, err := json.Marshal(map[string]any{
@@ -158,7 +154,7 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 // none, so the email rule (the most expensive pattern on real data) never fires there. A second
 // benchmark rather than an edit to the first, whose numbers are the tracked series.
 func BenchmarkScrubSyntheticAt(b *testing.B) {
-	benchmarkSynthetic(b, syntheticTranscriptAt, syntheticBigValueAt)
+	benchmarkSynthetic(b, syntheticTranscriptAt(1<<20), syntheticBigValue(8<<20, 20260819, randCommandOutputAt))
 }
 
 // randCommandOutputAt carries the '@' shapes tool output actually has: scoped package specs,
@@ -208,10 +204,6 @@ func syntheticTranscriptAt(size int) []byte {
 		}
 	}
 	return []byte(b.String())
-}
-
-func syntheticBigValueAt(size int) []byte {
-	return syntheticBigValueWith(size, 20260819, randCommandOutputAt)
 }
 
 const hexDigits = "0123456789abcdef"

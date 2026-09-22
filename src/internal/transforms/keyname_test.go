@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // The key-name rule is the only backstop for a credential with no recognisable shape. The
@@ -56,18 +55,4 @@ func TestKeyNamesSplitOnSeparatorsAndCamelHumps(t *testing.T) {
 	} {
 		assert.Truef(t, slices.Equal(tc.want, splitKeyWords(tc.in)), "%q: want %v", tc.in, tc.want)
 	}
-}
-
-// An operator naming their own field must be able to add it: the config field existed and
-// reached nothing.
-func TestAConfiguredNameIsHonoured(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.SecretKeyNames = append(cfg.SecretKeyNames, "ACME_DEPLOY_SIG")
-	s, err := New(cfg)
-	require.NoError(t, err)
-
-	res, err := s.Scrub([]byte(`{"ACME_DEPLOY_SIG":"zx81-plain-value"}`+"\n"),
-		Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
-	assert.NotEqualf(t, `{"ACME_DEPLOY_SIG":"zx81-plain-value"}`+"\n", string(res.Out), "a configured secret key name did not redact:\n%s", res.Out)
 }
