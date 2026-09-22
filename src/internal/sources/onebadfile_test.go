@@ -16,16 +16,15 @@ import (
 func TestOneUnreadableFileDoesNotSilenceTheSource(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude", "projects", "p")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
 
 	// The oldest file is the broken one.
 	bad := filepath.Join(dir, "00000000-0000-4000-8000-000000000000.jsonl")
-	require.NoError(t, os.WriteFile(bad, []byte("\x00\x00\x00 not json at all\n"), 0o600))
+	write(t, bad, "\x00\x00\x00 not json at all\n")
 	older(t, bad)
 
 	for _, name := range []string{"11111111", "22222222", "33333333"} {
 		good := filepath.Join(dir, name+"-1111-4111-8111-111111111111.jsonl")
-		require.NoError(t, os.WriteFile(good, []byte(`{"type":"user","uuid":"u1"}`+"\n"), 0o600))
+		write(t, good, `{"type":"user","uuid":"u1"}`+"\n")
 	}
 
 	d := discover(t, source(filepath.Join(home, ".claude"), []string{"projects/**/*.jsonl"}), nil)
@@ -39,10 +38,9 @@ func TestOneUnreadableFileDoesNotSilenceTheSource(t *testing.T) {
 func TestASourceWhereEveryFileIsUnreadableIsStillCondemned(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude", "projects", "p")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
 	for _, name := range []string{"11111111", "22222222", "33333333"} {
 		p := filepath.Join(dir, name+"-1111-4111-8111-111111111111.jsonl")
-		require.NoError(t, os.WriteFile(p, []byte("\x00\x00\x00 encrypted now\n"), 0o600))
+		write(t, p, "\x00\x00\x00 encrypted now\n")
 	}
 
 	d := discover(t, source(filepath.Join(home, ".claude"), []string{"projects/**/*.jsonl"}), nil)

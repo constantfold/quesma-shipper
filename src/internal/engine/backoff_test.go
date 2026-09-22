@@ -15,79 +15,64 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// An unreadable file must stop consuming the run budget.
+// Unreadable files park across restarts, then recover even when their bytes revert to a committed hash.
 func TestUnreadableFileBackoffAndRecovery(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/good.jsonl", line1)
-	bad := f.writeTranscript("p/bad.jsonl", line1)
-	require.NoError(t, os.Chmod(bad, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
-	if _, err := os.ReadFile(bad); err == nil {
-		t.Skip("this user can read a mode-000 file")
+	for _, tc := range []struct {
+		name    string
+		revert  bool
+		shipped int
+	}{
+		{"first upload", false, 1},
+		{"reverted to shipped bytes", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.writeTranscript("p/good.jsonl", line1)
+			bad := f.writeTranscript("p/bad.jsonl", line1)
+			if tc.revert {
+				require.Equal(t, 2, f.run().Shipped)
+				// A changed file bypasses the size-and-mtime pre-filter and reaches the failing read.
+				f.writeTranscript("p/bad.jsonl", line1+line2)
+			}
+			require.NoError(t, os.Chmod(bad, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
+			if _, err := os.ReadFile(bad); err == nil {
+				t.Skip("this user can read a mode-000 file")
+			}
+
+			if tc.revert {
+				f.reopen()
+			}
+			first := f.run()
+			require.Truef(t, first.Parked == 1 && first.Failed == 0, "expected the unreadable file to park once, got %+v", first)
+			if !tc.revert {
+				f.reopen()
+				second := f.run()
+				assert.Equalf(t, 0, second.Parked, "the unreadable file was read again inside its backoff: %+v", second)
+				assert.Equalf(t, 1, second.Skipped, "expected it to be skipped while parked, got %+v", second)
+			}
+
+			require.NoError(t, os.Chmod(bad, 0o600))
+			if tc.revert {
+				f.writeTranscript("p/bad.jsonl", line1)
+			}
+			f.reopen()
+			rep := f.run(func(o *engine.Options) {
+				later := o.Now().Add(2 * time.Hour)
+				o.Now = func() time.Time { return later }
+			})
+			require.Equalf(t, tc.shipped, rep.Shipped, "unexpected uploads after the backoff: %+v", rep)
+			if tc.revert {
+				require.Equalf(t, 2, rep.Unchanged, "reverted bytes should be unchanged: %+v", rep)
+			}
+
+			doc, err := engine.Peek(f.stateDir)
+			require.NoError(t, err)
+			fp, ok := doc.Entries[engine.Key{SourceID: "claude-code-transcripts", NativePath: bad}]
+			require.Truef(t, ok, "no entry for %s in %+v", bad, doc.Entries)
+			assert.Truef(t, !fp.Parked && fp.LastError == "" && fp.Attempts == 0 && fp.BackoffUntil.IsZero(), "the park survived a clean read: %+v", fp)
+		})
 	}
-
-	first := f.run()
-	// Parked, not failed: the entry is held off with a backoff, which the fingerprint records.
-	require.Truef(t, first.Parked == 1 && first.Failed == 0, "expected the unreadable file to park once, got %+v", first)
-
-	// Second tick, immediately: inside the backoff the file is skipped rather than read again.
-	f.reopen()
-	second := f.run()
-	assert.Equalf(t, 0, second.Parked, "the unreadable file was read again inside its backoff: %+v", second)
-	assert.Equalf(t, 1, second.Skipped, "expected it to be skipped while parked, got %+v", second)
-
-	if err := os.Chmod(bad, 0o600); err != nil { // whatever was wrong is now fixed
-		t.Fatal(err)
-	}
-
-	// Two hours later: past the one-hour cap on the backoff.
-	f.reopen()
-	rep := f.run(func(o *engine.Options) {
-		later := o.Now().Add(2 * time.Hour)
-		o.Now = func() time.Time { return later }
-	})
-	assert.Equalf(t, 1, rep.Shipped, "a file that became readable was not collected after its backoff: %+v", rep)
-}
-
-// A park that has been overtaken by events must clear. Otherwise `status` and `doctor` report a
-// healthy file as parked for good, while the heartbeat calls the same file unchanged.
-func TestAParkedFileStopsBeingParkedOnceItReadsCleanAgain(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/good.jsonl", line1)
-	bad := f.writeTranscript("p/bad.jsonl", line1)
-
-	// Ship it first, so the entry carries the source hash only a completed ship can write.
-	require.Equal(t, 2, f.run().Shipped)
-
-	// It changes, so the size-and-mtime pre-filter no longer short-circuits, and it cannot be
-	// read: that is what parks it.
-	f.writeTranscript("p/bad.jsonl", line1+line2)
-	require.NoError(t, os.Chmod(bad, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
-	if _, err := os.ReadFile(bad); err == nil {
-		t.Skip("this user can read a mode-000 file")
-	}
-	f.reopen()
-	require.Equal(t, 1, f.run().Parked)
-
-	// Readable again, and reverted to the bytes that shipped: the next run past the backoff reads
-	// it, matches the committed hash, and ships nothing. The entry must come out clean.
-	require.NoError(t, os.Chmod(bad, 0o600))
-	f.writeTranscript("p/bad.jsonl", line1)
-	f.reopen()
-	rep := f.run(func(o *engine.Options) {
-		later := o.Now().Add(2 * time.Hour)
-		o.Now = func() time.Time { return later }
-	})
-	require.Truef(t, rep.Shipped == 0 && rep.Unchanged == 2, "unchanged bytes should re-ship nothing, got %+v", rep)
-
-	doc, err := engine.Peek(f.stateDir)
-	require.NoError(t, err)
-	fp, ok := doc.Entries[engine.Key{SourceID: "claude-code-transcripts", NativePath: bad}]
-	if !ok {
-		t.Fatalf("no entry for %s in %+v", bad, doc.Entries)
-	}
-	assert.Truef(t, !fp.Parked && fp.LastError == "" && fp.Attempts == 0 && fp.BackoffUntil.IsZero(), "the park survived a clean read: %+v", fp)
 }
 
 // A revoked install must fail fast: without the latch every remaining file repeats the same

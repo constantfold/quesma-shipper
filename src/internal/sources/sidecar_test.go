@@ -115,7 +115,6 @@ func TestSidecarFollowsWorktreeGitdirPointer(t *testing.T) {
 		write(t, filepath.Join(configDir, "config"), "[remote \"origin\"]\n\turl = git@github.com:acme/api.git\n")
 
 		worktree := filepath.Join(home, "work", "wt")
-		require.NoError(t, os.MkdirAll(worktree, 0o700))
 		write(t, filepath.Join(worktree, ".git"), "gitdir: "+gitDir+"\n")
 
 		agentRoot := filepath.Join(home, ".claude")
@@ -166,24 +165,6 @@ func TestSidecarHandlesAVanishedCWD(t *testing.T) {
 
 	rec := runSidecar(t, home, agentRoot)
 	assert.NotEqual(t, "", rec.GaveUp, "a vanished cwd should be recorded as a give-up, not an error")
-}
-
-// --- ordering ----------------------------------------------------------------
-
-// Candidates are oldest first: for a store that deletes itself, the file closest to deletion cannot be collected later.
-func TestOldestFileIsFirstInLine(t *testing.T) {
-	root := t.TempDir()
-	old := filepath.Join(root, "projects", "p", "old.jsonl")
-	fresh := filepath.Join(root, "projects", "p", "fresh.jsonl")
-	write(t, old, `{"a":1}`+"\n")
-	write(t, fresh, `{"a":2}`+"\n")
-
-	longAgo := mustParse(t, "2020-01-01T00:00:00Z")
-	require.NoError(t, os.Chtimes(old, longAgo, longAgo))
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	// It must be first in line.
-	assert.Truef(t, strings.HasSuffix(d.Candidates[0].RelPath, "old.jsonl"), "the file closest to deletion must be collected first, got %s", d.Candidates[0].RelPath)
 }
 
 // --- helpers ----------------------------------------------------------------

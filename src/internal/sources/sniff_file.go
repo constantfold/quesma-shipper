@@ -35,21 +35,17 @@ func sniff(path string, spec *Sniff) (SniffResult, string) {
 		if body := bytes.TrimLeft(head, " \t\n\r"); len(body) == 0 || (body[0] != '{' && body[0] != '[') {
 			return SniffUnexpectedShape, ""
 		}
-		return SniffOK, ""
 	case "magic":
 		want, err := hex.DecodeString(spec.MagicHex)
 		if err != nil || !bytes.HasPrefix(head, want) {
 			return SniffUnexpectedShape, ""
 		}
-		return SniffOK, ""
 	case "text":
 		if bytes.IndexByte(head, 0) >= 0 {
 			return SniffUnexpectedShape, ""
 		}
-		return SniffOK, ""
-	default:
-		return SniffOK, ""
 	}
+	return SniffOK, ""
 }
 
 func readHead(path string, budget int64) ([]byte, os.FileInfo, error) {
@@ -80,8 +76,8 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 	}
 	idx := sampleIndexes(len(matched), sniffSampleSize)
 
-	var best, okResult SniffResult
-	failures, ok, version := 0, false, ""
+	var best SniffResult
+	failures, version := 0, ""
 	// Scan the whole sample so every unreadable file is counted, and take the version from the
 	// newest readable one (idx ascends by mtime): the closest proxy for the current install.
 	for i, at := range idx {
@@ -93,12 +89,9 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 			}
 			continue
 		}
-		ok, okResult, version = true, result, agentVersion
+		best, version = result, agentVersion
 	}
-	if !ok {
-		return best, "", failures
-	}
-	return okResult, version, failures
+	return best, version, failures
 }
 
 // sampleIndexes picks up to n positions spread evenly across length, always including the first and the last.

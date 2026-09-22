@@ -89,21 +89,27 @@ func TestHealthIsEmittedAtZeroCandidates(t *testing.T) {
 
 // Retention-aware ordering: a bounded run must take the files closest to deletion first.
 func TestCandidatesAreOldestFirst(t *testing.T) {
-	root := t.TempDir()
-	older := filepath.Join(root, "projects", "p", "older.jsonl")
-	newer := filepath.Join(root, "projects", "p", "newer.jsonl")
-	write(t, older, `{"a":1}`+"\n")
-	write(t, newer, `{"a":2}`+"\n")
-
-	old := mustParse(t, "2026-01-01T00:00:00Z")
-	recent := mustParse(t, "2026-07-30T00:00:00Z")
-	require.NoError(t, os.Chtimes(older, old, old))
-	require.NoError(t, os.Chtimes(newer, recent, recent))
-
-	d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
-	require.Lenf(t, d.Candidates, 2, "expected 2 candidates, got %d", len(d.Candidates))
-	if !strings.HasSuffix(d.Candidates[0].RelPath, "older.jsonl") {
-		t.Errorf("oldest must come first, got %v", []string{d.Candidates[0].RelPath, d.Candidates[1].RelPath})
+	for _, tc := range []struct{ older, newer, oldTime, newTime string }{
+		{"older.jsonl", "newer.jsonl", "2026-01-01T00:00:00Z", "2026-07-30T00:00:00Z"},
+		{"old.jsonl", "fresh.jsonl", "2020-01-01T00:00:00Z", ""},
+	} {
+		t.Run(tc.older, func(t *testing.T) {
+			root := t.TempDir()
+			for _, file := range []struct{ name, body, at string }{
+				{tc.older, `{"a":1}` + "\n", tc.oldTime},
+				{tc.newer, `{"a":2}` + "\n", tc.newTime},
+			} {
+				path := filepath.Join(root, "projects", "p", file.name)
+				write(t, path, file.body)
+				if file.at != "" {
+					at := mustParse(t, file.at)
+					require.NoError(t, os.Chtimes(path, at, at))
+				}
+			}
+			d := discover(t, source(root, []string{"projects/**/*.jsonl"}), nil)
+			require.Len(t, d.Candidates, 2)
+			assert.Truef(t, strings.HasSuffix(d.Candidates[0].RelPath, tc.older), "oldest must come first: %+v", d.Candidates)
+		})
 	}
 }
 
@@ -245,11 +251,7 @@ func TestADirectoryNamedLikeADeniedFileIsStillWalked(t *testing.T) {
 		got = append(got, c.RelPath)
 	}
 	for _, want := range []string{"projects/.env/a.jsonl", "projects/release.key/b.jsonl"} {
-		found := false
-		for _, g := range got {
-			found = found || g == want
-		}
-		assert.Truef(t, found, "collected %v, missing %s", got, want)
+		assert.Containsf(t, got, want, "collected %v, missing %s", got, want)
 	}
 	// The credential file itself is still denied by its own name.
 	assert.Lenf(t, got, 2, "collected %v, expected the two transcripts and nothing else", got)
