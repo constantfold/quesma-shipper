@@ -17,14 +17,11 @@ import (
 type Spec = common.Spec
 type Status = common.Status
 
-// legacyTaskName is the machine-global name used before names were per-user. Task Scheduler's
-// namespace is machine-wide, so it let one user's install overwrite another's — and made a second
-// user's registration fail outright when they could not write the first user's task.
+// legacyTaskName is the pre-per-user name; machine-wide, it let one user's install overwrite or block another's.
 const legacyTaskName = `\Quesma Shipper`
 const taskRunnerName = "quesma-shipper-supervisor.exe"
 
-// taskName suffixes the SID rather than the account name: a machine can see the same account name
-// in more than one domain, and a name collision here is what the suffix exists to prevent.
+// taskName suffixes the SID, not the account name, which can repeat across domains.
 func taskName(userSID string) string { return legacyTaskName + " - " + userSID }
 
 func taskRunner(executable string) string {
@@ -42,7 +39,6 @@ func programFromTask(command string) string {
 }
 
 // renderTask points at the stable runner so every TUF replacement remains under Task Scheduler.
-// The account name goes in the description because the name itself carries only the SID.
 func renderTask(spec Spec, userSID, userName string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -100,14 +96,12 @@ type taskDocument struct {
 	UserID  string `xml:"Principals>Principal>UserId"`
 }
 
-// enabled treats an absent Settings/Enabled as enabled. Task Scheduler stores no element for a
-// setting left at its default, so reading a missing one as false calls a healthy task disabled.
+// enabled: Task Scheduler omits a setting left at its default, so an absent Settings/Enabled means enabled.
 func (d taskDocument) enabled() bool {
 	return d.Enabled == nil || *d.Enabled
 }
 
-// legacyTaskIsOurs reports whether the pre-rename task belongs to this user: another user's task is
-// neither ours to retire nor, without their permissions, deletable.
+// legacyTaskIsOurs: another user's pre-rename task is neither ours to retire nor deletable.
 func legacyTaskIsOurs(doc taskDocument, userSID string) bool {
 	return doc.UserID != "" && strings.EqualFold(doc.UserID, userSID)
 }
@@ -128,9 +122,7 @@ func taskXMLForSchtasks(raw string) []byte {
 	return encoded
 }
 
-// taskXMLUTF8 normalizes what schtasks actually writes when stdout is redirected: UTF-16 with a
-// BOM on some Windows versions, and on others single-byte text that still declares UTF-16, which
-// encoding/xml refuses outright. Only interleaved NUL bytes distinguish the two without a BOM.
+// taskXMLUTF8 accepts schtasks' UTF-16 with a BOM and its single-byte text declaring UTF-16; NULs tell them apart.
 func taskXMLUTF8(raw []byte) []byte {
 	switch {
 	case len(raw) >= 2 && raw[0] == 0xff && raw[1] == 0xfe:

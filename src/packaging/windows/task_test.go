@@ -51,8 +51,7 @@ func TestParseTaskAcceptsSchtasksUTF16Output(t *testing.T) {
 	require.Truef(t, doc.enabled() && doc.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
 }
 
-// Windows 11 26200 writes single-byte text that still declares UTF-16, with no BOM and a doubled
-// CR. Read literally that is neither valid UTF-16 nor an encoding encoding/xml will accept.
+// Windows 11 26200 writes single-byte text declaring UTF-16, with no BOM and a doubled CR.
 func TestParseTaskAcceptsSingleByteOutputThatDeclaresUTF16(t *testing.T) {
 	raw := "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\r\n" +
 		`<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` +
@@ -65,8 +64,7 @@ func TestParseTaskAcceptsSingleByteOutputThatDeclaresUTF16(t *testing.T) {
 	assert.True(t, legacyTaskIsOurs(doc, "S-1-5-21-7-1001"), "the principal did not survive the encoding fixup, so a legacy task cannot be retired")
 }
 
-// Task Scheduler stores no element for a setting left at its default, so a live enabled task comes
-// back with no Settings/Enabled at all. Reading that as false reports a running task as disabled.
+// Task Scheduler omits a setting left at its default, so a live enabled task has no Settings/Enabled.
 func TestParseTaskTreatsAnAbsentEnabledAsEnabled(t *testing.T) {
 	raw := `<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` +
 		`<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>` +

@@ -15,8 +15,7 @@ const (
 	sidInteractive        = "S-1-5-4"
 )
 
-// The masks an ACL listing reports: ReadAndExecute, the generic read/execute an inherit-only entry
-// carries, Modify and FullControl.
+// The masks an ACL listing reports: ReadAndExecute, inherit-only generic read/execute, Modify, FullControl.
 const (
 	maskReadExecute        = 0x001200A9
 	maskGenericReadExecute = 0xA0000000
@@ -24,8 +23,7 @@ const (
 	maskFullControl        = 0x001F01FF
 )
 
-// The first fixtures are the DACLs of real directories, so a rule change has to argue with the
-// paths users actually pick.
+// The first fixtures are real directories' DACLs, so a rule change has to argue with the paths users pick.
 func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -41,8 +39,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			},
 		},
 		{
-			// CREATOR OWNER holds GENERIC_ALL here, but inherit-only and on a directory only an
-			// elevated administrator can create in: neither half is a finding.
+			// CREATOR OWNER's GENERIC_ALL is inherit-only, on a directory only an administrator can create in.
 			name: `C:\Program Files`,
 			aces: []ace{
 				{SID: sidUsers, Mask: maskGenericReadExecute, Allow: true, InheritOnly: true},
@@ -52,8 +49,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			},
 		},
 		{
-			// AppendData on a directory is CreateDirectories: this is why any user can mkdir at C:\,
-			// and why a hand-made shared folder there is the wrong install target.
+			// AppendData on a directory is CreateDirectories, which is why any user can mkdir at C:\.
 			name: `C:\`,
 			aces: []ace{
 				{SID: sidAuthenticatedUsers, Mask: fileAppendData, Allow: true},
@@ -63,8 +59,7 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			want: []string{sidAuthenticatedUsers},
 		},
 		{
-			// INTERACTIVE matches every logged-on account, so Modify here is write access for
-			// whoever else uses the machine.
+			// INTERACTIVE matches every logged-on account.
 			name: `C:\Users\Public`,
 			aces: []ace{
 				{SID: sidCreatorOwner, Mask: maskFullControl, Allow: true},

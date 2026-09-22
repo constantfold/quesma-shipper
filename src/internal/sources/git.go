@@ -36,8 +36,7 @@ func gitRemoteFor(cwd string, cfg *GitRead) (remote, project, gaveUp string) {
 	return "", "", "no usable remote in git config"
 }
 
-// findGitDir walks up from cwd to the checkout root holding .git and the repository's COMMON git dir:
-// a linked worktree's own gitdir holds no config, and its commondir names the one that does.
+// findGitDir returns the checkout root and the COMMON git dir: a linked worktree's own gitdir holds no config.
 func findGitDir(cwd string, cfg *GitRead, ceiling string) (root, common string, ok bool) {
 	if !filepath.IsAbs(cwd) {
 		return "", "", false
@@ -117,9 +116,7 @@ func remoteURLs(body string, take []string) []string {
 	return out
 }
 
-// NormaliseRemote converts a remote to a stable host/path label and the project name. Userinfo is stripped
-// UNCONDITIONALLY: a remote can carry a live credential. Local filesystem remotes are rejected, and the
-// result drops scheme, port and .git suffix so ssh and https collapse to one label.
+// NormaliseRemote returns one host/path label for ssh and https alike, ALWAYS dropping userinfo, which can be a live credential.
 func NormaliseRemote(raw string) (hostPath, project string, err error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

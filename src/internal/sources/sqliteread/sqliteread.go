@@ -181,8 +181,7 @@ func readColdCopy(o Options) (result Result, err error) {
 	return readAt(o, copied, ReadColdCopy)
 }
 
-// CopyCold copies a database and its sidecars into dir. The sidecars must keep matching basenames, or the copy
-// opens without the WAL and silently shows data from before the last checkpoint.
+// CopyCold keeps sidecar basenames, or the copy opens without its WAL and shows pre-checkpoint data.
 func CopyCold(src, dir string) (string, error) {
 	dst := filepath.Join(dir, filepath.Base(src))
 	if err := copyFile(src, dst); err != nil {

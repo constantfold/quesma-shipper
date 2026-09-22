@@ -2,8 +2,7 @@ package platform
 
 import "sync"
 
-// OS release and boot time for the control-plane headers: read once per process, best-effort —
-// a platform where the probe fails reports "" and the dashboard shows a blank.
+// OS release and boot time for the control-plane headers, read once per process; "" when the probe fails.
 
 var (
 	osVersion = sync.OnceValue(readOSVersion)

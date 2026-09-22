@@ -42,12 +42,10 @@ type Spec struct {
 	// LogDir is where stdout/stderr go; discarded output makes "it never runs" undiagnosable.
 	LogDir string
 
-	// Tick is the configured collection cadence. launchd and systemd ignore it because the loop
-	// keeps its own ticker, but the cron fallback IS the ticker. Zero means the 15-minute default.
+	// Tick matters only to the cron fallback, which IS the ticker; zero means 15 minutes.
 	Tick time.Duration
 
-	// StopTimeout is how long the supervisor waits after SIGTERM before killing. It comes from
-	// configuration because it has to outlast the drain deadline; a killed drain looks clean.
+	// StopTimeout must outlast the drain deadline: a drain killed after SIGTERM looks clean.
 	StopTimeout time.Duration
 }
 
@@ -116,8 +114,7 @@ func ValidateInstall(spec Spec) error {
 var ErrCronManual = errors.New("supervise: this host has no systemd --user; " +
 	"add the printed crontab line yourself")
 
-// ErrTaskDeleteUnverified marks a Windows task delete whose outcome could not be confirmed either
-// way. Removal must not be blocked by it: a user who wants the software gone has to get there.
+// ErrTaskDeleteUnverified marks an unconfirmed Windows task delete; it must not block removal.
 var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")
 
 // CronHint is the non-systemd fallback, a line the operator adds manually.

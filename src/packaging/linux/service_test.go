@@ -17,8 +17,7 @@ func testSpec() Spec {
 		LogDir: "/home/jane/.local/state/trajectory-shipper/logs"}
 }
 
-// A context that is already done makes exec.Cmd.Start fail before it spawns anything, so these
-// never reach the developer's real supervisor.
+// A done context fails exec.Cmd.Start before spawning, so this never reaches the real supervisor.
 func TestRestartHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

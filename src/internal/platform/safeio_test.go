@@ -131,9 +131,7 @@ func TestOpenTruncatingEmptiesWhatItOpens(t *testing.T) {
 	assert.Equalf(t, "this run\n", string(got), "content after reopen: %q", got)
 }
 
-// A stranded temp from a crashed run must never block a later write: the temp name is random,
-// never derived from the pid, so a recurring pid cannot recreate the name. There is no cleanup,
-// by decision: the leftover is inert garbage and stays.
+// A stranded temp never blocks a later write, and by decision stays as inert garbage.
 func TestWriteAtomicIsNotWedgedByAStrandedTemp(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "x.json")

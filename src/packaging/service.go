@@ -30,8 +30,7 @@ const (
 	selfUpdateHopName = "selfupdate_hop"
 )
 
-// RecordRun stamps the marker after every flush, including one that shipped nothing: the
-// fingerprint document only advances on collection, so it cannot show a quiet install is alive.
+// RecordRun stamps every flush, even an empty one: fingerprints advance only on collection, so cannot show a quiet install is alive.
 func RecordRun(stateDir string, at time.Time) error {
 	return platform.WriteAtomic(filepath.Join(stateDir, runMarker), []byte(at.UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
@@ -46,8 +45,7 @@ func lastRun(stateDir string) time.Time {
 	return t
 }
 
-// RotateLogs bounds a crash loop appending the same stack: it moves an oversized agent log aside at
-// startup, which works because the supervisor reopens the path per launch.
+// RotateLogs bounds a crash loop's logs at startup; the supervisor reopens the path per launch.
 func RotateLogs(logDir string) {
 	if logDir == "" {
 		return
@@ -95,8 +93,7 @@ func ProgramRemovalDeferred() bool { return runtime.GOOS == "windows" }
 
 func RemovalUnverified(err error) bool { return errors.Is(err, common.ErrTaskDeleteUnverified) }
 
-// RestartBudget is how long a restart may legitimately take: the agent ships a final slice
-// under drainDeadline before it exits, and the supervisor kills it only after that window.
+// RestartBudget is the supervisor's kill window after a drain of drainDeadline.
 func RestartBudget(drainDeadline time.Duration) time.Duration {
 	return common.ExitTimeout(common.Spec{StopTimeout: drainDeadline})
 }

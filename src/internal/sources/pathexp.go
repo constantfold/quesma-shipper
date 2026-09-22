@@ -22,9 +22,7 @@ func OSEnv() (Env, error) {
 	return Env{Home: home, Lookup: os.LookupEnv}, nil
 }
 
-// ExpandRoot expands a leading ~ and any $VAR references, then requires an absolute, clean result. The deny
-// list must be applied to the value returned here and never to the template, since $CLAUDE_CONFIG_DIR is
-// attacker-influenceable; a root naming an unset variable stays unresolved rather than becoming relative.
+// ExpandRoot expands ~ and $VAR into an absolute path; deny the result, never the template, since $CLAUDE_CONFIG_DIR is attacker-set.
 func (e Env) ExpandRoot(root string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("empty root")
@@ -70,8 +68,7 @@ func ExpandHome(p, home string) string {
 	return p
 }
 
-// FirstExistingFile returns the first candidate that expands like a root, exists and is not a directory;
-// empty means absent. The engine and doctor share it, so what doctor reports is what the enricher opens.
+// FirstExistingFile is shared by the engine and doctor, so what doctor reports is what the enricher opens.
 func (e Env) FirstExistingFile(candidates []string) string {
 	for _, cand := range candidates {
 		if path, err := e.ExpandRoot(cand); err == nil {

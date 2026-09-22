@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// RepoFilter skips sessions from repositories marked .notrajectories.
-// Attribution uses the catalog’s bounded cwd probe where paths do not encode the repository.
+// RepoFilter skips sessions from repositories marked .notrajectories, attributed by the catalog's bounded cwd probe.
 type RepoFilter struct {
 	probe *CWDProbe
 	git   *GitRead
@@ -19,14 +18,12 @@ type RepoFilter struct {
 	scopes map[string]gitScope
 }
 
-// gitScope is the checkout containing a working directory and the repository's main checkout;
-// both empty outside git, main alone empty for a bare repository.
+// gitScope is a cwd's checkout and its repository's main checkout; both empty outside git, main empty when bare.
 type gitScope struct {
 	root, main string
 }
 
-// RepoFilter takes the cwd probe and git rules from the catalog, so what may be read stays data.
-// With no probe nothing is attributed and nothing is ignored.
+// RepoFilter takes the cwd probe and git rules from the catalog; with no probe nothing is ignored.
 func (c *Compiled) RepoFilter() *RepoFilter {
 	var probe *CWDProbe
 	var git *GitRead
@@ -84,8 +81,7 @@ func RepoName(cwd string) string {
 	return filepath.Base(cwd)
 }
 
-// Marker is the .notrajectories governing dir: the nearest up to the checkout root (home outside git),
-// else the main checkout's. A marker above a repository never counts.
+// Marker is the nearest .notrajectories up to the checkout root (home outside git), else the main checkout's.
 func (f *RepoFilter) Marker(dir string) (string, bool) {
 	if f == nil || dir == "" {
 		return "", false
@@ -124,8 +120,7 @@ func markerAt(dir string) (string, bool) {
 	return p, true
 }
 
-// RepoDir stands for a candidate's repository: the main working tree inside a git checkout, so a
-// worktree folds into its repository, else the session's own working directory.
+// RepoDir is the main working tree for a session in git, so worktrees fold into their repository, else its cwd.
 func (f *RepoFilter) RepoDir(src Resolved, c Candidate) string {
 	cwd := f.CWD(src, c)
 	if main := f.scopeOf(cwd).main; main != "" {
@@ -158,8 +153,7 @@ func (f *RepoFilter) Match(src Resolved, c Candidate) bool {
 	return marked
 }
 
-// Untrack and Track are idempotent. Track never removes an ancestor's marker: it may govern other
-// repositories too, so lifting it is a decision to make where the file is.
+// Untrack and Track are idempotent; Track never removes an ancestor's marker, which may govern other repositories.
 func (f *RepoFilter) Untrack(dir string) error {
 	return os.WriteFile(MarkerPath(dir), nil, 0o644)
 }

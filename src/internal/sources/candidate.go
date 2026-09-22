@@ -54,8 +54,7 @@ type Discovery struct {
 	UnreadableExample string
 	UnreadableReason  string
 
-	// Sniff lands verbatim in manifests, heartbeats and doctor output; SniffFailures condemns the
-	// source only when every sample failed.
+	// Sniff lands verbatim in manifests, heartbeats and doctor; the source is condemned only when every sample failed.
 	Sniff         formats.SniffResult
 	SniffFailures int
 	// AgentVersion is read from the store, making a parse-failure spike attributable to an agent release.

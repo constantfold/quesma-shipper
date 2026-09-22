@@ -48,8 +48,7 @@ func TestApplyAppPackageReplacesTheWholeBundle(t *testing.T) {
 	}
 }
 
-// The real artifact, when CI points at it: the updater accepts the bundle the package carries, and
-// Installer would lay that component out.
+// When CI points at the built package, the updater accepts its bundle and Installer lays that component out.
 func TestBuiltPackageSatisfiesTheUpdater(t *testing.T) {
 	pkg, version := os.Getenv("QUESMA_SHIPPER_PKG"), os.Getenv("QUESMA_SHIPPER_RELEASE_VERSION")
 	if pkg == "" || version == "" {

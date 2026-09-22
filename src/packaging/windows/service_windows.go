@@ -32,8 +32,7 @@ func InstallService(spec Spec) error {
 	if err := verifyInstallDir(filepath.Dir(spec.Executable), current.Uid); err != nil {
 		return err
 	}
-	// Retired before the new task is registered: the two would otherwise both be live, and the
-	// second shipper would spend its life failing to take the state lock.
+	// Retired first, or both tasks would be live and the second would never take the state lock.
 	if err := retireLegacyTask(current.Uid); err != nil {
 		return err
 	}
@@ -88,8 +87,7 @@ func UninstallService() error {
 	return fmt.Errorf("supervise: delete scheduled task: %s", commandError(err, out))
 }
 
-// ownLegacyTask reads the pre-rename task when this user owns it. A failure to read it is not an
-// error: it is either absent, or another user's and therefore invisible to us.
+// ownLegacyTask reads the pre-rename task if this user owns it; unreadable means absent or another user's.
 func ownLegacyTask(ctx context.Context, userSID string) ([]byte, bool) {
 	out, err := schtasksContext(ctx, "/Query", "/TN", legacyTaskName, "/XML")
 	if err != nil {
@@ -122,9 +120,7 @@ func currentUser() (*user.User, error) {
 	return current, nil
 }
 
-// queryOwnTask prefers this user's own task and falls back to the pre-rename one, so an install
-// made before the rename still reports as installed until its next upgrade migrates it. The
-// per-user name comes back even when nothing is registered: it is what a fresh install will use.
+// queryOwnTask falls back to this user's pre-rename task, and returns the per-user name even when nothing is registered.
 func queryOwnTask(ctx context.Context, userSID string) (string, []byte, error) {
 	name := taskName(userSID)
 	out, err := schtasksContext(ctx, "/Query", "/TN", name, "/XML")
@@ -217,14 +213,12 @@ func schtasksContext(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "schtasks.exe", args...).CombinedOutput()
 }
 
-// schtasksStdout keeps a machine-readable listing clear of the per-task warnings schtasks writes
-// to stderr when it meets a task it cannot read.
+// schtasksStdout keeps listings clear of the warnings schtasks writes to stderr for tasks it cannot read.
 func schtasksStdout(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "schtasks.exe", args...).Output()
 }
 
-// taskExists enumerates all tasks after a targeted operation failed. A successful enumeration can
-// prove absence without interpreting schtasks' localized text or its catch-all exit code 1.
+// taskExists proves absence by enumeration, without parsing schtasks' localized text or catch-all exit code.
 func taskExists(ctx context.Context, name string) (bool, error) {
 	out, err := schtasksStdout(ctx, "/Query", "/FO", "CSV", "/NH")
 	if err != nil {

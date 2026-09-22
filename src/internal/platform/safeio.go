@@ -22,8 +22,7 @@ var ErrNotRegular = errors.New("safeio: not a regular file")
 // ErrTooLarge is returned when a file exceeds the caller's byte budget; the file is left alone.
 var ErrTooLarge = errors.New("safeio: file exceeds size limit")
 
-// Open opens path read-only without following a final-component symlink. The FileInfo is the
-// fstat of the descriptor, so callers needing identity must use it and never re-stat the path.
+// Open refuses a final-component symlink; the FileInfo is the descriptor's fstat, so never re-stat the path.
 func Open(path string) (*os.File, os.FileInfo, error) {
 	return openRegular(path, os.O_RDONLY, 0)
 }
@@ -51,8 +50,7 @@ func openRegular(path string, flag int, perm os.FileMode) (*os.File, os.FileInfo
 	return f, info, nil
 }
 
-// ReadWhole reads an entire file, refusing a final-component symlink. maxBytes of zero means no
-// limit; a file that grew during the read is not an error, the next flush supersedes it.
+// ReadWhole reads a whole file through Open; maxBytes of zero means no limit.
 func ReadWhole(path string, maxBytes int64) ([]byte, os.FileInfo, error) {
 	f, info, err := Open(path)
 	if err != nil {
@@ -86,8 +84,7 @@ func ReadWhole(path string, maxBytes int64) ([]byte, os.FileInfo, error) {
 	return body, info, nil
 }
 
-// ReadPrivate is ReadWhole plus the mode gate for a file holding key material: a loosened
-// mode is a finding to refuse, never something to repair silently.
+// ReadPrivate refuses key material whose mode was loosened, never repairing it silently.
 func ReadPrivate(path string, maxBytes int64) ([]byte, error) {
 	raw, info, err := ReadWhole(path, maxBytes)
 	if err != nil {
@@ -119,10 +116,8 @@ func EnsureDir(path string, perm os.FileMode) error {
 	return nil
 }
 
-// OpenTruncating is the one deliberately non-atomic write, for the run log's live tail; anything
-// durable wants WriteAtomic. It truncates only after fstat confirmed a regular file, and O_NONBLOCK
-// refuses a planted fifo whose blocking open would hang the sync under the store lock (Windows has
-// no filesystem fifos); perm is chmod'd past the umask.
+// OpenTruncating is the one non-atomic write, for the run log's live tail; O_NONBLOCK refuses a planted fifo
+// that would hang the sync under the store lock, and it truncates only after fstat confirms a regular file.
 func OpenTruncating(path string, perm os.FileMode) (*os.File, error) {
 	f, _, err := openRegular(path, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK, perm)
 	if err != nil {
@@ -139,10 +134,8 @@ func OpenTruncating(path string, perm os.FileMode) (*os.File, error) {
 	return f, nil
 }
 
-// WriteAtomic writes data to path via a temp file, fsync, and rename. The rename is the commit
-// point. The temp name is random, never derived from the pid: a temp stranded by a crash is inert
-// garbage next to its document and can never collide with a later write. CreateTemp's O_EXCL
-// refuses to create through a planted name, symlink included.
+// WriteAtomic commits by rename. The temp name is random, so a temp stranded by a crash can never block a later
+// write, and CreateTemp's O_EXCL refuses a planted name, symlink included.
 func WriteAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	dir := filepath.Dir(path)
 
@@ -191,9 +184,7 @@ const (
 	PreviousLogSuffix = ".1"
 )
 
-// RotateLog moves an oversized log aside. Rename, not truncate: a writer holding the file open keeps
-// its offset and would write past a hole, and a reader keeps the bytes it already had. Failures are
-// ignored, since a rotation must never fail the write that triggered it.
+// RotateLog renames rather than truncates, since an open writer keeps its offset; failures never fail the write.
 func RotateLog(path string) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() < maxLogBytes {

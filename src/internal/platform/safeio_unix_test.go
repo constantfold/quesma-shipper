@@ -33,8 +33,7 @@ func TestWritesSetModeRegardlessOfUmask(t *testing.T) {
 	}
 }
 
-// A readerless fifo HANGS a blocking open inside the store lock, so the open itself must refuse it;
-// with a reader attached the open succeeds, so the refusal comes from the fstat check instead.
+// A readerless fifo would HANG a blocking open, so the open refuses it; with a reader, fstat refuses it.
 func TestOpenTruncatingRefusesFifo(t *testing.T) {
 	for _, withReader := range []bool{false, true} {
 		pipe := filepath.Join(t.TempDir(), "last-sync.log")

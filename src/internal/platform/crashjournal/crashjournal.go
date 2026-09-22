@@ -22,8 +22,7 @@ const (
 	maxReadBytes = 4 << 20
 )
 
-// Every line carries its run id, so a daemon tick and a manual sync appending at once stay
-// attributable.
+// Every line carries its run id, so a daemon tick and a manual sync appending at once stay attributable.
 type entry struct {
 	At    time.Time `json:"at"`
 	RunID string    `json:"run_id"`
@@ -32,8 +31,7 @@ type entry struct {
 	PID   int       `json:"pid,omitempty"`
 }
 
-// Log appends one run's entries. All methods are best-effort and nil-safe: the journal observes
-// the run and must never stop it.
+// Log methods are best-effort and nil-safe: the journal observes the run and must never stop it.
 type Log struct {
 	mu     sync.Mutex
 	path   string
@@ -41,8 +39,7 @@ type Log struct {
 	warned bool
 }
 
-// Open rotates a large journal aside and returns the appender. Rotation happens only here,
-// between runs, so one run's entries never straddle generations.
+// Open rotates only here, between runs, so one run's entries never straddle generations.
 func Open(stateDir, runID string) (*Log, error) {
 	if err := platform.EnsureDir(stateDir, 0o700); err != nil {
 		return nil, err
@@ -62,8 +59,7 @@ func (l *Log) Phase(name string) {
 	l.append(entry{Ev: "phase", Phase: name}, false)
 }
 
-// Reported marks the pending crash report as DELIVERED: a heartbeat carrying it reached the sink.
-// Exit alone cannot mean that — the heartbeat fails open, so a clean exit may still have shipped nothing.
+// Reported marks the crash report DELIVERED; Exit cannot, since the heartbeat fails open.
 func (l *Log) Reported() {
 	l.append(entry{Ev: "reported"}, true)
 }
@@ -72,8 +68,7 @@ func (l *Log) Exit() {
 	l.append(entry{Ev: "exit"}, true)
 }
 
-// append fsyncs only the run markers: completed writes survive process death in the page cache,
-// so the per-file path stays cheap and only start/exit pay for power-loss durability.
+// append fsyncs only run markers: page-cache writes survive process death, only power loss needs the sync.
 func (l *Log) append(e entry, syncNow bool) {
 	if l == nil {
 		return
@@ -126,9 +121,7 @@ type Summary struct {
 	Crashes int
 }
 
-// LastRun reports the undelivered crash before this process, or nil when there is none: a clean
-// previous run, an absent or empty journal, or a crash a heartbeat already reported.
-// Call it before Open: Open may rotate the very file this reads.
+// LastRun reports the undelivered crash before this process, or nil. Call it before Open, which may rotate the file.
 func LastRun(stateDir string) *Summary {
 	raw, err := readCapped(filepath.Join(stateDir, fileName))
 	if err != nil || len(raw) == 0 {
@@ -165,9 +158,7 @@ func LastRun(stateDir string) *Summary {
 		return nil
 	}
 
-	// A crash must survive restarts that could not deliver the report: only a run that wrote
-	// "reported" proved a heartbeat carrying it reached the sink, so the walk stops there and
-	// nowhere else. A run with no exit whose process is still alive is concurrent, not dead.
+	// Only a "reported" run proves delivery, so the walk stops there; a live run with no exit is concurrent, not dead.
 	var crash *Summary
 	for i := len(order) - 1; i >= 0; i-- {
 		s := order[i]
@@ -196,8 +187,7 @@ func readCapped(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A leading partial line needs no trimming: LastRun already skips anything that does not
-	// unmarshal, which is the same tolerance that lets a torn last line through.
+	// A leading partial line needs no trimming: LastRun skips anything that does not unmarshal.
 	if info.Size() > maxReadBytes {
 		if _, err := f.Seek(-maxReadBytes, io.SeekEnd); err != nil {
 			return nil, err

@@ -10,8 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// maxACEs bounds the enumeration: GetAce reports the end of the list as an error, and a corrupt
-// ACL must not become an unbounded loop.
+// maxACEs keeps a corrupt ACL from becoming an unbounded loop; GetAce reports the end as an error.
 const maxACEs = 4096
 
 func verifyInstallDir(dir, installerSID string) error {

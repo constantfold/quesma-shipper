@@ -40,8 +40,7 @@ func TestHealthyJournalHasNoCrash(t *testing.T) {
 	}
 }
 
-// The phase is the finest attribution a death gets: enough to say a run died mid-tick rather than
-// during startup. Every consecutive death counts, and the newest one is reported.
+// Every consecutive death counts, and the newest one is reported with its phase.
 func TestConsecutiveCrashesCounted(t *testing.T) {
 	dir := t.TempDir()
 	deadRun(t, dir, "run-a", func(l *Log) { l.Phase("init") })

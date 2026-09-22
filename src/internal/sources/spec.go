@@ -149,8 +149,7 @@ func SpecFingerprint(s Source) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Resolved is a compiled source with config applied and roots expanded. Defined here rather than in the
-// config package that builds it, so discovery and the loop never import the layered merge.
+// Resolved is a compiled source with config applied; it lives here so discovery never imports the config merge.
 type Resolved struct {
 	Source
 	// Root is the first candidate that expanded, exists and satisfied require_subdir; empty means the agent is not installed here.

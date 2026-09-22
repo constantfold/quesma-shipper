@@ -6,9 +6,7 @@ import (
 	"strings"
 )
 
-// The compiled key/field deny, not configurable at any layer. Auth material lives inside the SAME database as
-// the trajectories, and a path deny list cannot express "this file, minus these rows", so the exclusion has to
-// happen at the row and field level, inside the read itself.
+// The compiled row and field deny, configurable at no layer: auth material shares the database with trajectories.
 
 // deniedKeyPrefixes are keyspaces no enricher may read: cursorAuth/* holds Cursor's own session tokens.
 var deniedKeyPrefixes = []string{"cursorauth/", "cursorauth."}

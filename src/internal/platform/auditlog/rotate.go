@@ -42,8 +42,7 @@ const tailChunk = 64 << 10
 var bytesRead atomic.Int64
 
 func tailFile(path string, n int) ([]byte, error) {
-	// os.Open on purpose, not the safeio path: an operator may symlink the log elsewhere, and
-	// tailing history must not refuse to follow it. Reads below use ReadAt, so only the size is needed.
+	// os.Open on purpose, not safeio: an operator may symlink the log elsewhere.
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return nil, err

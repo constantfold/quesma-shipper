@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// ErrCredentialsRefused means the control plane or the store rejected this install's identity.
-// It applies to the install rather than to one file, so the run must stop instead of retrying.
+// ErrCredentialsRefused is about the install, not one file, so the run stops instead of retrying.
 var ErrCredentialsRefused = errors.New("this install's credentials were refused")
 
 // HealthState is a closed enum because a missing agent and a root whose globs match nothing look alike, but only one is drift.
@@ -101,8 +100,7 @@ type SourceOutcome struct {
 	EnrichInfos []string
 }
 
-// FailureRecord persists failures for delivery by the next successful heartbeat.
-// Crashes count until acknowledged; run failures count until success.
+// FailureRecord holds failures for the next heartbeat; crashes count until acknowledged, run failures until success.
 type FailureRecord struct {
 	// A run that died without being able to say anything, detected by a journal with no "exit".
 	LastCrash *LastCrash `json:"last_crash,omitempty"`
@@ -165,8 +163,7 @@ func (r *FailureRecord) Append(e FailureEvent) {
 	}
 }
 
-// Counted reports whether ConsecutiveFailures includes this event. A panic splits on the run id:
-// only the run loop has one, so a panicked tick counts and a panic in a one-shot verb does not.
+// Counted reports whether the streak includes e; only the run loop has a run id, so only a panicked tick counts.
 func (e FailureEvent) Counted() bool {
 	switch e.Kind {
 	case FailureTick, FailureShutdown, FailureInit:
@@ -195,8 +192,7 @@ func (r *FailureRecord) Latest() *FailureEvent {
 	return &r.Recent[len(r.Recent)-1]
 }
 
-// LastCrash reports how the previous run died: the run id and lifecycle phase, never a path,
-// since a journal line per file was 92% of everything the journal wrote.
+// LastCrash names the run and phase, never a path: a journal line per file was 92% of what it wrote.
 type LastCrash struct {
 	RunID       string `json:"run_id,omitempty"`
 	Phase       string `json:"phase,omitempty"`

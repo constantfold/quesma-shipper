@@ -72,13 +72,11 @@ func readHead(path string, budget int64) ([]byte, os.FileInfo, error) {
 // sniffSampleSize is how many files are asked before condemning a source.
 const sniffSampleSize = 5
 
-// sniffSample asks several files spread evenly across the ordering, always including the first and
-// the last, and returns the best answer. Deterministic: a source must not oscillate across ticks.
+// sniffSample deterministically asks files spread across the ordering, first and last included, so a source cannot oscillate.
 func sniffSample(matched []Candidate, spec *Sniff) (formats.SniffResult, string, int) {
 	var best formats.SniffResult
 	failures, version := 0, ""
-	// Scan the whole sample so every unreadable file is counted, and take the version from the
-	// newest readable one (the sample ascends by mtime): the closest proxy for the current install.
+	// Count every failure; the version comes from the newest readable file, the closest proxy for the current install.
 	for i := range min(len(matched), sniffSampleSize) {
 		at := i
 		if len(matched) > sniffSampleSize {

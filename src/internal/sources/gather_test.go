@@ -215,9 +215,7 @@ func TestWalkDoesNotFollowSymlinks(t *testing.T) {
 	assert.Equal(t, []string{"projects/p/real.jsonl"}, relPaths(d))
 }
 
-// The deny list is the read-time authority, since a credential file can appear after config validation.
-// A denied tree is pruned, not walked; pruning follows only a whole-tree rule, so a directory named .env
-// is walked; and a parent that links into a denied tree is still denied.
+// The deny list decides at read time: denied trees are pruned, only whole-tree rules prune, and links into them stay denied.
 func TestDenyListAppliesAtDiscoveryTime(t *testing.T) {
 	home := realTempDir(t)
 	writeFile(t, filepath.Join(home, ".claude", "projects", "p", "a.jsonl"), `{"a":1}`+"\n")
