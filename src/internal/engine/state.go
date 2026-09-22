@@ -180,7 +180,7 @@ func (s *Store) Get(k Key) (Fingerprint, bool) {
 
 func (s *Store) Len() int { return len(s.entries) }
 
-// CommitAll records several fingerprints in one document replacement, the loop's only durable step.
+// CommitAll records several fingerprints in one document replacement.
 // A crash before the replace re-runs those files onto their existing keys. Never make this a database.
 func (s *Store) CommitAll(updates map[Key]Fingerprint) error {
 	maps.Copy(s.entries, updates)
