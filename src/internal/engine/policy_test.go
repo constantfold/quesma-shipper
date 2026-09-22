@@ -18,10 +18,7 @@ func TestPreviewUploadsNothingAndCommitsNothing(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/s1.jsonl", line1)
 
-	o := f.opts()
-	o.DryRun = true
-	rep, err := engine.Run(context.Background(), f.store, o)
-	require.NoError(t, err)
+	rep := f.runDry()
 
 	assert.Equalf(t, 1, rep.Shipped, "preview should report what would ship: %+v", rep)
 	assert.Len(t, f.port.keys(), 0, "preview uploaded something")
@@ -85,49 +82,37 @@ func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
 	}
 }
 
-// A paused install collects nothing, ships nothing, and commits nothing. Checked at the engine
-// rather than per verb: a per-verb check would be one new verb away from a hole.
-func TestAPausedInstallShipsNothingAndCommitsNothing(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	require.NoError(t, platform.Set(f.stateDir, "off to a client site", engineFixedTime(), time.Time{}))
+// Pause blocks normal runs and drains without consuming state; preview stays available, then resume sends the backlog.
+func TestPauseLifecycle(t *testing.T) {
+	for _, reason := range []string{"", "off to a client site"} {
+		t.Run("reason="+reason, func(t *testing.T) {
+			f := newFixture(t)
+			f.writeTranscript("p/s1.jsonl", line1)
+			require.NoError(t, platform.Set(f.stateDir, reason, engineFixedTime(), time.Time{}))
+			for _, unbounded := range []bool{false, true} {
+				rep := f.run(func(o *engine.Options) { o.Unbounded = unbounded })
+				assert.True(t, rep.Paused)
+				assert.Equal(t, reason, rep.PauseReason)
+				assert.Zero(t, rep.Shipped)
+				assert.Empty(t, f.port.keys())
+				f.reopen()
+				doc, err := engine.Peek(f.stateDir)
+				require.NoError(t, err)
+				assert.Empty(t, doc.Entries, "paused runs must not consume the backlog")
+			}
 
-	rep := f.run()
-	assert.True(t, rep.Paused, "the report does not say paused; a zero summary reads as nothing to collect")
-	assert.NotEqual(t, "", rep.PauseReason, "the reason did not reach the report")
-	if rep.Shipped != 0 || len(f.port.keys()) != 0 {
-		t.Fatalf("a paused install shipped: %+v %v", rep, f.port.keys())
+			preview := f.runDry()
+			assert.False(t, preview.Paused)
+			assert.Equal(t, 1, preview.Shipped)
+			assert.Empty(t, f.port.keys())
+			assert.Zero(t, f.store.Len())
+
+			require.NoError(t, platform.Clear(f.stateDir))
+			rep := f.run()
+			assert.False(t, rep.Paused)
+			assert.Equal(t, 1, rep.Shipped, "resume must collect the held backlog")
+		})
 	}
-
-	// Nothing committed either, or resuming would treat never-shipped files as already sent.
-	f.reopen()
-	doc, err := engine.Peek(f.stateDir)
-	require.NoError(t, err)
-	require.Lenf(t, doc.Entries, 0, "a paused run committed %d fingerprints; resuming would skip those files", len(doc.Entries))
-}
-
-func TestResumingCollectsTheBacklogThePauseHeldBack(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	require.NoError(t, platform.Set(f.stateDir, "", engineFixedTime(), time.Time{}))
-	f.run()
-
-	require.NoError(t, platform.Clear(f.stateDir))
-	rep := f.run()
-	require.True(t, !rep.Paused, "still paused after Clear")
-	require.NotEqual(t, 0, rep.Shipped, "resuming shipped nothing: the paused run must not have consumed the backlog")
-}
-
-// preview is exempt: it uploads and commits nothing, and a paused owner may still look.
-func TestPreviewStillWorksWhilePaused(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	require.NoError(t, platform.Set(f.stateDir, "", engineFixedTime(), time.Time{}))
-
-	rep := f.runDry()
-	assert.True(t, !rep.Paused, "preview reported itself paused")
-	assert.NotEqual(t, 0, rep.Shipped, "preview found nothing to show while paused")
-	assert.Lenf(t, f.port.keys(), 0, "preview uploaded %v", f.port.keys())
 }
 
 // The drain ignores max_files_per_run: it runs when the host is about to disappear, and with no
@@ -147,16 +132,4 @@ func TestDrainIgnoresTheMaxFilesPerRunBound(t *testing.T) {
 	// Everything that was left, in one pass.
 	assert.Truef(t, drained.Shipped >= 5, "the drain shipped %d of the remaining files", drained.Shipped)
 	assert.NotEqual(t, 0, drained.Unchanged, "the already-shipped files were re-shipped rather than recognised as unchanged")
-}
-
-func TestADrainOnAPausedInstallStillShipsNothing(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	require.NoError(t, platform.Set(f.stateDir, "", engineFixedTime(), time.Time{}))
-
-	// The drain gets no exception: switching collection off is not consent to a last upload.
-	rep := f.runUnbounded()
-	if !rep.Paused || rep.Shipped != 0 || len(f.port.keys()) != 0 {
-		t.Fatalf("a drain overrode the pause: %+v %v", rep, f.port.keys())
-	}
 }

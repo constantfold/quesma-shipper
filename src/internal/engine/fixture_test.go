@@ -130,8 +130,7 @@ func (f *fixture) countStateWrites(fn func()) int {
 	return <-done
 }
 
-// runWith is run() with the options adjusted, for the settings only a test sets.
-func (f *fixture) runWith(adjust ...func(*engine.Options)) engine.Report {
+func (f *fixture) run(adjust ...func(*engine.Options)) engine.Report {
 	f.t.Helper()
 	o := f.opts()
 	for _, fn := range adjust {
@@ -150,21 +149,16 @@ func (f *fixture) wipeState() {
 	f.reopen()
 }
 
-func (f *fixture) run() engine.Report {
-	f.t.Helper()
-	return f.runWith()
-}
-
 // runDry is preview: read, scrub and seal, but neither upload nor commit.
 func (f *fixture) runDry() engine.Report {
 	f.t.Helper()
-	return f.runWith(func(o *engine.Options) { o.DryRun = true })
+	return f.run(func(o *engine.Options) { o.DryRun = true })
 }
 
 // runUnbounded is the drain: max_files_per_run does not apply.
 func (f *fixture) runUnbounded() engine.Report {
 	f.t.Helper()
-	return f.runWith(func(o *engine.Options) { o.Unbounded = true })
+	return f.run(func(o *engine.Options) { o.Unbounded = true })
 }
 
 // engineFixedTime is the fixture's clock, so pause timestamps are not wall-clock dependent.

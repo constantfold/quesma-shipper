@@ -161,36 +161,22 @@ func TestAReadButUnchangedFileKeepsItsPerFileAuditEntry(t *testing.T) {
 	assert.Equalf(t, 1, aggregates, "%d aggregate entries, want 1: the file the pre-filter passed over", aggregates)
 }
 
-// A spec change resets exactly that source's state, so the file re-ships onto its existing key.
-func TestSpecChangeResetsOnlyThatSource(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	f.run()
-	keyBefore := f.port.keys()[0]
-
-	f.eff.Sources[0].SpecFingerprint = strings.Repeat("b", 64)
-	rep := f.run()
-
-	assert.Equalf(t, 1, rep.Shipped, "a spec change should re-ship the source: %+v", rep)
-	if got := f.port.keys(); len(got) != 1 || got[0] != keyBefore {
-		t.Errorf("the key must not change with the spec: %v", got)
-	}
-}
-
 // After a spec change preview must report the same would-ship as a real sync, persisting nothing.
-func TestPreviewReportsWouldShipAfterSpecChange(t *testing.T) {
+func TestSpecChangeLifecycle(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/s1.jsonl", line1)
 	f.run()
-	uploadsBefore := len(f.port.keys())
+	keysBefore := f.port.keys()
+	require.Len(t, keysBefore, 1)
 
 	f.eff.Sources[0].SpecFingerprint = strings.Repeat("b", 64)
 	rep := f.runDry()
 
 	assert.Equalf(t, 1, rep.Shipped, "preview after a spec change should report would-ship, not unchanged: %+v", rep)
-	assert.Len(t, f.port.keys(), uploadsBefore, "preview uploaded something")
+	assert.Equal(t, keysBefore, f.port.keys(), "preview uploaded something")
 	assert.Equalf(t, 1, f.store.Len(), "preview must not drop entries: %d left", f.store.Len())
 
 	// A real run afterwards still re-ships, so preview changed nothing about the next sync.
 	assert.Equal(t, 1, f.run().Shipped)
+	assert.Equal(t, keysBefore, f.port.keys(), "the key must not change with the spec")
 }

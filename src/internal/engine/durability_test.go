@@ -78,7 +78,7 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 	f.writeTranscripts("p/a%02d.jsonl", files)
 
 	writes := f.countStateWrites(func() {
-		require.Equal(t, files, f.runWith(func(o *engine.Options) { o.CommitBatch = 10 }).Shipped)
+		require.Equal(t, files, f.run(func(o *engine.Options) { o.CommitBatch = 10 }).Shipped)
 	})
 
 	// 25 files at a batch of 10: two batches, the source-boundary flush, plus project-map's own.
@@ -91,7 +91,7 @@ func TestEverythingShippedIsDurableWhenTheRunReturns(t *testing.T) {
 	f := newFixture(t)
 	const files = 12
 	f.writeTranscripts("p/b%02d.jsonl", files)
-	require.Equal(t, files, f.runWith(func(o *engine.Options) { o.CommitBatch = 1000 }).Shipped)
+	require.Equal(t, files, f.run(func(o *engine.Options) { o.CommitBatch = 1000 }).Shipped)
 
 	f.reopen()
 	if rep := f.run(); rep.Shipped != 0 || rep.Unchanged != files {

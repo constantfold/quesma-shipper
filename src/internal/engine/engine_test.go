@@ -1,7 +1,7 @@
 package engine_test
 
 import (
-	"context"
+	"cmp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,40 +16,48 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-func TestCollectsAndShips(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
+// Every collection preserves graph identifiers, sealed integrity, classification and install ownership.
+func TestCollectionContract(t *testing.T) {
+	const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	const secretLine = `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s1","cwd":"/Users/jane/work",` +
+		`"message":{"content":[{"type":"text","text":"key ` + secret + `"}]}}` + "\n"
+	for _, tc := range []struct {
+		name, organization, body string
+		hits                     int
+	}{
+		{"plain", "", line1, 0},
+		{"redacted", "", secretLine, 1},
+		{"organization", "acme", line1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.eff.OrganizationID = tc.organization
+			f.writeTranscript("p/s1.jsonl", tc.body)
+			require.Equal(t, 1, f.run().Shipped)
+			keys := f.port.keys()
+			require.Len(t, keys, 1)
+			root, err := formats.InstallRoot(cmp.Or(tc.organization, "default"), f.unit.InstallID.String())
+			require.NoError(t, err)
+			assert.True(t, strings.HasPrefix(keys[0], root+"/"), keys[0])
 
-	rep := f.run()
-	require.Equalf(t, 1, rep.Shipped, "expected 1 shipped, got %+v", rep)
-	require.Lenf(t, f.port.keys(), 1, "expected 1 object, got %v", f.port.keys())
-
-	// The object must be a real sealed container that opens with this install's identity.
-	obj, m, payload := f.openObject(t, f.port.keys()[0])
-	assert.Containsf(t, m.NativePath, "s1.jsonl", "manifest native_path: %q", m.NativePath)
-	assert.Containsf(t, string(payload), `"uuid":"u1"`, "payload lost its identifiers: %s", payload)
-	assert.Equalf(t, "trajectory", m.ArtifactClass, "artifact class %q", m.ArtifactClass)
-	assert.Equalf(t, "trajectory", obj.Metadata["artifact-class"], "artifact-class metadata %q — the classification must be readable without a decrypt", obj.Metadata["artifact-class"])
+			obj, m, payload := f.openObject(t, keys[0])
+			assert.Contains(t, m.NativePath, "s1.jsonl")
+			assert.Contains(t, string(payload), `"uuid":"u1"`, "the graph must survive scrubbing")
+			assert.Equal(t, "trajectory", m.ArtifactClass)
+			assert.Equal(t, m.ArtifactClass, obj.Metadata["artifact-class"])
+			assert.NotEmpty(t, obj.Metadata["shipped-hash"])
+			assert.Equal(t, m.ShippedHash, obj.Metadata["shipped-hash"])
+			assert.NotContains(t, string(payload), secret)
+			require.NotNil(t, m.Redaction)
+			assert.Equal(t, tc.hits, m.Redaction.RuleHits["github-pat"])
+			if tc.hits > 0 {
+				assert.Positive(t, m.Redaction.Density, "the rule-drift alarm must record density")
+			}
+		})
+	}
 }
 
-// The payload is scrubbed before sealing, and the identifiers that make it a graph survive.
-func TestPayloadIsScrubbedAndTheGraphSurvives(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl",
-		`{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s1","cwd":"/Users/jane/work",`+
-			`"message":{"content":[{"type":"text","text":"key ghp_abcdefghijklmnopqrstuvwxyz0123456789"}]}}`+"\n")
-
-	f.run()
-	_, m, payload := f.openObject(t, f.port.keys()[0])
-
-	assert.NotContains(t, string(payload), "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the secret reached the sink")
-	assert.Contains(t, string(payload), `"uuid":"u1"`, "an exempt identifier was redacted; the graph would not reassemble")
-	assert.Truef(t, m.Redaction != nil && m.Redaction.RuleHits["github-pat"] == 1, "the redaction ledger should record the rule: %+v", m.Redaction)
-	assert.True(t, m.Redaction.Density > 0, "density should be recorded: it is the rule-drift alarm")
-}
-
-// A bounded run must report that it was bounded: silent truncation reads as "everything is
-// collected". Progress must stream every decided file while the run is still going.
+// Both shipped and unchanged files advance progress through every decided file.
 func TestProgressStreamsEveryDecidedFile(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/a.jsonl", line1)
@@ -59,30 +67,15 @@ func TestProgressStreamsEveryDecidedFile(t *testing.T) {
 		done, total int
 		decision    auditlog.Decision
 	}
-	var events []event
-	o := f.opts()
-	o.Progress = func(sourceID string, done, total int, fo engine.FileOutcome) {
-		assert.Equalf(t, "claude-code-transcripts", sourceID, "progress reported source %q", sourceID)
-		events = append(events, event{done, total, fo.Decision})
-	}
-	if _, err := engine.Run(context.Background(), f.store, o); err != nil {
-		t.Fatal(err)
-	}
-
-	require.Lenf(t, events, 2, "expected 2 progress events, got %d", len(events))
-	for i, ev := range events {
-		assert.Truef(t, ev.done == i+1 && ev.total == 2, "event %d: counter [%d/%d], want [%d/2]", i, ev.done, ev.total, i+1)
-		assert.Equalf(t, auditlog.DecisionShipped, ev.decision, "event %d: decision %q, want shipped", i, ev.decision)
-	}
-
-	// Unchanged files stream too, or the counter could never reach its total.
-	events = nil
-	if _, err := engine.Run(context.Background(), f.store, o); err != nil {
-		t.Fatal(err)
-	}
-	require.Lenf(t, events, 2, "steady-state run: expected 2 progress events, got %d", len(events))
-	for i, ev := range events {
-		assert.Equalf(t, auditlog.DecisionUnchanged, ev.decision, "steady-state event %d: decision %q, want unchanged", i, ev.decision)
+	for _, decision := range []auditlog.Decision{auditlog.DecisionShipped, auditlog.DecisionUnchanged} {
+		var events []event
+		f.run(func(o *engine.Options) {
+			o.Progress = func(sourceID string, done, total int, fo engine.FileOutcome) {
+				assert.Equal(t, "claude-code-transcripts", sourceID)
+				events = append(events, event{done, total, fo.Decision})
+			}
+		})
+		assert.Equal(t, []event{{1, 2, decision}, {2, 2, decision}}, events)
 	}
 }
 
@@ -95,43 +88,4 @@ func TestHealthIsReportedPerSource(t *testing.T) {
 	require.Lenf(t, rep.Sources, 1, "expected 1 source, got %d", len(rep.Sources))
 	assert.Equalf(t, sources.RootPresentNoMatch, rep.Sources[0].Health, "health %q, want root_present_no_match", rep.Sources[0].Health)
 	assert.NotEqual(t, "", rep.Sources[0].Reason, "a non-collected health state must carry a reason")
-}
-
-// Every object an install writes must sit under ONE install root: mirror keys and the heartbeat
-// once disagreed about the organization, and erasure is one prefix sweep that cannot cover two.
-func TestEveryKeySitsUnderOneInstallRoot(t *testing.T) {
-	f := newFixture(t)
-	f.eff.OrganizationID = "acme"
-	f.writeTranscript("p/s1.jsonl", line1)
-
-	require.NotEqual(t, 0, f.run().Shipped)
-
-	root, err := formats.InstallRoot(f.eff.OrganizationID, f.unit.InstallID.String())
-	require.NoError(t, err)
-	keys := f.port.keys()
-	require.NotEqual(t, 0, len(keys), "no keys written")
-	for _, k := range keys {
-		assert.Truef(t, strings.HasPrefix(k, root+"/"), "key outside this install's root %s:\n  %s", root, k)
-	}
-}
-
-// Object metadata must carry the integrity hash, not an empty string: only the manifest Seal
-// returns has the ShippedHash it computed, so the engine must build metadata from that copy.
-func TestObjectMetadataCarriesTheIntegrityHash(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
-	f.run()
-
-	require.NotEqual(t, 0, len(f.port.keys()), "nothing shipped")
-	for _, k := range f.port.keys() {
-		obj, m, _ := f.openObject(t, k)
-		got := obj.Metadata["shipped-hash"]
-		if got == "" {
-			t.Errorf("%s: shipped-hash is empty in object metadata", k)
-			continue
-		}
-		// It must describe the payload actually sealed, which the manifest inside states too.
-
-		assert.Equalf(t, m.ShippedHash, got, "%s: metadata shipped-hash %s disagrees with the sealed manifest's %s", k, got, m.ShippedHash)
-	}
 }

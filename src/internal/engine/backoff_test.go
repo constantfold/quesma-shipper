@@ -42,7 +42,7 @@ func TestUnreadableFileBackoffAndRecovery(t *testing.T) {
 
 	// Two hours later: past the one-hour cap on the backoff.
 	f.reopen()
-	rep := f.runWith(func(o *engine.Options) {
+	rep := f.run(func(o *engine.Options) {
 		later := o.Now().Add(2 * time.Hour)
 		o.Now = func() time.Time { return later }
 	})
@@ -75,7 +75,7 @@ func TestAParkedFileStopsBeingParkedOnceItReadsCleanAgain(t *testing.T) {
 	require.NoError(t, os.Chmod(bad, 0o600))
 	f.writeTranscript("p/bad.jsonl", line1)
 	f.reopen()
-	rep := f.runWith(func(o *engine.Options) {
+	rep := f.run(func(o *engine.Options) {
 		later := o.Now().Add(2 * time.Hour)
 		o.Now = func() time.Time { return later }
 	})

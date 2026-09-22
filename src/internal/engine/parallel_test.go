@@ -26,7 +26,7 @@ func TestTheBudgetIsNotOvershotByFilesInFlight(t *testing.T) {
 	f.writeTranscripts("p/a%02d.jsonl", 20)
 	f.eff.MaxFilesPerRun = 2
 
-	rep := f.runWith(func(o *engine.Options) { o.Workers = 8 })
+	rep := f.run(func(o *engine.Options) { o.Workers = 8 })
 
 	assert.Equalf(t, 2, rep.Shipped, "budget 2 shipped %d files", rep.Shipped)
 	assert.True(t, rep.Truncated, "a run that left 18 files behind did not say so")
@@ -43,7 +43,7 @@ func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
 		want = append(want, "projects/"+rel)
 	}
 
-	rep := f.runWith(func(o *engine.Options) { o.Workers = 8 })
+	rep := f.run(func(o *engine.Options) { o.Workers = 8 })
 
 	files := rep.Sources[0].Files
 	require.Lenf(t, files, len(want), "want %d files in the report, got %d", len(want), len(files))
@@ -153,7 +153,7 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 	f.writeTranscripts("p/c%02d.jsonl", 8)
 	slow := &slowRecipient{inner: f.unit.Recipient()}
 
-	rep := f.runWith(func(o *engine.Options) {
+	rep := f.run(func(o *engine.Options) {
 		o.Workers = 4
 		o.Recipients = []age.Recipient{slow}
 	})
@@ -171,7 +171,7 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	f.eff.MaxFilesPerRun = files
 	port := &slowPort{fakePort: f.port}
 
-	rep := f.runWith(func(o *engine.Options) {
+	rep := f.run(func(o *engine.Options) {
 		o.Plan = planOf(f.eff)
 		o.Workers = 2
 		o.UploadWorkers = 64
@@ -189,9 +189,9 @@ func TestOneWorkerBehavesExactlyLikeTheOldLoop(t *testing.T) {
 	f.writeTranscripts("p/s%02d.jsonl", 6)
 
 	pin := func(o *engine.Options) { o.Workers, o.UploadWorkers = 1, 1 }
-	rep := f.runWith(pin)
+	rep := f.run(pin)
 	require.Truef(t, rep.Shipped == 6 && rep.Failed == 0, "first pass: want 6 shipped, got %+v", rep)
 
-	again := f.runWith(pin)
+	again := f.run(pin)
 	assert.Truef(t, again.Unchanged == 6 && again.Shipped == 0, "second pass: want 6 unchanged, got %+v", again)
 }
