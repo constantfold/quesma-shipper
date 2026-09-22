@@ -25,14 +25,20 @@ var ErrTooLarge = errors.New("safeio: file exceeds size limit")
 // Open opens path read-only without following a final-component symlink. The FileInfo is the
 // fstat of the descriptor, so callers needing identity must use it and never re-stat the path.
 func Open(path string) (*os.File, os.FileInfo, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|openFlags, 0)
-	if err != nil {
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, nil, fmt.Errorf("%w: %s is a symlink", ErrNotRegular, path)
-		}
+	return openRegular(path, os.O_RDONLY, 0)
+}
+
+// openRegular refuses anything but a regular file by fstat on the descriptor, never the name.
+func openRegular(path string, flag int, perm os.FileMode) (*os.File, os.FileInfo, error) {
+	f, err := os.OpenFile(path, flag|openFlags, perm)
+	switch {
+	case errors.Is(err, syscall.ELOOP):
+		return nil, nil, fmt.Errorf("%w: %s is a symlink", ErrNotRegular, path)
+	case errors.Is(err, syscall.ENXIO):
+		return nil, nil, fmt.Errorf("%w: %s is a fifo", ErrNotRegular, path)
+	case err != nil:
 		return nil, nil, fmt.Errorf("safeio: open %s: %w", path, err)
 	}
-
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -113,31 +119,14 @@ func EnsureDir(path string, perm os.FileMode) error {
 	return nil
 }
 
-// OpenTruncating opens path for writing without following a final-component symlink, and truncates
-// only after fstat confirmed a regular file, so a planted link is never truncated.
-// The one deliberately non-atomic write, for the run log's live tail; anything durable wants
-// WriteAtomic. The fstat check and O_NONBLOCK catch a planted fifo, which O_NOFOLLOW does not and
-// whose blocking open would hang the sync under the store lock (Windows has no filesystem fifos; the flag
-// is ignored there); perm is chmod'd past the umask.
+// OpenTruncating is the one deliberately non-atomic write, for the run log's live tail; anything
+// durable wants WriteAtomic. It truncates only after fstat confirmed a regular file, and O_NONBLOCK
+// refuses a planted fifo whose blocking open would hang the sync under the store lock (Windows has
+// no filesystem fifos); perm is chmod'd past the umask.
 func OpenTruncating(path string, perm os.FileMode) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK|openFlags, perm)
+	f, _, err := openRegular(path, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK, perm)
 	if err != nil {
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, fmt.Errorf("%w: %s is a symlink", ErrNotRegular, path)
-		}
-		if errors.Is(err, syscall.ENXIO) {
-			return nil, fmt.Errorf("%w: %s is a fifo", ErrNotRegular, path)
-		}
-		return nil, fmt.Errorf("safeio: open %s for writing: %w", path, err)
-	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("safeio: fstat %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		f.Close()
-		return nil, fmt.Errorf("%w: %s is %s", ErrNotRegular, path, info.Mode().Type())
+		return nil, err
 	}
 	if err := f.Chmod(perm); err != nil {
 		f.Close()
@@ -183,15 +172,14 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) (err error) {
 		return fmt.Errorf("safeio: chmod temp for %s: %w", path, err)
 	}
 	// Windows refuses to replace a file another handle has open; readers are brief, so retry.
-	var renameErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if renameErr = os.Rename(tmp, path); renameErr == nil {
+	for attempt := 1; ; attempt++ {
+		if err = os.Rename(tmp, path); err == nil {
 			break
 		}
+		if attempt == 5 {
+			return fmt.Errorf("safeio: rename temp for %s: %w", path, err)
+		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if renameErr != nil {
-		return fmt.Errorf("safeio: rename temp for %s: %w", path, renameErr)
 	}
 	syncDir(dir)
 	return nil
@@ -216,10 +204,8 @@ func RotateLog(path string) {
 
 // syncDir makes a rename durable. Best-effort: some filesystems refuse to open a directory for sync.
 func syncDir(dir string) {
-	d, err := os.Open(dir)
-	if err != nil {
-		return
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
 	}
-	defer d.Close()
-	_ = d.Sync()
 }

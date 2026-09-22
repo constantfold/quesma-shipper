@@ -3,9 +3,7 @@
 package macos
 
 import (
-	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,16 +36,16 @@ func renderPlist(spec Spec) string {
 	args := append([]string{spec.Executable}, spec.Args...)
 	var argXML strings.Builder
 	for _, a := range args {
-		fmt.Fprintf(&argXML, "\t\t<string>%s</string>\n", escapeXML(a))
+		fmt.Fprintf(&argXML, "\t\t<string>%s</string>\n", common.XMLText(a))
 	}
 
 	var envXML strings.Builder
 	if spec.Home != "" {
-		fmt.Fprintf(&envXML, "\t\t<key>HOME</key>\n\t\t<string>%s</string>\n", escapeXML(spec.Home))
+		fmt.Fprintf(&envXML, "\t\t<key>HOME</key>\n\t\t<string>%s</string>\n", common.XMLText(spec.Home))
 	}
 	if spec.StateDir != "" {
 		fmt.Fprintf(&envXML, "\t\t<key>XDG_STATE_HOME</key>\n\t\t<string>%s</string>\n",
-			escapeXML(filepath.Dir(spec.StateDir)))
+			common.XMLText(filepath.Dir(spec.StateDir)))
 	}
 
 	stdout := filepath.Join(spec.LogDir, "agent.out.log")
@@ -87,7 +85,7 @@ func renderPlist(spec Spec) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, bundleIdentifier, bundleIdentifier, argXML.String(), envXML.String(), stop, escapeXML(stdout), escapeXML(stderr))
+`, bundleIdentifier, bundleIdentifier, argXML.String(), envXML.String(), stop, common.XMLText(stdout), common.XMLText(stderr))
 }
 
 const launchctl = "/bin/launchctl"
@@ -299,10 +297,4 @@ func summariseLaunchctlPrint(out string) string {
 	default:
 		return "loaded, not currently running"
 	}
-}
-
-func escapeXML(s string) string {
-	var b bytes.Buffer
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
 }

@@ -38,27 +38,18 @@ func TestServiceStateHonorsCancellation(t *testing.T) {
 
 func TestPlistIsWellFormedAndKeepsTheAgentAlive(t *testing.T) {
 	got := renderPlist(testSpec())
-	var v any
-	require.NoError(t, xml.Unmarshal([]byte(got), &v))
+	require.NoError(t, xml.Unmarshal([]byte(got), new(any)))
 	for _, want := range []string{"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>",
-		"<string>" + bundleIdentifier + "</string>", "<string>/usr/local/bin/quesma-shipper</string>",
+		"<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>" + bundleIdentifier + "</string>",
+		"<string>/usr/local/bin/quesma-shipper</string>",
 		"<key>HOME</key>", "XDG_STATE_HOME", "StandardOutPath", "StandardErrorPath"} {
 		assert.Containsf(t, got, want, "plist is missing %q:\n%s", want, got)
 	}
-}
 
-func TestPlistAssociatesTheInstalledApp(t *testing.T) {
-	want := "<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>" + bundleIdentifier + "</string>"
-	assert.Contains(t, renderPlist(testSpec()), want)
-}
-
-func TestPlistEscapesPaths(t *testing.T) {
 	spec := testSpec()
 	spec.Home = "/Users/jane & co"
 	spec.Executable = "/opt/<weird>/quesma-shipper"
-	got := renderPlist(spec)
-	var v any
-	require.NoError(t, xml.Unmarshal([]byte(got), &v))
+	require.NoError(t, xml.Unmarshal([]byte(renderPlist(spec)), new(any)), "paths needing escapes broke the plist")
 }
 
 func TestLaunchAgentPathIsPerUser(t *testing.T) {

@@ -50,6 +50,13 @@ check_service() {
   grep -q "/$1/quesma-shipper" "$plist"
 }
 
+# check_removed: the service is gone; with "purged" the state is too, otherwise the marker survived.
+check_removed() {
+  [[ ! -e "$plist" ]]
+  if launchctl print "gui/$(id -u)/com.quesma.shipper" >/dev/null 2>&1; then exit 1; fi
+  if [[ ${1:-} == purged ]]; then [[ ! -e "$state" ]]; else grep -qx preserve "$state/brew-smoke-marker"; fi
+}
+
 write_cask 1.0.0
 brew install --cask --yes quesma-test/shipper/quesma-shipper
 quesma-shipper --version
@@ -59,15 +66,13 @@ mkdir -p "$state"
 printf 'preserve\n' > "$state/brew-smoke-marker"
 quesma-shipper uninstall --yes > "$work/uninstall.txt"
 grep -q 'Homebrew command remains installed' "$work/uninstall.txt"
-[[ ! -e "$plist" ]]
-if launchctl print "gui/$(id -u)/com.quesma.shipper" >/dev/null 2>&1; then exit 1; fi
-grep -qx preserve "$state/brew-smoke-marker"
+check_removed
 quesma-shipper --version
 quesma-shipper postinstall
 check_service 1.0.0
 quesma-shipper uninstall --purge --yes > "$work/uninstall.txt"
 grep -q 'Homebrew command remains installed' "$work/uninstall.txt"
-[[ ! -e "$plist" && ! -e "$state" ]]
+check_removed purged
 quesma-shipper --version
 quesma-shipper postinstall
 check_service 1.0.0
@@ -77,11 +82,8 @@ write_cask 1.0.1
 brew upgrade --cask --greedy --yes quesma-test/shipper/quesma-shipper
 check_service 1.0.1
 brew uninstall --cask quesma-test/shipper/quesma-shipper
-[[ ! -e "$plist" ]]
-if launchctl print "gui/$(id -u)/com.quesma.shipper" >/dev/null 2>&1; then exit 1; fi
-grep -qx preserve "$state/brew-smoke-marker"
+check_removed
 brew install --cask --yes quesma-test/shipper/quesma-shipper
 check_service 1.0.1
 brew uninstall --cask --zap quesma-test/shipper/quesma-shipper
-[[ ! -e "$plist" && ! -e "$state" ]]
-if launchctl print "gui/$(id -u)/com.quesma.shipper" >/dev/null 2>&1; then exit 1; fi
+check_removed purged

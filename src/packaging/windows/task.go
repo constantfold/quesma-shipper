@@ -89,8 +89,8 @@ func renderTask(spec Spec, userSID, userName string) string {
     </Exec>
   </Actions>
 </Task>
-`, xmlText(userName), xmlText(taskName(userSID)), xmlText(userSID), xmlText(userSID),
-		xmlText(taskRunner(spec.Executable)), xmlText(spec.LogDir))
+`, common.XMLText(userName), common.XMLText(taskName(userSID)), common.XMLText(userSID), common.XMLText(userSID),
+		common.XMLText(taskRunner(spec.Executable)), common.XMLText(spec.LogDir))
 }
 
 type taskDocument struct {
@@ -151,10 +151,4 @@ func decodeUTF16LE(raw []byte) []byte {
 		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
 	}
 	return []byte(string(utf16.Decode(units)))
-}
-
-func xmlText(s string) string {
-	var b strings.Builder
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
 }

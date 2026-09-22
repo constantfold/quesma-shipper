@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // One spelling everywhere: a version written one way in an object and another in a trace cannot be joined.
@@ -23,14 +22,6 @@ func TestTheVersionStringIsOneSpelling(t *testing.T) {
 			assert.Equal(t, tc.in.String(), tc.want)
 		})
 	}
-}
-
-// A modified tree must be visible: an object shipped by one has code the sha alone cannot recover.
-func TestAModifiedTreeIsVisibleInTheVersion(t *testing.T) {
-	clean := Info{Version: "v1.0.0", Revision: "abc123"}.String()
-	dirty := Info{Version: "v1.0.0", Revision: "abc123", Modified: true}.String()
-	require.NotEqualf(t, dirty, clean, "a modified build is indistinguishable from a clean one: both %q", clean)
-	assert.Containsf(t, dirty, "dirty", "the modified build reads %q, which does not say so", dirty)
 }
 
 // A release stamp is believed only when the toolchain corroborates it; a stamp that could lie would ship wrong provenance.

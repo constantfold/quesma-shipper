@@ -24,7 +24,7 @@ const (
 	maskFullControl        = 0x001F01FF
 )
 
-// The fixtures below are the DACLs of real directories, so a rule change has to argue with the
+// The first fixtures are the DACLs of real directories, so a rule change has to argue with the
 // paths users actually pick.
 func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 	for _, tc := range []struct {
@@ -78,39 +78,34 @@ func TestUntrustedWritersJudgesRealDirectoryLayouts(t *testing.T) {
 			aces: []ace{{SID: sidEveryone, Mask: genericAll, Allow: true}},
 			want: []string{sidEveryone},
 		},
+		{
+			name: "denied and read-only access",
+			aces: []ace{
+				{SID: sidUsers, Mask: maskFullControl, Allow: false},
+				{SID: sidUsers, Mask: maskReadExecute, Allow: true},
+				{SID: sidInteractive, Mask: maskGenericReadExecute, Allow: true},
+			},
+		},
+		{
+			// A case-sensitive SID comparison would report the installer as a threat to their own directory.
+			name: "the installer in lower case",
+			aces: []ace{{SID: strings.ToLower(sidInstaller), Mask: maskFullControl, Allow: true}},
+		},
+		{
+			name: "each trustee reported once",
+			aces: []ace{
+				{SID: sidUsers, Mask: fileWriteData, Allow: true},
+				{SID: sidUsers, Mask: standardWriteOwner, Allow: true},
+				{SID: sidInteractive, Mask: maskModify, Allow: true},
+			},
+			want: []string{sidUsers, sidInteractive},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := untrustedWriters(tc.aces, sidInstaller)
 			require.Equalf(t, strings.Join(tc.want, ","), strings.Join(got, ","), "untrustedWriters() = %v, want %v", got, tc.want)
 		})
 	}
-}
-
-func TestUntrustedWritersIgnoresDeniedAndReadOnlyAccess(t *testing.T) {
-	aces := []ace{
-		{SID: sidUsers, Mask: maskFullControl, Allow: false},
-		{SID: sidUsers, Mask: maskReadExecute, Allow: true},
-		{SID: sidInteractive, Mask: maskGenericReadExecute, Allow: true},
-	}
-	require.Len(t, untrustedWriters(aces, sidInstaller), 0)
-}
-
-// A SID string comparison that is not case-insensitive would report the installing user as a
-// threat to their own directory.
-func TestUntrustedWritersAcceptsTheInstallerInEitherCase(t *testing.T) {
-	aces := []ace{{SID: strings.ToLower(sidInstaller), Mask: maskFullControl, Allow: true}}
-	require.Len(t, untrustedWriters(aces, sidInstaller), 0)
-}
-
-func TestUntrustedWritersReportsEachTrusteeOnce(t *testing.T) {
-	aces := []ace{
-		{SID: sidUsers, Mask: fileWriteData, Allow: true},
-		{SID: sidUsers, Mask: standardWriteOwner, Allow: true},
-		{SID: sidInteractive, Mask: maskModify, Allow: true},
-	}
-	want := []string{sidUsers, sidInteractive}
-	got := untrustedWriters(aces, sidInstaller)
-	require.Equalf(t, strings.Join(want, ","), strings.Join(got, ","), "untrustedWriters() = %v, want %v", got, want)
 }
 
 // Every composite right a user sees in an ACL listing has to intersect the atomic write bits.

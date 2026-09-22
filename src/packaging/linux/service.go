@@ -27,7 +27,7 @@ func systemdPath(home string) string {
 	return filepath.Join(configHome, "systemd", "user", unitName)
 }
 
-// hasSystemdUser reports whether this host has a systemd user instance; containers often do not.
+// Available reports whether this host has a systemd user instance; containers often do not.
 func Available() bool {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return false
