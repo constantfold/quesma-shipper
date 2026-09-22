@@ -25,8 +25,7 @@ func (r *Runtime) Flush(ctx context.Context, dryRun bool) (formats.Report, error
 	return r.flushWith(ctx, dryRun, false)
 }
 
-// Drain flushes everything pending on an ephemeral host, bounded by the deadline rather than by
-// max_files_per_run.
+// Drain flushes everything pending, bounded by the deadline rather than by max_files_per_run.
 func (r *Runtime) Drain(ctx context.Context) (formats.Report, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.eff.DrainDeadline)
 	defer cancel()
@@ -60,30 +59,12 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 	eff := r.eff
 	interval, _ := config.TickInterval(eff.Schedule)
 	rep, err := engine.Run(ctx, store, engine.Options{
-		OrganizationID: eff.OrganizationID,
-		StateDir:       eff.StateDir,
-		MaxFilesPerRun: eff.MaxFilesPerRun,
-		Interval:       interval,
-		Sources:        eff.Sources,
-		RulePacks:      eff.RulePacks,
-		SecretKeyNames: eff.SecretKeyNames,
-		StructuralEx:   eff.StructuralEx,
-		Deny:           eff.Deny,
-		Ignore:         eff.Catalog.RepoFilter(),
-		ConfigVersion:  eff.ConfigVersion,
-		ConfigExpired:  eff.ConfigExpired,
-		Identity:       r.unit,
-		Upload:         r.upload,
-		Log:            r.log,
-		Enrichers:      Enrichers(),
-		Env:            r.env,
-		Recipients:     r.recipients,
-		DryRun:         dryRun,
-		Unbounded:      unbounded,
-		Client:         clientBlock(),
-		Progress:       r.OnProgress,
-		RunID:          r.runID,
-		Heartbeat:      r.WriteHeartbeat,
+		OrganizationID: eff.OrganizationID, StateDir: eff.StateDir, MaxFilesPerRun: eff.MaxFilesPerRun, Interval: interval,
+		Sources: eff.Sources, Deny: eff.Deny, Ignore: eff.Catalog.RepoFilter(), Env: r.env, Enrichers: Enrichers(),
+		RulePacks: eff.RulePacks, SecretKeyNames: eff.SecretKeyNames, StructuralEx: eff.StructuralEx,
+		ConfigVersion: eff.ConfigVersion, ConfigExpired: eff.ConfigExpired, Client: clientBlock(), RunID: r.runID,
+		Identity: r.unit, Recipients: r.recipients, Upload: r.upload, Log: r.log, Heartbeat: r.WriteHeartbeat,
+		Progress: r.OnProgress, DryRun: dryRun, Unbounded: unbounded,
 	})
 
 	// Stamped even when nothing shipped: the marker answers "is the agent running at all".

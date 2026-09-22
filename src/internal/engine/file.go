@@ -34,8 +34,7 @@ func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resol
 		return res
 	}
 
-	// Cheap pre-filter; the content hash below stays the authority. A non-empty SourceHash marks a
-	// committed ship. A staged file changed within the recompute window is still read, for its enricher.
+	// Cheap pre-filter; a staged file changed within the recompute window is still read, for its enricher.
 	if seen && fp.SourceSize == cand.Size && fp.SourceMTime.Equal(cand.MTime) && fp.SourceHash != "" &&
 		!(staging && o.Now().Sub(cand.MTime) < recomputeWindow) {
 		out.Decision, out.Reason = auditlog.DecisionUnchanged, "size and mtime unchanged"
@@ -119,15 +118,10 @@ func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload [
 		}
 		return nil
 	}
-	return &pendingPut{
-		obj:  obj,
-		md:   sealed.ObjectMetadata(),
-		next: next,
-	}
+	return &pendingPut{obj: obj, md: sealed.ObjectMetadata(), next: next}
 }
 
-// failAndBackOff parks a file: "parked" rather than "failed" because parked is what the counter and
-// the heartbeat read. There is no attempt limit: giving up silently loses data.
+// failAndBackOff parks a file with no attempt limit, since giving up silently loses data.
 func failAndBackOff(o Options, res *fileResult, fp Fingerprint, reason string) {
 	res.outcome.Decision, res.outcome.Reason = auditlog.DecisionParked, reason
 	if o.DryRun {
@@ -154,8 +148,7 @@ func scrubSource(src sources.Resolved, raw []byte, jsonl bool, scrubber *transfo
 	return scrubber.Scrub(raw, transforms.Hint{Family: src.Family, JSONL: jsonl})
 }
 
-// backoffFor is a minute, doubling, capped at an hour, less up to 12.5% jitter derived from spread
-// rather than rand, so runs stay reproducible and the cap stays a ceiling.
+// backoffFor is a minute, doubling to an hour, less up to 12.5% deterministic jitter from spread.
 func backoffFor(attempt int, spread uint64) time.Duration {
 	d := min(time.Minute<<min(attempt, 8), time.Hour)
 	return d - time.Duration(spread%9)*d/64

@@ -34,8 +34,7 @@ func TestAppendTwoLinesOverwritesTheSameKey(t *testing.T) {
 	assert.Truef(t, strings.Contains(string(payload), `"uuid":"u1"`) && strings.Contains(string(payload), `"uuid":"a1"`), "the re-shipped object is not the whole file: %s", payload)
 }
 
-// Stat-only skips coalesce; files read to verify their hash retain a per-file audit entry. The
-// reopen is the next tick: a pre-filter that loses mtime precision reads every file again.
+// Stat-only skips coalesce; a hash-verified read keeps its entry. The reopen is the next tick.
 func TestUnchangedFileAudit(t *testing.T) {
 	for _, read := range []bool{false, true} {
 		t.Run(fmt.Sprintf("read=%t", read), func(t *testing.T) {

@@ -46,8 +46,7 @@ func TestNeverMutatesTheAgentStore(t *testing.T) {
 	assert.Equal(t, before, snapshot(t, agentDir), "a sync must neither create, remove nor modify agent files")
 }
 
-// What batching must show is how often the state document is replaced. The count is asserted
-// rather than the timing, which a fast disk would hide.
+// Batching is measured as document replacements, which a fast disk would hide in a timing.
 func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 	f := newFixture(t)
 	const files = 25
@@ -67,8 +66,7 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 	assert.Truef(t, rep.Shipped == 0 && rep.Unchanged == files, "after a reload the run should ship nothing and see %d unchanged, got %+v", files, rep)
 }
 
-// The flag has to survive Run's own report construction: it was first set before the line that
-// replaces the whole struct, so the discard was detected and then silently dropped on the floor.
+// The flag must survive Run replacing the whole report struct, which once dropped it.
 func TestARunReportsThatItDiscardedTheStore(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/a.jsonl", line1)

@@ -22,8 +22,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The suite's shared fixture: a minted install, an audit log, a fake port and a policy over one
-// Claude-Code-shaped source under a temporary home.
+// The suite's fixture: a minted install, an audit log, a fake port and one Claude Code source under a temp home.
 type fixture struct {
 	t        *testing.T
 	home     string

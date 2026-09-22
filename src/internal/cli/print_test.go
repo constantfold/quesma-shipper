@@ -59,8 +59,7 @@ func TestOversizeSummaries(t *testing.T) {
 	}
 }
 
-// Only a truncated one-shot sync advises a drain, and only when it left a backlog: the daemon
-// re-ticks on its own, and truncation on failures has no backlog worth chasing.
+// Only a truncated one-shot sync that shipped something is advised to drain.
 func TestOnlyATruncatedSyncWithABacklogIsToldToDrain(t *testing.T) {
 	out := summaryOutput(formats.Report{Truncated: true, Shipped: 64}, true)
 	assert.Contains(t, out, "max_files_per_run reached")
@@ -69,8 +68,7 @@ func TestOnlyATruncatedSyncWithABacklogIsToldToDrain(t *testing.T) {
 	assert.NotContains(t, summaryOutput(formats.Report{Truncated: true, Failed: 64}, true), "--drain")
 }
 
-// A missing denominator suppresses throughput; a zero duration still preserves the median; a
-// paused run says so instead of a summary.
+// No duration suppresses throughput but keeps the median; a paused run prints no summary.
 func TestStatsLines(t *testing.T) {
 	at := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
 	for _, tc := range []struct {
@@ -99,8 +97,7 @@ func TestHumanDuration(t *testing.T) {
 	}
 }
 
-// Alarm notes print once, and an informational note about a conversation that shipped is labelled
-// as shipped rather than reported as loss; infos alone raise no alarm.
+// Alarm notes print once; infos about shipped conversations are labelled shipped and raise no alarm.
 func TestEnrichNotes(t *testing.T) {
 	summary := func(src formats.SourceOutcome) string {
 		src.SourceID, src.Health = "cursor-transcripts", formats.Collected

@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The authorization accumulator, exercised directly: the byte bound needs objects too large to
-// produce through the loop, and overshooting it loses a whole group.
+// The authorization accumulator, exercised directly: the byte bound needs objects too large for the loop.
 
 // okPort confirms every object.
 type okPort struct{}

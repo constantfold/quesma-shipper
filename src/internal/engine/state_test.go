@@ -38,8 +38,7 @@ func key(path string) engine.Key {
 	return engine.Key{SourceID: "claude-code-transcripts", NativePath: path}
 }
 
-// fixedMTime keeps the fixture deterministic. The nanoseconds are not decoration: a whole-second
-// mtime cannot catch a serializer that truncates, and no real filesystem hands out whole seconds.
+// Nanoseconds, because a whole-second mtime cannot catch a serializer that truncates.
 var fixedMTime = time.Date(2026, 7, 30, 10, 0, 0, 987654321, time.UTC)
 
 func fingerprint() engine.Fingerprint {
@@ -113,8 +112,7 @@ func TestDocumentIsDeterministic(t *testing.T) {
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
 		require.NoError(t, err)
-		// updated_at moves per flush, and checksum covers it; strip both so the comparison is
-		// about ordering.
+		// updated_at moves per flush and the checksum covers it, so both are stripped.
 		var out []string
 		for _, line := range strings.Split(string(raw), "\n") {
 			if !strings.Contains(line, "updated_at") && !strings.Contains(line, "checksum") {

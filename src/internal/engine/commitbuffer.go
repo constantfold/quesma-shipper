@@ -1,10 +1,13 @@
 package engine
 
-import "github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
+import (
+	"cmp"
 
-// commitBuffer batches fingerprint writes: every write re-encodes, validates and fsyncs every
-// entry, so writing per file costs O(files x entries). A commit lands in the store's memory at once
-// and on disk within limit commits, which bounds what a crash re-ships onto the same keys.
+	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
+)
+
+// commitBuffer batches fingerprint writes, since each write re-encodes and fsyncs every entry. A
+// commit lands in memory at once and on disk within limit commits, bounding what a crash re-ships.
 type commitBuffer struct {
 	*Store
 	dirty, limit int
@@ -14,10 +17,7 @@ type commitBuffer struct {
 }
 
 func newCommitBuffer(store *Store, limit int) *commitBuffer {
-	if limit <= 0 {
-		limit = 200
-	}
-	return &commitBuffer{Store: store, limit: limit, staleSpecs: map[string]bool{}}
+	return &commitBuffer{Store: store, limit: cmp.Or(limit, 200), staleSpecs: map[string]bool{}}
 }
 
 func (b *commitBuffer) Get(k Key) (Fingerprint, bool) {
@@ -39,16 +39,14 @@ func (b *commitBuffer) Flush() error {
 	return nil
 }
 
-// PreviewSpec is EnsureSpec for preview: it masks a source whose stored spec differs rather than
-// dropping it, so preview reports the same would-ship as a sync.
+// PreviewSpec masks a source whose stored spec differs instead of dropping it, persisting nothing.
 func (b *commitBuffer) PreviewSpec(sourceID, specFingerprint string) {
 	if stored, known := b.specs[sourceID]; known && stored != specFingerprint {
 		b.staleSpecs[sourceID] = true
 	}
 }
 
-// applyIntent makes a result durable. A failed commit rewrites the outcome before fold counts it,
-// so "shipped but the record was lost" reads as failed.
+// applyIntent makes a result durable; a failed commit turns "shipped" into failed before fold counts it.
 func (b *commitBuffer) applyIntent(r *fileResult) {
 	if r.commit == nil {
 		return

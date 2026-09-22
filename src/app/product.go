@@ -12,8 +12,7 @@ const (
 	AuthEnv = "SHIPPER_AUTH_KEY"
 )
 
-// Build describes this binary from its toolchain stamp. Release says the version is a corroborated
-// release stamp; self-update requires it, so an unprovable build never decides it is out of date.
+// Build describes this binary; only a corroborated release stamp (Release) may self-update.
 type Build struct {
 	Version string
 	Release bool

@@ -12,8 +12,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
-// Pins upload's deliberate copy of the metadata allowlist to controlplane's tags; only app may
-// import both packages.
+// Keeps upload's copy of the metadata allowlist in step with controlplane's tags.
 
 func TestMetadataNamesMatchControlPlane(t *testing.T) {
 	var tags []string

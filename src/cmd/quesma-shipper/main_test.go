@@ -29,8 +29,7 @@ func TestVerbOfNamesTheFirstNonFlagArgument(t *testing.T) {
 	}
 }
 
-// A crash in any verb must outlive the terminal it printed to: the stack goes to stderr, the fact
-// of it goes to disk, where the next heartbeat that ships will find it.
+// A crash prints its stack to stderr and persists only the fact, for the next heartbeat.
 func TestReportPanicPrintsTheStackAndPersistsTheFact(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 

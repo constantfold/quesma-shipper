@@ -13,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// Budget is reserved at admission, so parallel files cannot overshoot it; the rest arrive next
-// tick, and the drain ignores the bound because a backlog left behind at shutdown is data loss.
+// Budget is reserved at admission so parallel files cannot overshoot it; the drain ignores the bound.
 func TestMaxFilesPerRunAndTheDrain(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscripts("p/s%d.jsonl", 7)
@@ -68,8 +67,7 @@ func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
 	}
 }
 
-// Pause blocks normal runs and drains without consuming state; preview stays available, then
-// resume sends the backlog.
+// Pause blocks runs and drains without consuming state; preview still works, and resume sends the backlog.
 func TestPauseLifecycle(t *testing.T) {
 	for _, reason := range []string{"", "off to a client site"} {
 		t.Run("reason="+reason, func(t *testing.T) {
@@ -88,8 +86,7 @@ func TestPauseLifecycle(t *testing.T) {
 				assert.Empty(t, doc.Entries, "paused runs must not consume the backlog")
 			}
 
-			// Preview computes everything that would leave the machine, the real key and sealed size
-			// included, and neither authorizes nor commits.
+			// Preview computes the real key and sealed size, and neither authorizes nor commits.
 			preview := f.run(dryRun)
 			assert.False(t, preview.Paused)
 			assert.Equal(t, 1, preview.Shipped)

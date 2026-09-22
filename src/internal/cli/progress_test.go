@@ -84,8 +84,7 @@ func TestANonTerminalGetsAPlainLineEveryHundredFiles(t *testing.T) {
 	assert.NotContains(t, plain[0], "[#", "a non-terminal was drawn a bar")
 }
 
-// A steady-state run prints nothing, so it must never reach the budget or draw a bar; --quiet
-// drops console progress but still writes the run log an unattended run leaves.
+// Unchanged files print nothing; --quiet drops console progress but still writes the run log.
 func TestQuietRunsStillLog(t *testing.T) {
 	var console, log bytes.Buffer
 	feed(newTestStream(&console, &log, false, true), 500, func(int) formats.FileOutcome {
@@ -135,8 +134,7 @@ func TestTheBar(t *testing.T) {
 	assert.Equal(t, after, console.Len())
 }
 
-// The e2e harness reads any counter word followed by a number as the run summary, so no
-// transient rendering may contain one; and a long source id is cut rather than wrapped.
+// The e2e harness reads a counter word and a number as the summary, so no transient line may hold one.
 func TestTransientRenderings(t *testing.T) {
 	s := newTestStream(&bytes.Buffer{}, &bytes.Buffer{}, false, false)
 	for _, r := range []string{

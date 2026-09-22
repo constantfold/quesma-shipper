@@ -21,8 +21,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
-// TestDiscoveryRowsSeverity pins the severity of every health state, and that NO source state
-// is SevFail: a broken source loses that source's data, never the exit code.
+// No source health state is SevFail: a broken source loses its data, never the exit code.
 func TestDiscoveryRowsSeverity(t *testing.T) {
 	src := config.ResolvedSource{Source: sources.Source{ID: "s"}}
 	cases := []struct {
@@ -96,8 +95,7 @@ func TestCheckUpdate(t *testing.T) {
 	assert.Equal(t, "current", checkUpdate(ctx, Build{Release: true}, true, noEnv, fixed("1.0.0", false, nil)).State)
 }
 
-// Everything status shares with doctor stays out of the exit code. Seeded so the rows that only
-// appear on a broken install are in the set: an empty dir would leave the warning paths untested.
+// Rows status shares with doctor stay out of the exit code; seeded so the broken-install rows appear.
 func TestAdvisoryRowsNeverFail(t *testing.T) {
 	dir := t.TempDir()
 	const mine, theirs = "c033b5b2-c3ac-4f39-911f-7ea632b7727c", "85a7e04c-32a4-4bf5-9c80-49c4f9d087bb"

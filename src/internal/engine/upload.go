@@ -56,40 +56,32 @@ func (b *batcher) take() []fileResult {
 	return items
 }
 
-// PreparedObject is one sealed object offered for authorization. Body is the exact ciphertext PUT,
-// so its length is the size the ticket is signed for.
+// PreparedObject is one sealed object offered for authorization; Body is the exact ciphertext PUT.
 type PreparedObject struct {
-	// ObjectID pairs the object with its ticket, unique within the group and meaningless outside.
-	ObjectID string
+	ObjectID string // pairs the object with its ticket, unique within the group only
 	Key      string
 	Body     []byte
 
 	// SourceHash is the manifest's raw pre-redaction digest, never a checksum of Body.
 	SourceHash string
 
-	// Metadata holds unprefixed plaintext names, source-hash excluded: hashes and versions only,
-	// never the path, which stays inside the ciphertext.
+	// Metadata holds plaintext hashes and versions, never the path, which stays inside the ciphertext.
 	Metadata map[string]string
 }
 
-// UploadPort is the write path: one call authorizes a bounded batch and PUTs each member.
-// Implementations validate every ticket against the prepared key before sending bytes, and return
-// one result per input object in input order; nil means the PUT was confirmed, ErrAlreadyPresent
-// means the control plane answered that the store already holds it.
+// UploadPort validates each ticket before sending bytes and returns one verdict per object, in order.
 type UploadPort interface {
 	AuthorizeAndUpload(ctx context.Context, batch []PreparedObject) []error
 }
 
 var (
-	// ErrUploadUnavailable is an authorization the control plane would not serve now. It must never
-	// wrap formats.ErrCredentialsRefused: this install is waiting, not revoked.
+	// ErrUploadUnavailable means this install is waiting, not revoked: never wrap ErrCredentialsRefused.
 	ErrUploadUnavailable = errors.New("engine: upload authorization is unavailable")
 
 	// ErrTicketExpired is the only verdict worth a second authorization inside a single run.
 	ErrTicketExpired = errors.New("engine: upload ticket had expired")
 
-	// ErrAlreadyPresent commits like a confirmed PUT but marks the audit line, so an operator can
-	// tell a commit resting on the plane's word from one this machine sent.
+	// ErrAlreadyPresent commits like a confirmed PUT, but the audit line says no bytes were sent.
 	ErrAlreadyPresent = errors.New("engine: the archive already held this object under the same source hash")
 )
 
@@ -102,8 +94,7 @@ func (o Options) sendBatch(ctx context.Context, items []fileResult) []fileResult
 	return items
 }
 
-// authorizeAndUpload spends one group, with at most one reauthorization for expired tickets: a
-// second expiry means the clock or the lease is wrong, and retrying only stalls everything else.
+// authorizeAndUpload reauthorizes expired tickets once; a second expiry means a wrong clock or lease.
 func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []error {
 	batch := make([]PreparedObject, len(items))
 	for i, it := range items {
@@ -142,16 +133,14 @@ func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []e
 	return outcomes
 }
 
-// stopsRun reports the two verdicts that end a run's uploads rather than one file. A refusal kills
-// the install, while unavailability stops only this run's uploads.
+// stopsRun reports the verdicts that end a run's uploads: a refusal, or an unavailable control plane.
 func stopsRun(err error) bool {
 	return errors.Is(err, formats.ErrCredentialsRefused) || errors.Is(err, ErrUploadUnavailable)
 }
 
 const alreadyPresentReason = "no bytes sent: the control plane answered that the archive already holds this object"
 
-// applyUploadOutcome is the verdict-to-decision map. A failed upload persists nothing and does not
-// park, so the next run re-prepares the same key without delay.
+// applyUploadOutcome maps a verdict to a decision; a failed upload neither commits nor parks.
 func applyUploadOutcome(it fileResult, oc error) fileResult {
 	r := it
 	r.pending = nil

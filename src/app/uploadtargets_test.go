@@ -38,8 +38,7 @@ func TestUploadTargetsRefusesTheWholeListOnOneBadEntry(t *testing.T) {
 	assert.Truef(t, list == nil, "a refused list still returned %d targets", len(list))
 }
 
-// The bridge is only correct if a ticket that survives it also survives validation, so this runs
-// the real validator rather than comparing maps.
+// A converted ticket must pass the real validator, not merely compare equal.
 func TestToUploadTicketFeedsValidation(t *testing.T) {
 	target, err := upload.NewUploadTarget(upload.TargetSpec{
 		Origin:     "https://acme.s3.example.com",

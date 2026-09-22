@@ -13,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 )
 
-// Run performs one flush. Sources flush sequentially: the loop is poll-shaped, so a missed tick
-// is a catch-up rather than a loss.
+// Run performs one flush, sources in sequence; a missed tick is a catch-up rather than a loss.
 func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 	store := newCommitBuffer(st, o.CommitBatch)
 
@@ -84,17 +83,13 @@ func Run(ctx context.Context, st *Store, o Options) (rep Report, err error) {
 	// Health reporting fails open; only redaction fails closed.
 	if !o.DryRun && o.Heartbeat != nil {
 		if err := o.Heartbeat(ctx, rep); err != nil {
-			_ = o.Log.Append(auditlog.Entry{
-				Decision: auditlog.DecisionFailed,
-				Reason:   "heartbeat write failed: " + err.Error(),
-			})
+			_ = o.Log.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: "heartbeat write failed: " + err.Error()})
 		}
 	}
 	return rep, nil
 }
 
-// summarize totals bytes from the outcomes, since derived outcomes bypass fold. Emitted and derived
-// objects are excluded so an idle run totals zero.
+// summarize totals input bytes; emitted and derived objects are excluded so an idle run totals zero.
 func summarize(rep *Report) {
 	var shippedIn []int64
 	for _, s := range rep.Sources {

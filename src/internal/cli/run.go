@@ -40,12 +40,8 @@ func recoverFlush(errOut io.Writer, log *auditlog.Log, flush func() (formats.Rep
 		fmt.Fprintf(errOut, "PANIC in flush: %v\n%s\n", r, stack)
 		fmt.Fprintf(errOut, "the tick was abandoned; the next one starts clean. "+
 			"whatever caused this is still on disk and will be met again.\n")
-		_ = log.Append(auditlog.Entry{
-			Decision: auditlog.DecisionFailed,
-			Reason:   fmt.Sprintf("panic in flush: %v", r),
-			File:     firstStackFrame(stack),
-		})
 		err = fmt.Errorf("panic in flush: %v", r)
+		_ = log.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: err.Error(), File: firstStackFrame(stack)})
 	}()
 	rep, err = flush()
 	return rep, err, false
@@ -113,8 +109,7 @@ func runCmd(build app.Build) *cobra.Command {
 		}
 		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		// A config that does not resolve also reads as "not logged in" and cannot repair itself
-		// between polls, so it skips the wait and lets app.New report the real reason.
+		// An unresolved config reads as not logged in and cannot repair itself, so it skips the wait.
 		eff, paths, resolveErr := app.ResolveEffective()
 		waiting := false
 		for resolveErr == nil {
@@ -137,8 +132,7 @@ func runCmd(build app.Build) *cobra.Command {
 			maybeSelfUpdate(ctx, build, resolveErr != nil || eff.AutoupdateEnabled, cmd.ErrOrStderr())
 		}
 
-		// After the self-update, whose re-exec would read as a death. Exit is not deferred: a panic
-		// must skip it, since that missing entry is the crash record.
+		// Not deferred: a panic must skip Exit, since that missing entry is the crash record.
 		stateDir, dirErr := paths.StateDir, error(nil)
 		if resolveErr != nil {
 			stateDir, dirErr = app.StateDirWithoutConfig()
@@ -203,8 +197,7 @@ func runLoop(cmd *cobra.Command, ctx context.Context, build app.Build, f runFlag
 
 	for n := 1; ; n++ {
 		fl.Phase(fmt.Sprintf("tick %d", n))
-		// Roots are picked in app.New; an agent installed or first run later would otherwise stay
-		// absent until a restart, and announcing it keeps that from passing silently.
+		// Roots are picked in app.New, so an agent installed later is picked up and announced here.
 		appeared := env.RefreshAbsentRoots()
 		if !f.quiet {
 			for _, id := range appeared {
@@ -218,8 +211,7 @@ func runLoop(cmd *cobra.Command, ctx context.Context, build app.Build, f runFlag
 		if f.drain {
 			rep, complete, err = env.Drain(ctx)
 		} else {
-			// Not armed for a drain, whose bound is drain_deadline. Warns on the raw stderr: the
-			// progress bar's writer is not safe for a second goroutine.
+			// A drain is bounded by drain_deadline instead; the raw stderr, since the bar's writer is single-goroutine.
 			wctx, stopWatch := context.WithCancel(context.Background())
 			watchdogDone := make(chan struct{})
 			go func() {
@@ -292,8 +284,7 @@ func runLoop(cmd *cobra.Command, ctx context.Context, build app.Build, f runFlag
 	}
 }
 
-// startCrashJournal reports how the previous run died, then marks this one's start. Best-effort:
-// a broken journal, or none found (dirErr), leaves the run unjournaled rather than unstarted.
+// startCrashJournal reports how the previous run died; a broken journal leaves the run unjournaled.
 func startCrashJournal(errOut io.Writer, dir string, dirErr error) (*crashjournal.Log, string, *formats.LastCrash) {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

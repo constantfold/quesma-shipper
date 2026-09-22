@@ -18,10 +18,8 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 	rep := &Report{}
 	eff, paths, remote, err := ResolveOnline(ctx)
 	if err != nil {
-		rep.Sections = []Section{{Title: "Configuration", Rows: []Row{{
-			Sev: SevFail, Label: "config", Detail: fmt.Sprintf("refused: %v", err),
-			Fix: "nothing runs until this resolves, `quesma-shipper config` walks the layers",
-		}}}}
+		rep.Sections = []Section{{Title: "Configuration", Rows: []Row{{Sev: SevFail, Label: "config", Detail: fmt.Sprintf("refused: %v", err),
+			Fix: "nothing runs until this resolves, `quesma-shipper config` walks the layers"}}}}
 		rep.Update = UpdateStatus{State: "skipped", Detail: "not checked - config did not resolve"}
 		return rep
 	}
@@ -47,10 +45,8 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 	for _, src := range eff.Sources {
 		pr := sourceProbe{src: src}
 		if src.Enabled {
-			pr.d, pr.err = sources.Discover(sources.Request{
-				Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
-				StateDir: paths.StateDir, Username: username,
-			})
+			pr.d, pr.err = sources.Discover(sources.Request{Source: src, All: eff.Sources, Deny: eff.Deny, Ignore: trackFilter,
+				StateDir: paths.StateDir, Username: username})
 			if pr.err == nil && docErr == nil {
 				pr.pending, _ = pending(doc, src, pr.d)
 			}
@@ -71,8 +67,7 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		if verbose {
 			where = env.Destination() + ", "
 		}
-		// Probes the write path with the heartbeat, unmirrored: doctor's all-zero counters would
-		// erase the record of the last real flush, the very thing doctor reads.
+		// Unmirrored: doctor's all-zero counters would erase the local record of the last real flush.
 		if err := env.writeHeartbeat(pctx, doctorReport(probes), false); err != nil {
 			storage.Detail, storage.Fix = where+"upload check failed: "+err.Error(), "nothing can be sent until this works"
 		} else {

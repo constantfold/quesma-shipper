@@ -26,8 +26,7 @@ type AgentRow struct {
 	Last            time.Time
 }
 
-// Survey groups trajectory candidates by agent family and repository. The caller owns attr so the
-// tracking browser can keep its cwd cache across refreshes.
+// Survey groups trajectory candidates by agent and repository; the caller owns attr and its cwd cache.
 func Survey(eff *config.Effective, paths config.Paths, attr *sources.RepoFilter) []AgentRow {
 	names := familyNames(eff.Catalog)
 	byFamily := map[string]*AgentRow{}

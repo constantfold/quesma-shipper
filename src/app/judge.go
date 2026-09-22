@@ -112,17 +112,10 @@ func (r *Runtime) WatchStalledTick(ctx context.Context, n int, every time.Durati
 
 // runFacts records resource use and limits on every outcome, providing the next run's baseline.
 func (r *Runtime) runFacts(rep formats.Report, mem platform.Delta) *formats.RunFacts {
-	return &formats.RunFacts{
-		GOMAXPROCS:        runtime.GOMAXPROCS(0),
-		MaxFilesPerRun:    r.eff.MaxFilesPerRun,
-		MaxInFlightBytes:  platform.MaxInFlightBytes(),
-		SoftLimitBytes:    platform.SoftLimit(),
-		HeapInuseBytes:    mem.After.HeapInuse,
-		SysBytes:          mem.After.Sys,
-		GCCycles:          mem.After.NumGC - mem.Before.NumGC,
-		SlowestScrubNanos: rep.SlowestScrubNanos,
-		SlowestScrubBytes: rep.SlowestScrubBytes,
-	}
+	return &formats.RunFacts{GOMAXPROCS: runtime.GOMAXPROCS(0), MaxFilesPerRun: r.eff.MaxFilesPerRun,
+		MaxInFlightBytes: platform.MaxInFlightBytes(), SoftLimitBytes: platform.SoftLimit(),
+		HeapInuseBytes: mem.After.HeapInuse, SysBytes: mem.After.Sys, GCCycles: mem.After.NumGC - mem.Before.NumGC,
+		SlowestScrubNanos: rep.SlowestScrubNanos, SlowestScrubBytes: rep.SlowestScrubBytes}
 }
 
 // The audit log carries the remaining reasons.

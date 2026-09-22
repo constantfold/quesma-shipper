@@ -12,15 +12,13 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-// ResolveEffective resolves every local layer plus whatever remote layer is already on disk. No
-// network call: a read-only verb must explain the config in force without a round-trip.
+// ResolveEffective uses only what is on disk, so a read-only verb never makes a network call.
 func ResolveEffective() (*config.Effective, config.Paths, error) {
 	eff, paths, _, err := resolve(context.Background(), true)
 	return eff, paths, err
 }
 
-// ResolveOnline refreshes the remote layer first, then resolves. A refresh that fails falls back
-// to the cached config and reports why; collection continues either way.
+// ResolveOnline refreshes the remote layer first, falling back to the cached config if that fails.
 func ResolveOnline(ctx context.Context) (*config.Effective, config.Paths, controlplane.Remote, error) {
 	return resolve(ctx, false)
 }
@@ -41,12 +39,10 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		return nil, paths, controlplane.Remote{}, err
 	}
 
-	// Known before the remote fetch, since the enrollment and config cache live there; only local
-	// layers may set state_dir.
+	// Only local layers may set state_dir, which must be known before the remote fetch.
 	paths.StateDir = stateDirFrom(layers, paths.StateDir)
 
-	// A missing record means standalone; an unusable one is refused, or an enrolled install would
-	// silently downgrade to "no backend".
+	// An unusable record is refused, or an enrolled install would silently downgrade to standalone.
 	enrollment, err := controlplane.LoadEnrollment(paths.StateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, paths, controlplane.Remote{}, fmt.Errorf(
@@ -54,24 +50,13 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 				"Fix the file or log in again with `quesma-shipper login`; collecting without it would ship "+
 				"under different credentials than the ones this install was granted", err)
 	}
-	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{
-		Enrollment: enrollment,
-		StateDir:   paths.StateDir,
-		Now:        time.Now(),
-		Offline:    offline,
-	})
+	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{Enrollment: enrollment, StateDir: paths.StateDir, Now: time.Now(), Offline: offline})
 
 	if remote.Doc != nil {
 		layers = append(layers, config.LayeredDocument{Layer: config.LayerRemote, Doc: remote.Doc})
 	}
 
-	eff, err := config.Resolve(config.Input{
-		Catalog:       compiled,
-		Layers:        layers,
-		ConfigExpired: remote.Expired,
-		Env:           env,
-		StateDir:      paths.StateDir,
-	})
+	eff, err := config.Resolve(config.Input{Catalog: compiled, Layers: layers, ConfigExpired: remote.Expired, Env: env, StateDir: paths.StateDir})
 	if err != nil {
 		return nil, paths, remote, err
 	}

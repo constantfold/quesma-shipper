@@ -12,8 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A document that cannot be loaded, whatever the reason, is discarded rather than fatal: the run
-// starts from an empty store, reports the discard, and the first flush replaces the file.
+// An unloadable document is discarded, not fatal: the run starts empty and the first flush replaces it.
 func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 	const install = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 	valid := `{"state_schema": 1, "install_id": "` + install + `", "entries": []}`

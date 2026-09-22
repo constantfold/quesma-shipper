@@ -119,9 +119,7 @@ func ExitCode(err error) (code int, show bool) {
 	return 1, true
 }
 
-// Renders in plain Go rather than a cobra template: a custom template makes
-// text/template's reflect.Value.MethodByName reachable, which turns off the
-// linker's dead-code elimination for the whole binary (cmd/quesma-shipper/deps_test.go).
+// Plain Go rather than a cobra template, whose reflect.Value.MethodByName disables dead-code elimination.
 func printUsage(c *cobra.Command, pal palette) error {
 	name := func(s string) string { return styled(pal.cyan, s, pal.reset) }
 	dim := func(s string) string { return styled(pal.dim, s, pal.reset) }

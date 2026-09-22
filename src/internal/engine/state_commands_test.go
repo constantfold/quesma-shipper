@@ -48,9 +48,7 @@ func TestResetLifecycle(t *testing.T) {
 	assert.Equal(t, installID, doc.InstallID)
 }
 
-// Reset and prune replace an unloadable or foreign document on --apply, even when the discarded
-// store forgot nothing, or the stale document is re-discarded every run. A dry run never writes.
-// Prune keeps entries, yet cannot claim another install's uploads: the discard empties it first.
+// Reset and prune replace a discarded document on --apply even when nothing changed; a dry run never writes.
 func TestOverridesReplaceADiscardedDocument(t *testing.T) {
 	garbage := func(t *testing.T, dir string) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte("not a document\n"), 0o600))

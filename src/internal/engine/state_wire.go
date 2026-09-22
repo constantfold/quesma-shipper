@@ -24,8 +24,7 @@ type wireDoc struct {
 	UpdatedAt   string            `json:"updated_at,omitempty"`
 	SourceSpecs map[string]string `json:"source_specs,omitempty"`
 
-	// A source_hash corrupted in place still parses and reads as a completed ship, which is silent
-	// permanent loss. Absent on documents written before this field existed.
+	// Catches a source_hash corrupted in place, which would read as a completed ship; absent on old documents.
 	Checksum string `json:"checksum,omitempty"`
 
 	Entries []wireEntry `json:"entries"`
@@ -45,8 +44,7 @@ type wireEntry struct {
 	BackoffUntil string       `json:"backoff_until,omitempty"`
 }
 
-// Hashed with the checksum cleared, so both sides compute over the same bytes. Marshal, never
-// MarshalIndent: formatting must be free to change without invalidating every store in the fleet.
+// Hashed compact with the checksum cleared, so formatting can change without invalidating stores.
 func checksumOf(doc wireDoc) (string, error) {
 	doc.Checksum = ""
 	body, err := json.Marshal(doc)
@@ -68,20 +66,10 @@ func encode(installID string, updatedAt time.Time, specs map[string]string, entr
 	})
 	for _, k := range keys {
 		fp := entries[k]
-		e := wireEntry{
-			SourceID:   k.SourceID,
-			NativePath: k.NativePath,
-			SourceSize: fp.SourceSize,
-			SourceHash: fp.SourceHash,
-			OutputHash: fp.OutputHash,
-			Attempts:   fp.Attempts,
-			Parked:     fp.Parked,
-			LastError:  fp.LastError,
-			Enricher:   fp.Enricher,
-		}
+		e := wireEntry{SourceID: k.SourceID, NativePath: k.NativePath, SourceSize: fp.SourceSize, SourceHash: fp.SourceHash,
+			OutputHash: fp.OutputHash, Attempts: fp.Attempts, Parked: fp.Parked, LastError: fp.LastError, Enricher: fp.Enricher}
 		if !fp.SourceMTime.IsZero() {
-			// Nanoseconds: the pre-filter compares this for exact equality, so whole seconds would
-			// re-hash every file every tick. Do not lower the precision.
+			// Nanoseconds: the pre-filter compares for equality, so seconds would re-hash every tick.
 			e.SourceMTime = fp.SourceMTime.UTC().Format(time.RFC3339Nano)
 		}
 		if !fp.BackoffUntil.IsZero() {
@@ -147,15 +135,8 @@ func load(stateDir string, maxBytes int64) (Document, error) {
 		if e.Attempts < 0 {
 			return Document{}, fmt.Errorf("state: entry %s %s: negative attempts %d", e.SourceID, e.NativePath, e.Attempts)
 		}
-		fp := Fingerprint{
-			SourceSize: e.SourceSize,
-			SourceHash: e.SourceHash,
-			OutputHash: e.OutputHash,
-			Attempts:   e.Attempts,
-			Parked:     e.Parked,
-			LastError:  e.LastError,
-			Enricher:   e.Enricher,
-		}
+		fp := Fingerprint{SourceSize: e.SourceSize, SourceHash: e.SourceHash, OutputHash: e.OutputHash,
+			Attempts: e.Attempts, Parked: e.Parked, LastError: e.LastError, Enricher: e.Enricher}
 		fp.SourceMTime, _ = time.Parse(time.RFC3339, e.SourceMTime)
 		fp.BackoffUntil, _ = time.Parse(time.RFC3339, e.BackoffUntil)
 		out.Entries[Key{SourceID: e.SourceID, NativePath: e.NativePath}] = fp

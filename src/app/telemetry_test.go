@@ -18,8 +18,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// An absolute path in a fault message names the directory a file sat in, which on a working machine
-// names a project or a client. The last two segments say which file, which is all an alert needs.
+// Absolute paths name projects or clients, so only their last two segments leave the machine.
 func TestAbsolutePathsAreShortenedOnTheWayOut(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
 		"a project path": {

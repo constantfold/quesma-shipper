@@ -13,9 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// The suite's upload port: an in-memory object store that records every group and every stored
-// object, so a test can assert what a run touched. A test file, because a fake that ships in the
-// module is a runtime adapter.
+// The suite's upload port: an in-memory store recording every group and object a run touched.
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 

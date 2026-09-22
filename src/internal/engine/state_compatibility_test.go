@@ -48,8 +48,7 @@ func TestCompatibleDocumentsLoadAndRewrite(t *testing.T) {
 	}
 }
 
-// The one exception to load's interpret-don't-audit stance: a negative attempts count reaches the
-// backoff as a negative shift and panics, so the document is refused with the entry named.
+// A negative attempts count would panic the backoff, so the document is refused with the entry named.
 func TestNegativeAttemptsIsRejectedOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl", "attempts": -5}]}`

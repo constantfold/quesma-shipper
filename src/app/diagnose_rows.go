@@ -36,8 +36,7 @@ func checkUpdate(ctx context.Context, build Build, autoupdate bool, getenv func(
 	if !autoupdate {
 		return UpdateStatus{State: "disabled", Detail: "check disabled by autoupdate.enabled: false"}
 	}
-	// Only a release build self-updates, and it does so through TUF. A dev build reports its own
-	// stamp and stops: no network, no comparison against a source repository.
+	// Only a release build self-updates, through TUF; a dev build makes no network call.
 	if !build.Release {
 		return UpdateStatus{State: "skipped", Detail: "dev build; self-update installs only in release builds"}
 	}

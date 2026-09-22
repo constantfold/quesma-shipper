@@ -17,19 +17,8 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 		return &out, nil
 	}
 
-	disc, err := sources.Discover(sources.Request{
-		Source:   src,
-		All:      o.Sources,
-		Deny:     o.Deny,
-		Ignore:   o.Ignore,
-		StateDir: o.StateDir,
-		Username: o.user,
-		Now:      o.Now,
-		Interval: o.Interval,
-		Context:  ctx,
-		Env:      o.Env,
-		Capture:  !o.DryRun,
-	})
+	disc, err := sources.Discover(sources.Request{Source: src, All: o.Sources, Deny: o.Deny, Ignore: o.Ignore,
+		StateDir: o.StateDir, Username: o.user, Now: o.Now, Interval: o.Interval, Context: ctx, Env: o.Env, Capture: !o.DryRun})
 	if err != nil {
 		out.Health, out.Reason = formats.MatchPresentUnreadable, err.Error()
 		return &out, nil
@@ -46,23 +35,16 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 	// One audit line for unreadable paths: a thousand under one unreadable parent are one fact.
 	out.Unreadable, out.UnreadableExample, out.UnreadableReason = disc.Unreadable, disc.UnreadableExample, disc.UnreadableReason
 	if out.Unreadable > 0 {
-		o.auditSource(src.ID, auditlog.Entry{
-			Decision: auditlog.DecisionSkipped,
-			File:     disc.UnreadableExample,
-			Reason:   "not readable during discovery: " + disc.UnreadableReason,
-		})
+		o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionSkipped, File: disc.UnreadableExample,
+			Reason: "not readable during discovery: " + disc.UnreadableReason})
 	}
 	out.Oversize = len(disc.Oversize)
 	for _, big := range disc.Oversize {
 		if big.Size > out.OversizeLargest {
 			out.OversizeLargest, out.OversizeExample, out.OversizeLimit = big.Size, big.RelPath, big.Limit
 		}
-		o.auditSource(src.ID, auditlog.Entry{
-			Decision: auditlog.DecisionSkipped,
-			File:     big.RelPath,
-			BytesIn:  big.Size,
-			Reason:   fmt.Sprintf("over the size cap: %d bytes, limit %d — not read", big.Size, big.Limit),
-		})
+		o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionSkipped, File: big.RelPath, BytesIn: big.Size,
+			Reason: fmt.Sprintf("over the size cap: %d bytes, limit %d — not read", big.Size, big.Limit)})
 	}
 
 	enrichers := o.enrichersFor(src)
@@ -101,10 +83,8 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 			return nil, err
 		}
 		if n > 0 {
-			o.auditSource(src.ID, auditlog.Entry{
-				Decision: auditlog.DecisionSkipped,
-				Reason:   fmt.Sprintf("forgot %d fingerprint(s) for files this source no longer has", n),
-			})
+			o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionSkipped,
+				Reason: fmt.Sprintf("forgot %d fingerprint(s) for files this source no longer has", n)})
 		}
 	}
 

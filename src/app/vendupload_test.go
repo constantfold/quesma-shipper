@@ -20,11 +20,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
-// Each classification decides whether a run stops for good, stops until the next tick, or asks
-// for one fresh ticket.
-
-// A refusal kills the install, an outage stops only this run: the sentinels must not reach each
-// other, and everything else stays unclassified so the next run retries it.
+// A refusal kills the install and an outage stops one run; the sentinels never wrap each other.
 func TestClassifyAuthorize(t *testing.T) {
 	refused := fmt.Errorf("backend: refused this install (HTTP 403): %w", formats.ErrCredentialsRefused)
 	unavailable := fmt.Errorf("%w (HTTP 503)", controlplane.ErrAuthorizeUnavailable)
@@ -60,8 +56,7 @@ func preparedObject(id string) engine.PreparedObject {
 	}
 }
 
-// portAgainst is one vend port whose control plane and store are both fn, so the test sees every
-// request the port makes.
+// portAgainst serves both the control plane and the store from fn, so the test sees every request.
 func portAgainst(t *testing.T, fn http.HandlerFunc) *vendPort {
 	t.Helper()
 	srv := httptest.NewServer(fn)
@@ -82,8 +77,7 @@ func portAgainst(t *testing.T, fn http.HandlerFunc) *vendPort {
 		writerID: "writer", now: time.Now}
 }
 
-// An object the archive already holds is finished at the answer: no ticket validation and no
-// PUT, while the absent one in the same batch is still sent.
+// An already-present object gets no PUT, while the absent one in the same batch is still sent.
 func TestAnAlreadyPresentAnswerSkipsThePutAndTheRestStillShips(t *testing.T) {
 	var puts []string
 	p := portAgainst(t, func(w http.ResponseWriter, r *http.Request) {
@@ -107,8 +101,7 @@ func TestAnAlreadyPresentAnswerSkipsThePutAndTheRestStillShips(t *testing.T) {
 	assert.Truef(t, len(puts) == 1 && puts[0] == "/b/k1", "the port PUT %v, want the absent object alone", puts)
 }
 
-// The request metadata set is closed: a name outside it fails the whole batch, because dropping
-// it would ship an object whose plaintext metadata disagrees with the manifest sealed inside.
+// A metadata name outside the closed set fails the batch rather than disagree with the sealed manifest.
 func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
 	md, _, err := uploadMetadata(map[string]string{
 		"manifest-version": "1",
@@ -127,8 +120,7 @@ func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
 	}
 }
 
-// agent-version is read out of a transcript: out of the server's grammar it would fail the whole
-// batch for as long as that file exists, so it is dropped loudly instead.
+// An out-of-grammar agent-version is dropped loudly, so one file cannot fail every batch.
 func TestAnOutOfGrammarAgentVersionIsDroppedRatherThanShipped(t *testing.T) {
 	for _, tc := range []struct {
 		value string

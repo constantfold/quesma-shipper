@@ -89,8 +89,7 @@ func withRestart(msg, lead string) string {
 	return msg
 }
 
-// configUnreadableWarning covers an update with nowhere to look up the service: silent, it would
-// be indistinguishable from a restart that happened.
+// configUnreadableWarning keeps an unrestarted service from looking like a restart that happened.
 func configUnreadableWarning(err error) string {
 	return withRestart(fmt.Sprintf("the configuration does not resolve (%v), so the background service was not restarted;\n"+
 		"the update is installed and the daemon keeps the previous version until something restarts it", err), ";\nto force it now: ")
@@ -101,14 +100,12 @@ func serviceStateTimeoutError(err error) error {
 		serviceStateTimeout, err, withRestart("the update is installed but its service restart was not requested", "; restart it with: "))
 }
 
-// restartTimeoutWarning is not an error: the binary is swapped and the supervisor restarts the
-// agent onto it as soon as the drain ends. Only the wait for confirmation gave up.
+// restartTimeoutWarning is not an error: the binary is swapped and the service restarts onto it after draining.
 func restartTimeoutWarning(budget time.Duration) string {
 	return withRestart(fmt.Sprintf("the background service was still shutting down after %s; the update is installed and the service starts on the new version when its final slice is shipped", budget), "; to force it now: ")
 }
 
-// selfUpdateGate blocks the hop that did not land: we updated to persistedHop, restarted, and are
-// still not running it. A hop that matches this build has done its job and the caller clears it.
+// selfUpdateGate blocks a hop that did not land: we updated to persistedHop and still run something else.
 func selfUpdateGate(build app.Build, getenv func(string) string, persistedHop string) (run bool, why string) {
 	if !build.Release {
 		return false, ""
@@ -125,8 +122,7 @@ func selfUpdateGate(build app.Build, getenv func(string) string, persistedHop st
 	return true, ""
 }
 
-// maybeSelfUpdate replaces a released binary at daemon start; autoupdate is the resolved
-// autoupdate.enabled, true when the config did not resolve.
+// maybeSelfUpdate replaces a released binary at daemon start; autoupdate is true when config did not resolve.
 func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errOut io.Writer) {
 	stateDir, stateErr := app.StateDirWithoutConfig()
 	persistedHop := ""
