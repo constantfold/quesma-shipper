@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,18 +91,12 @@ func TestAnchorLiterals(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
+	for _, r := range loadedRules(t, PatternPacks...) {
+		got := describeAnchor(r)
+		if want[r.id] != got {
+			t.Errorf("%s: anchor is %s, table says %s", r.id, got, want[r.id])
 		}
-		for _, r := range rules {
-			got := describeAnchor(r)
-			if want[r.id] != got {
-				t.Errorf("%s: anchor is %s, table says %s", r.id, got, want[r.id])
-			}
-			seen[r.id] = true
-		}
+		seen[r.id] = true
 	}
 	for id := range want {
 		if !seen[id] {
@@ -123,6 +118,30 @@ func describeAnchor(r *Rule) string {
 	}
 	fmt.Fprintf(&b, "%q", r.anchor.lits)
 	return b.String()
+}
+
+func loadedRules(t testing.TB, packs ...string) []*Rule {
+	t.Helper()
+	var out []*Rule
+	for _, pack := range packs {
+		rules, err := Load(pack)
+		if err != nil {
+			t.Fatalf("Load(%s): %v", pack, err)
+		}
+		out = append(out, rules...)
+	}
+	return out
+}
+
+func ruleByID(t testing.TB, pack, id string) *Rule {
+	t.Helper()
+	for _, r := range loadedRules(t, pack) {
+		if r.id == id {
+			return r
+		}
+	}
+	t.Fatalf("%s: %s missing from the pack", pack, id)
+	return nil
 }
 
 // The shapes the build must refuse: a refusal costs throughput, a wrong acceptance costs a
@@ -178,25 +197,22 @@ func TestAnchorMatchesSweep(t *testing.T) {
 		rounds = 2000
 	}
 	total := 0
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if r.anchor == nil {
+			continue
 		}
-		for _, r := range rules {
-			if r.anchor == nil {
-				continue
+		values := slices.Clone(anchorTraps)
+		alphabet := fuzzAlphabet(r)
+		for i := 0; i < rounds; i++ {
+			values = append(values, buildFuzzValue(rng, alphabet))
+		}
+		for _, value := range values {
+			got := r.matchAnchored(value)
+			want := r.matchSweep(value)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
 			}
-			alphabet := fuzzAlphabet(r)
-			for i := 0; i < rounds; i++ {
-				value := buildFuzzValue(rng, alphabet)
-				got := r.matchAnchored(value)
-				want := r.matchSweep(value)
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
-				}
-				total++
-			}
+			total++
 		}
 	}
 	t.Logf("%d cases", total)
@@ -245,59 +261,34 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 
 // The hand-written half of the fuzz: a candidate the pattern rejects sitting in front of, or
 // inside, a real match. Getting the resume position wrong loses exactly these.
-func TestAnchorOverlapTraps(t *testing.T) {
-	rules := map[string]*Rule{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		loaded, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range loaded {
-			rules[r.id] = r
-		}
-	}
-
-	values := []string{
-		// A rejected candidate in front of a live one, sharing a prefix.
-		"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
-		"AKIAAKIA0123456789ABCDEF",
-		"SKSK" + strings.Repeat("a", 32),
-		"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
-		"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
-		// Boundary traps around the \b rules.
-		"_AIza" + strings.Repeat("b", 35),
-		"AIza" + strings.Repeat("b", 36),
-		" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
-		// Case-folded heads, including the runes (?i) reaches outside ASCII.
-		"ToKeN: " + strings.Repeat("a", 25),
-		"toKen: " + strings.Repeat("a", 25),
-		"MY_ſECRET token : " + strings.Repeat("a", 25),
-		"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
-		"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
-		// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
-		"://user:pass@host",
-		"x://user:pass@host",
-		"1http://user:pass@host",
-		"http://user:pass@host postgres://admin:hunter2@db:5432/app",
-		"see http://a://user:pass@host",
-		"ftp://u:p@h ftp://u:p@h",
-		"http://user@host",
-		"http://user:pw@ http://user:password@host",
-		strings.Repeat("a", 100) + "://u:ppp@h",
-		"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
-	}
-
-	for _, v := range values {
-		for id, r := range rules {
-			if r.anchor == nil {
-				continue
-			}
-			got, want := r.matchAnchored(v), r.matchSweep(v)
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s on %q:\n anchored %v\n sweep    %v", id, v, got, want)
-			}
-		}
-	}
+var anchorTraps = []string{
+	// A rejected candidate in front of a live one, sharing a prefix.
+	"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
+	"AKIAAKIA0123456789ABCDEF",
+	"SKSK" + strings.Repeat("a", 32),
+	"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
+	"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
+	// Boundary traps around the \b rules.
+	"_AIza" + strings.Repeat("b", 35),
+	"AIza" + strings.Repeat("b", 36),
+	" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
+	// Case-folded heads, including the runes (?i) reaches outside ASCII.
+	"ToKeN: " + strings.Repeat("a", 25),
+	"toKen: " + strings.Repeat("a", 25),
+	"MY_ſECRET token : " + strings.Repeat("a", 25),
+	"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
+	"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
+	// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
+	"://user:pass@host",
+	"x://user:pass@host",
+	"1http://user:pass@host",
+	"http://user:pass@host postgres://admin:hunter2@db:5432/app",
+	"see http://a://user:pass@host",
+	"ftp://u:p@h ftp://u:p@h",
+	"http://user@host",
+	"http://user:pw@ http://user:password@host",
+	strings.Repeat("a", 100) + "://u:ppp@h",
+	"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
 }
 
 // The regression for the shape that made anchoring quadratic: every line a PEM header, none a
@@ -305,19 +296,7 @@ func TestAnchorOverlapTraps(t *testing.T) {
 // unanchored and doubled input not blowing the time up. The bound is loose on purpose: a shape
 // test, not a throughput budget.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
-	rules, err := Load(CloudKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var pem *Rule
-	for _, r := range rules {
-		if r.id == "private-key-block" {
-			pem = r
-		}
-	}
-	if pem == nil {
-		t.Fatal("cloud-keys no longer carries private-key-block")
-	}
+	pem := ruleByID(t, CloudKeys, "private-key-block")
 	if pem.anchor != nil {
 		t.Fatal("private-key-block is anchored: its unbounded body makes a failed " +
 			"candidate cost the whole value, which is why the corpus declares \"sweep\"")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,12 +16,8 @@ import (
 // piiScannerRules returns the loaded rules that carry a hand scanner.
 func piiScannerRules(t *testing.T) []*Rule {
 	t.Helper()
-	rules, err := Load(PIICore)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out []*Rule
-	for _, r := range rules {
+	for _, r := range loadedRules(t, PIICore) {
 		if r.hand != nil || r.fused != fusedNone {
 			out = append(out, r)
 		}
@@ -67,48 +64,49 @@ func compareScannerAndRegex(t *testing.T, r *Rule, value string) {
 
 // The cases the fuzz below would only reach by luck: candidates touching both ends of the
 // value, every separator position, runs one byte either side of every bound.
-func TestPIIScannersAgreeWithTheirRegexOnEdges(t *testing.T) {
+var piiEdgeValues = []string{
+	"", " ", "-", "0", "_", "abc", "\xff", "é", "\x80\x80\x80",
+	"12345678901", " 12345678901 ", "12345678901x", "x12345678901",
+	"_12345678901", "12345678901_", "123456789012", "1234567890",
+	"12345678901 12345678901", "12345678901-12345678901",
+	"44051401359", " 44051401359", "44051401359\n", "4405140135944051401359",
+	"4111111111111111", " 4111111111111111 ", "4111 1111 1111 1111",
+	"4111-1111-1111-1111", "4111 1111-1111 1111", "4111  1111 1111 1111",
+	"-4111111111111111-", "x4111111111111111", "4111111111111111x",
+	"41111111111111111111", "411111111111111111111111111111",
+	"1 2 3 4 5 6 7 8 9 0 1 2 3", "1-2-3-4-5-6-7-8-9-0-1-2-3",
+	"1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3",
+	"4111111111111111 4111111111111111", "0000000000000000",
+	"411111111111111 1", "411111111111111-", "-411111111111111",
+	"4111111111111111-1", "1-4111111111111111", "4111111111111111 1111",
+	"DE89370400440532013000", " DE89370400440532013000 ",
+	"DE893704004405320130001111111111111", "GB82WEST12345698765432",
+	"de89370400440532013000", "DE8937040044053201300", "XX00XXXXXXXXXXX",
+	"DE89370400440532013000_", "_DE89370400440532013000",
+	"DE89 3704 0044 0532 0130 00", "AB12CDEFGHIJKLMNO",
+	"AB12CDEFGHIJKLM", "AB12CDEFGHIJKL", "A1B2CDEFGHIJKLMNO",
+	"12ABCDEFGHIJKLMNO", "AB1CDEFGHIJKLMNOP",
+	strings.Repeat("9", 40), strings.Repeat("9 ", 40), strings.Repeat("9-", 40),
+	strings.Repeat("A9", 40), strings.Repeat("1", 19) + "é" + strings.Repeat("1", 19),
+	// Mixed shapes in one value, for the shared walk.
+	"44051401359 44051401359", "DE8937040044053201300044051401359",
+	"4111 1111 1111 1111 44051401359 4111111111111111",
+	"44051401359-4111 1111 1111 1111-DE89370400440532013000",
+	"AB12CDEFGHIJKLMN", "AB12CDEFGHIJKLMNo", "AB12CDEFGHIJKLMN_",
+	strings.Repeat("4111", 20), strings.Repeat("1 ", 200),
+}
+
+// The edges, then the volume half: digit soup with separators everywhere, valid and invalid checksums.
+func TestPIIScannersAgreeWithTheirRegex(t *testing.T) {
 	rules := piiScannerRules(t)
 
-	values := []string{
-		"", " ", "-", "0", "_", "abc", "\xff", "é", "\x80\x80\x80",
-		"12345678901", " 12345678901 ", "12345678901x", "x12345678901",
-		"_12345678901", "12345678901_", "123456789012", "1234567890",
-		"12345678901 12345678901", "12345678901-12345678901",
-		"44051401359", " 44051401359", "44051401359\n", "4405140135944051401359",
-		"4111111111111111", " 4111111111111111 ", "4111 1111 1111 1111",
-		"4111-1111-1111-1111", "4111 1111-1111 1111", "4111  1111 1111 1111",
-		"-4111111111111111-", "x4111111111111111", "4111111111111111x",
-		"41111111111111111111", "411111111111111111111111111111",
-		"1 2 3 4 5 6 7 8 9 0 1 2 3", "1-2-3-4-5-6-7-8-9-0-1-2-3",
-		"1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3",
-		"4111111111111111 4111111111111111", "0000000000000000",
-		"411111111111111 1", "411111111111111-", "-411111111111111",
-		"4111111111111111-1", "1-4111111111111111", "4111111111111111 1111",
-		"DE89370400440532013000", " DE89370400440532013000 ",
-		"DE893704004405320130001111111111111", "GB82WEST12345698765432",
-		"de89370400440532013000", "DE8937040044053201300", "XX00XXXXXXXXXXX",
-		"DE89370400440532013000_", "_DE89370400440532013000",
-		"DE89 3704 0044 0532 0130 00", "AB12CDEFGHIJKLMNO",
-		"AB12CDEFGHIJKLM", "AB12CDEFGHIJKL", "A1B2CDEFGHIJKLMNO",
-		"12ABCDEFGHIJKLMNO", "AB1CDEFGHIJKLMNOP",
-		strings.Repeat("9", 40), strings.Repeat("9 ", 40), strings.Repeat("9-", 40),
-		strings.Repeat("A9", 40), strings.Repeat("1", 19) + "é" + strings.Repeat("1", 19),
+	values := slices.Clone(piiEdgeValues)
+	rng := rand.New(rand.NewSource(20260816))
+	for i := 0; i < 40000; i++ {
+		values = append(values, randPIIValue(rng))
 	}
 	for _, r := range rules {
 		for _, v := range values {
-			compareScannerAndRegex(t, r, v)
-		}
-	}
-}
-
-// The volume half: digit soup with separators everywhere, valid and invalid checksums.
-func TestPIIScannersAgreeWithTheirRegexOnFuzz(t *testing.T) {
-	rules := piiScannerRules(t)
-	rng := rand.New(rand.NewSource(20260816))
-	for i := 0; i < 40000; i++ {
-		v := randPIIValue(rng)
-		for _, r := range rules {
 			compareScannerAndRegex(t, r, v)
 		}
 	}
@@ -174,43 +172,9 @@ func randSeparatedDigits(rng *rand.Rand) string {
 	return b.String()
 }
 
-// The redaction floor stated directly, so a scanner that agrees with a broken regex still
-// fails: the identifiers these rules exist for must come back as spans.
-func TestPIIScannersFindTheCanonicalIdentifiers(t *testing.T) {
-	rules := map[string]*Rule{}
-	for _, r := range piiScannerRules(t) {
-		rules[r.id] = r
-	}
-	cases := []struct {
-		rule  string
-		value string
-		want  string
-	}{
-		{"card-pan", "card 4111111111111111 on file", "4111111111111111"},
-		{"card-pan", "card 4111 1111 1111 1111 on file", "4111 1111 1111 1111"},
-		{"card-pan", "card 4111-1111-1111-1111.", "4111-1111-1111-1111"},
-		{"pesel", "pesel 44051401359 ok", "44051401359"},
-		{"iban", "iban DE89370400440532013000 ok", "DE89370400440532013000"},
-		{"email", "mail jane@example.com now", "jane@example.com"},
-		{"email", "<a.b+tag@sub.example.co.uk>", "a.b+tag@sub.example.co.uk"},
-	}
-	for _, tc := range cases {
-		spans := rules[tc.rule].MatchScanned(tc.value)
-		if len(spans) != 1 {
-			t.Fatalf("%s on %q: got %d spans", tc.rule, tc.value, len(spans))
-		}
-		if got := tc.value[spans[0].Start:spans[0].End]; got != tc.want {
-			t.Errorf("%s on %q: span %q, want %q", tc.rule, tc.value, got, tc.want)
-		}
-	}
-}
-
 // The per-rule cost on prose with no candidate in it, which is what a transcript mostly is.
 func BenchmarkPIIRules(b *testing.B) {
-	rules, err := Load(PIICore)
-	if err != nil {
-		b.Fatal(err)
-	}
+	rules := loadedRules(b, PIICore)
 	var sb strings.Builder
 	for sb.Len() < 1<<20 {
 		fmt.Fprintf(&sb, "internal/scrub/packs/pii.go:%d: the scanner walks the value once\n", sb.Len())

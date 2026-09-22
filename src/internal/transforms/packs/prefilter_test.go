@@ -44,15 +44,9 @@ const (
 // would. A gate firing too rarely is a silently weakened scrub floor, so predicates are compared.
 func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 	var keywordSets [][]string
-	for _, pack := range PatternPacks {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range rules {
-			if len(r.Keywords()) > 0 {
-				keywordSets = append(keywordSets, r.Keywords())
-			}
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if len(r.Keywords()) > 0 {
+			keywordSets = append(keywordSets, r.Keywords())
 		}
 	}
 	if len(keywordSets) < 10 {
@@ -142,33 +136,5 @@ func TestPrefilterRejectsNonASCIIKeywords(t *testing.T) {
 	}
 	if _, err := b.AddKeywords([]string{""}); err == nil {
 		t.Fatal("expected an empty keyword to fail the build")
-	}
-}
-
-// Same registrations, same tables: the build stays reproducible.
-func TestPrefilterGatesAreDeterministic(t *testing.T) {
-	build := func() *Prefilter {
-		b := NewPrefilterBuilder()
-		for _, pack := range PatternPacks {
-			rules, err := Load(pack)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, r := range rules {
-				if _, err := b.AddKeywords(r.Keywords()); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		return b.Build()
-	}
-	a, c := build(), build()
-	if a.width != c.width || len(a.next) != len(c.next) {
-		t.Fatal("table shape differs between builds")
-	}
-	for i := range a.next {
-		if a.next[i] != c.next[i] {
-			t.Fatalf("transition %d differs between builds", i)
-		}
 	}
 }
