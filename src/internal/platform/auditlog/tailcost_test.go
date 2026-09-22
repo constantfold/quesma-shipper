@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tailing must cost the answer, not the history: internal, because a whole-file read returns the same entries.
+// A large log must return the newest entries while reading only its tail.
 func TestTailingALargeLogReadsOnlyTheEndOfIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
@@ -24,25 +24,22 @@ func TestTailingALargeLogReadsOnlyTheEndOfIt(t *testing.T) {
 	}
 	f.Close()
 
-	size := mustSize(t, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	size := info.Size()
 	require.Truef(t, size >= 30<<20, "the fixture is only %d bytes; it cannot show the difference", size)
 
 	bytesRead.Store(0)
-	if _, err := Tail(path, 3); err != nil {
-		t.Fatal(err)
-	}
+	entries, err := Tail(path, 3)
 	read := bytesRead.Load()
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, "f19999", entries[2].File, "last entry must be the newest line")
+	assert.Equal(t, "f19997", entries[0].File, "first entry must be the third newest line")
 
 	if read > 1<<20 {
 		t.Errorf("tailing 3 lines from a %d byte log read %d bytes; it should read the end, "+
 			"not the file", size, read)
 	}
 	assert.NotEqual(t, int64(0), read, "nothing was read; the counter is not wired and this test proves nothing")
-}
-
-func mustSize(t *testing.T, path string) int64 {
-	t.Helper()
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	return info.Size()
 }

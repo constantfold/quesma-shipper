@@ -69,42 +69,28 @@ func TestLogIsAppendOnly(t *testing.T) {
 	assert.True(t, strings.HasPrefix(string(second), string(first)), "an existing entry was rewritten; the log must only grow")
 }
 
-// A reason string that quotes payload is withheld entirely rather than trimmed.
-func TestReasonCarryingPayloadIsWithheld(t *testing.T) {
-	l, path := open(t)
-
-	require.NoError(t, l.Append(auditlog.Entry{
-		Decision: auditlog.DecisionFailed,
-		Reason:   `failed on record {"text":"__REDACTED:github-pat__ and more"}`,
-	}))
-	entries, err := auditlog.Tail(path, 0)
-	require.NoError(t, err)
-	assert.NotContainsf(t, entries[0].Reason, "__REDACTED:", "a payload-derived reason must be withheld, got %q", entries[0].Reason)
-	assert.Containsf(t, entries[0].Reason, "withheld", "the withholding must be visible rather than silent, got %q", entries[0].Reason)
-}
-
-// A newline inside a reason would split one record into two, so reasons are flattened.
-func TestReasonNewlinesAreFlattened(t *testing.T) {
-	l, path := open(t)
-	require.NoError(t, l.Append(auditlog.Entry{
-		Decision: auditlog.DecisionFailed,
-		Reason:   "line one\nline two\r\nline three",
-	}))
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, 0, strings.Count(strings.TrimRight(string(raw), "\n"), "\n"), "a multi-line reason produced multiple log lines")
-	entries, err := auditlog.Tail(path, 0)
-	require.NoError(t, err)
-	assert.Lenf(t, entries, 1, "expected one entry, got %d", len(entries))
-}
-
-func TestOverlongReasonIsTruncated(t *testing.T) {
-	l, path := open(t)
-	require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: strings.Repeat("x", 5000)}))
-	entries, err := auditlog.Tail(path, 0)
-	require.NoError(t, err)
-	assert.Truef(t, len(entries[0].Reason) <= 600, "reason not truncated: %d bytes", len(entries[0].Reason))
-	assert.Contains(t, entries[0].Reason, "truncated", "truncation should be visible")
+// Reasons stay on one bounded line and never quote a redacted payload.
+func TestReasonSanitization(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"payload withheld", `failed on record {"text":"__REDACTED:github-pat__ and more"}`,
+			"(reason withheld: contained payload-derived text)"},
+		{"newlines flattened", "line one\nline two\r\nline three", "line one line two  line three"},
+		{"overlong truncated", strings.Repeat("x", 5000), strings.Repeat("x", 500) + "…(truncated)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, path := open(t)
+			require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: tc.input}))
+			entries, err := auditlog.Tail(path, 0)
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.want, entries[0].Reason)
+			assert.LessOrEqual(t, len(entries[0].Reason), 600)
+			assert.NotContains(t, entries[0].Reason, "__REDACTED:")
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, 0, strings.Count(strings.TrimRight(string(raw), "\n"), "\n"), "a reason produced multiple log lines")
+		})
+	}
 }
 
 // A torn last line from a crash must not make the whole log unreadable.
