@@ -111,7 +111,7 @@ func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []e
 		md := it.pending.md
 		hash := md["source-hash"]
 		delete(md, "source-hash")
-		batch[i] = PreparedObject{ObjectID: strconv.Itoa(i), Key: it.pending.objectKey, Body: it.pending.obj, SourceHash: hash, Metadata: md}
+		batch[i] = PreparedObject{ObjectID: strconv.Itoa(i), Key: it.outcome.ObjectKey, Body: it.pending.obj, SourceHash: hash, Metadata: md}
 	}
 	upload := func(objects []PreparedObject, description string) []error {
 		outcomes := o.Upload.AuthorizeAndUpload(ctx, objects)

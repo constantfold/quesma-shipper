@@ -22,11 +22,11 @@ func (okPort) AuthorizeAndUpload(_ context.Context, batch []PreparedObject) []er
 // stagedFor is one sealed object of a given size.
 func stagedFor(idx, size int) fileResult {
 	return fileResult{
-		idx: idx,
+		idx:     idx,
+		outcome: FileOutcome{ObjectKey: fmt.Sprintf("v1/o/%d.age", idx)},
 		pending: &pendingPut{
-			objectKey: fmt.Sprintf("v1/o/%d.age", idx),
-			obj:       make([]byte, size),
-			md:        map[string]string{"source-hash": "deadbeef"},
+			obj: make([]byte, size),
+			md:  map[string]string{"source-hash": "deadbeef"},
 		},
 	}
 }

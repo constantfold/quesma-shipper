@@ -16,10 +16,9 @@ import (
 
 // pendingPut is a sealed object waiting for an upload slot, so the compute slot can be released.
 type pendingPut struct {
-	objectKey string
-	obj       []byte
-	md        map[string]string
-	next      Fingerprint // committed on a successful PUT; fresh, so Attempts resets
+	obj  []byte
+	md   map[string]string
+	next Fingerprint // committed on a successful PUT; fresh, so Attempts resets
 }
 
 // prepareFile reads, scrubs and seals; a result with pending set still needs an upload.
@@ -121,10 +120,9 @@ func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload [
 		return nil
 	}
 	return &pendingPut{
-		objectKey: out.ObjectKey,
-		obj:       obj,
-		md:        sealed.ObjectMetadata(),
-		next:      next,
+		obj:  obj,
+		md:   sealed.ObjectMetadata(),
+		next: next,
 	}
 }
 

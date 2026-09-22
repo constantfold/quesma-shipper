@@ -14,13 +14,12 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-const installID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
-
-const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-const otherSha = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
-
-const otherInstall = "85a7e04c-32a4-4bf5-9c80-49c4f9d087bb"
+const (
+	installID    = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	otherInstall = "85a7e04c-32a4-4bf5-9c80-49c4f9d087bb"
+	sha          = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	otherSha     = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+)
 
 // What a re-enrolled machine wakes up to: a document another install left behind.
 func seedForeignDoc(t *testing.T, dir string, entries int) {
