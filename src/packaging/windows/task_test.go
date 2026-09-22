@@ -33,6 +33,7 @@ func TestTaskRunsAsTheInteractiveUserAndSurvivesUpdates(t *testing.T) {
 	} {
 		assert.Containsf(t, raw, want, "task XML lacks %q:\n%s", want, raw)
 	}
+	require.NoError(t, xml.Unmarshal([]byte(raw), new(any)))
 	doc, err := parseTask([]byte(raw))
 	require.NoError(t, err)
 	require.Truef(t, doc.enabled() && doc.Command == taskRunner(spec.Executable), "parsed task = %+v", doc)
@@ -92,10 +93,6 @@ func TestTaskXMLForSchtasksIsUTF16AndRoundTrips(t *testing.T) {
 	doc, err := parseTask(encoded)
 	require.NoError(t, err)
 	require.Equalf(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Command, "parsed command = %q", doc.Command)
-}
-
-func TestTaskXMLIsWellFormed(t *testing.T) {
-	require.NoError(t, xml.Unmarshal([]byte(renderTask(common.Spec{Executable: `C:\shipper.exe`}, "S-1-5-21-1", "jane")), new(any)))
 }
 
 // Task Scheduler's namespace is machine-wide, so two users' installs must not name the same task.

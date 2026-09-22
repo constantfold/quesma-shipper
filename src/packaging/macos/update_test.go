@@ -121,17 +121,15 @@ func testAppPackage(t *testing.T, version string) []byte {
 }
 
 // writeTestBundle is writeTestApp plus the release-version key the updater validates.
-func writeTestBundle(t *testing.T, app, version string) string {
+func writeTestBundle(t *testing.T, app, version string) {
 	t.Helper()
-	executable := writeTestApp(t, app, bundleIdentifier, executableName)
+	writeTestApp(t, app, bundleIdentifier, executableName)
 	plist := `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>` + bundleIdentifier + `</string>
 <key>` + releaseVersionField + `</key><string>` + version + `</string>
 </dict></plist>`
 	require.NoError(t, os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644))
-	require.NoError(t, os.Chmod(executable, 0o755))
-	return executable
 }
 
 func writeTestApp(t *testing.T, app, bundleID, executableName string) string {

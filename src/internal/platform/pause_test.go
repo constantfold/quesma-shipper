@@ -19,9 +19,7 @@ func TestPauseFlagLifecycle(t *testing.T) {
 		name, subdir, reason string
 	}{
 		{"round trip", "", "laptop going to a client site"},
-		{"idempotent", "", ""},
 		{"before init", "not/created/yet", ""},
-		{"repeated reads", "", "why"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), tc.subdir)

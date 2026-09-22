@@ -81,13 +81,10 @@ func runChild(path, logDir string) (int, error) {
 	}
 
 	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return -1, err
+	if err == nil {
+		err = windows.AssignProcessToJobObject(job, process)
+		windows.CloseHandle(process)
 	}
-	err = windows.AssignProcessToJobObject(job, process)
-	windows.CloseHandle(process)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()

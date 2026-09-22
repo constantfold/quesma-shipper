@@ -190,6 +190,13 @@ func ServiceProgram(st Status) string {
 	return ""
 }
 
+// XMLText escapes s for the XML service entries: the LaunchAgent plist and the Task Scheduler task.
+func XMLText(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
 func RemoveState(stateDir string) error {
 	return os.RemoveAll(stateDir)
 }

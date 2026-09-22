@@ -36,11 +36,7 @@ if (-not $compiler) {
     throw "Inno Setup compiler (ISCC.exe) is required"
 }
 
-$compilerPath = if ($compiler -is [System.Management.Automation.CommandInfo]) {
-    $compiler.Source
-} else {
-    $compiler
-}
+$compilerPath = if ($compiler -is [System.Management.Automation.CommandInfo]) { $compiler.Source } else { $compiler }
 # ISCC.exe carries no usable version resource; Compil32.exe does. An unreadable version is not
 # an error: ArchitecturesAllowed will fail the compile on its own if the toolchain is too old.
 $gui = Join-Path (Split-Path $compilerPath) 'Compil32.exe'

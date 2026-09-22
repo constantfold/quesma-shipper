@@ -44,16 +44,11 @@ func TestAppendAndTail(t *testing.T) {
 	assert.Equalf(t, auditlog.DecisionShipped, entries[0].Decision, "order: first entry is %q", entries[0].Decision)
 	assert.Equalf(t, auditlog.DecisionParked, entries[2].Decision, "order: last entry is %q", entries[2].Decision)
 	assert.True(t, !entries[0].At.IsZero(), "entries must be timestamped")
-}
 
-func TestTailLimits(t *testing.T) {
-	l, path := open(t)
-	for range 10 {
-		require.NoError(t, l.Append(auditlog.Entry{Decision: auditlog.DecisionShipped}))
-	}
-	entries, err := auditlog.Tail(path, 3)
+	entries, err = auditlog.Tail(path, 2)
 	require.NoError(t, err)
-	assert.Lenf(t, entries, 3, "expected 3 entries, got %d", len(entries))
+	require.Len(t, entries, 2)
+	assert.Equal(t, auditlog.DecisionUnchanged, entries[0].Decision, "a limited tail keeps the newest entries")
 }
 
 // The log is append-only: an entry already on disk is never rewritten, which is what makes it an audit log.

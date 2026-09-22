@@ -16,74 +16,50 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// The mode is explicit rather than left to umask: the identity unit must be 0600 whatever the ambient umask is.
-func TestWriteAtomicSetsModeRegardlessOfUmask(t *testing.T) {
+// The mode is explicit rather than left to umask: the identity unit and the run log must stay private.
+func TestWritesSetModeRegardlessOfUmask(t *testing.T) {
 	old := syscall.Umask(0o022)
 	defer syscall.Umask(old)
 
-	p := filepath.Join(t.TempDir(), "secret.json")
-	require.NoError(t, platform.WriteAtomic(p, []byte("x"), 0o600))
-	info, err := os.Stat(p)
+	dir := t.TempDir()
+	require.NoError(t, platform.WriteAtomic(filepath.Join(dir, "secret.json"), []byte("x"), 0o600))
+	f, err := platform.OpenTruncating(filepath.Join(dir, "last-sync.log"), 0o600)
 	require.NoError(t, err)
-	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+	f.Close()
+	for _, name := range []string{"secret.json", "last-sync.log"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err)
+		assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm(), name)
+	}
 }
 
-// The run log lives in the state directory, which must stay private whatever umask the operator's shell carries.
-func TestOpenTruncatingSetsModeRegardlessOfUmask(t *testing.T) {
-	old := syscall.Umask(0o022)
-	defer syscall.Umask(old)
-
-	p := filepath.Join(t.TempDir(), "last-sync.log")
-	f, err := platform.OpenTruncating(p, 0o600)
-	require.NoError(t, err)
-	defer f.Close()
-
-	info, err := os.Stat(p)
-	require.NoError(t, err)
-	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
-}
-
-// A fifo with no reader HANGS a blocking open from inside the section that holds the store lock, so the refusal must come from the open.
+// A readerless fifo HANGS a blocking open inside the store lock, so the open itself must refuse it;
+// with a reader attached the open succeeds, so the refusal comes from the fstat check instead.
 func TestOpenTruncatingRefusesFifo(t *testing.T) {
-	dir := t.TempDir()
-	pipe := filepath.Join(dir, "last-sync.log")
-	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
-		t.Skipf("cannot create fifos here: %v", err)
+	for _, withReader := range []bool{false, true} {
+		pipe := filepath.Join(t.TempDir(), "last-sync.log")
+		if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+			t.Skipf("cannot create fifos here: %v", err)
+		}
+		if withReader {
+			r, err := os.OpenFile(pipe, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			require.NoError(t, err)
+			defer r.Close()
+		}
+		var f *os.File
+		var err error
+		done := make(chan struct{})
+		go func() { f, err = platform.OpenTruncating(pipe, 0o600); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("OpenTruncating blocked on a fifo instead of refusing it")
+		}
+		if err == nil {
+			f.Close()
+		}
+		assert.ErrorIsf(t, err, platform.ErrNotRegular, "reader=%v: want ErrNotRegular, got %v", withReader, err)
 	}
-
-	var f *os.File
-	var err error
-	done := make(chan struct{})
-	go func() { f, err = platform.OpenTruncating(pipe, 0o600); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("OpenTruncating blocked on a readerless fifo instead of refusing it")
-	}
-	if err == nil {
-		f.Close()
-		t.Fatal("a fifo was opened for truncation")
-	}
-	assert.ErrorIsf(t, err, platform.ErrNotRegular, "want ErrNotRegular, got %v", err)
-}
-
-// With a reader attached the open succeeds, so this refusal comes from the fstat check rather than ENXIO.
-func TestOpenTruncatingRefusesFifoWithReader(t *testing.T) {
-	dir := t.TempDir()
-	pipe := filepath.Join(dir, "last-sync.log")
-	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
-		t.Skipf("cannot create fifos here: %v", err)
-	}
-	r, err := os.OpenFile(pipe, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	require.NoError(t, err)
-	defer r.Close()
-
-	f, err := platform.OpenTruncating(pipe, 0o600)
-	if err == nil {
-		f.Close()
-		t.Fatal("a fifo with a reader was opened for truncation")
-	}
-	assert.ErrorIsf(t, err, platform.ErrNotRegular, "want ErrNotRegular, got %v", err)
 }
 
 // A partial write must never be visible under the target name: the rename is the commit point.

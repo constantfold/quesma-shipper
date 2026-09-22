@@ -40,29 +40,19 @@ func TestHealthyJournalHasNoCrash(t *testing.T) {
 	}
 }
 
-// The journal no longer names the file being read, so the phase is the finest attribution a death
-// gets: enough to say a run died mid-tick rather than during startup.
-func TestADeathCarriesThePhaseItReached(t *testing.T) {
+// The phase is the finest attribution a death gets: enough to say a run died mid-tick rather than
+// during startup. Every consecutive death counts, and the newest one is reported.
+func TestConsecutiveCrashesCounted(t *testing.T) {
 	dir := t.TempDir()
-	deadRun(t, dir, "run-a", func(l *Log) {
+	deadRun(t, dir, "run-a", func(l *Log) { l.Phase("init") })
+	deadRun(t, dir, "run-b", func(l *Log) { l.Phase("init") })
+	deadRun(t, dir, "run-c", func(l *Log) {
 		l.Phase("init")
 		l.Phase("tick 1")
 	})
 
 	s := LastRun(dir)
-	require.Truef(t, s != nil && !s.Clean, "want a death, got %+v", s)
-	require.Equalf(t, "tick 1", s.Phase, "want the last phase reached, got %+v", s)
-	require.Equalf(t, 1, s.Crashes, "want 1 crash, got %d", s.Crashes)
-}
-
-func TestConsecutiveCrashesCounted(t *testing.T) {
-	dir := t.TempDir()
-	deadRun(t, dir, "run-a", func(l *Log) { l.Phase("init") })
-	deadRun(t, dir, "run-b", func(l *Log) { l.Phase("init") })
-	deadRun(t, dir, "run-c", func(l *Log) { l.Phase("init") })
-
-	s := LastRun(dir)
-	require.Truef(t, s != nil && !s.Clean && s.RunID == "run-c" && s.Crashes == 3 && s.Phase == "init", "want run-c with 3 crashes at init, got %+v", s)
+	require.Truef(t, s != nil && !s.Clean && s.RunID == "run-c" && s.Crashes == 3 && s.Phase == "tick 1", "want run-c with 3 crashes at tick 1, got %+v", s)
 }
 
 // Clean restarts cannot clear a crash: only delivery of the crash report does.

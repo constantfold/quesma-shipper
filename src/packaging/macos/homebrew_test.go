@@ -42,10 +42,7 @@ func TestHomebrewUpdateReexec(t *testing.T) {
 	require.NoError(t, os.WriteFile(installed, raw, 0o755))
 	link := filepath.Join(root, "shipper")
 	require.NoError(t, os.Symlink(installed, link))
-	plist := filepath.Join(root, "agent.plist")
-	spec := testSpec()
-	spec.Executable = installed
-	require.NoError(t, os.WriteFile(plist, []byte(renderPlist(spec)), 0o600))
+	plist := writePlist(t, root, installed)
 	cmd := exec.Command(link, "-test.run=^TestHomebrewUpdateReexec$")
 	cmd.Env = append(os.Environ(), "QUESMA_TEST_BREW_REEXEC=1", "QUESMA_TEST_BREW_REPLACEMENT="+replacement)
 	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "self-update restarted\n" {
@@ -81,9 +78,7 @@ func TestHomebrewServiceOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plist := filepath.Join(t.TempDir(), "agent.plist")
 			if tc.previous != "" {
-				spec := testSpec()
-				spec.Executable = tc.previous
-				require.NoError(t, os.WriteFile(plist, []byte(renderPlist(spec)), 0o600))
+				plist = writePlist(t, t.TempDir(), tc.previous)
 				require.Equal(t, common.ServiceProgram(Status{Path: plist}), tc.previous)
 			}
 			require.Equal(t, (checkInstallOwner(tc.next, plist) == nil), tc.allowed)
@@ -117,16 +112,23 @@ func TestHomebrewUninstallOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plist := filepath.Join(t.TempDir(), "agent.plist")
 			if tc.program != "" {
-				spec := testSpec()
-				spec.Executable = tc.program
-				raw := renderPlist(spec)
-				if tc.bad {
-					raw = "broken plist"
-				}
-				require.NoError(t, os.WriteFile(plist, []byte(raw), 0o600))
+				plist = writePlist(t, t.TempDir(), tc.program)
+			}
+			if tc.bad {
+				require.NoError(t, os.WriteFile(plist, []byte("broken plist"), 0o600))
 			}
 			owned, err := ownsHomebrewService(exe, plist)
 			require.Truef(t, owned == tc.owned && err != nil == tc.bad, "ownership = %v, %v", owned, err)
 		})
 	}
+}
+
+// writePlist installs a LaunchAgent entry for program under dir and returns its path.
+func writePlist(t *testing.T, dir, program string) string {
+	t.Helper()
+	spec := testSpec()
+	spec.Executable = program
+	plist := filepath.Join(dir, "agent.plist")
+	require.NoError(t, os.WriteFile(plist, []byte(renderPlist(spec)), 0o600))
+	return plist
 }

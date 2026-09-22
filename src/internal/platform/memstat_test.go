@@ -2,6 +2,7 @@ package platform_test
 
 import (
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -97,7 +98,5 @@ func TestAReadingDescribesTheRun(t *testing.T) {
 	d := platform.Delta{Before: before, After: platform.ReadMemStats()}
 	assert.Truef(t, d.Growth() > 0, "allocating 32 MB showed growth of %d", d.Growth())
 	assert.NotEqual(t, "", d.String(), "empty summary")
-	runtimeKeepAlive(junk)
+	runtime.KeepAlive(junk)
 }
-
-func runtimeKeepAlive(b []byte) { _ = b[0] }

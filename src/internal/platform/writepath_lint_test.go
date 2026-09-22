@@ -72,44 +72,28 @@ func forEachModuleGoFile(t *testing.T, fn func(rel string, file *ast.File, fset 
 }
 
 // writeCapablePackages may open files for writing; everything else must route through safeio,
-// which is what keeps "the shipper never writes inside an agent's store" true. Each entry earns
-// its place by owning a specific durable artifact:
-//
-//	internal/engine/state.go    the fingerprint document
-//	packaging/{common,macos,linux,windows} the program, app bundle, and supervision entries
-//	internal/platform/auditlog  the append-only local log
-//	internal/platform/crashjournal    the append-only crash journal
-//	internal/sources/sqliteread scratch snapshots and cold copies of agent databases
-//
-// sqliteread weakens this lint, so it carries a compensating control rather than an exemption:
-// it may write only under the scratch directory it is given, asserted by
-// TestDeclaredReadContract. The enricher packages that USE it stay off this list.
+// which is what keeps "the shipper never writes inside an agent's store" true. Each entry owns a
+// specific durable artifact. sqliteread weakens this lint, so it carries a compensating control: it
+// may write only under the scratch directory it is given, asserted by TestDeclaredReadContract.
 var writeCapablePackages = []string{
-	"internal/platform/auditlog",
-	"internal/platform/crashjournal",
-	"internal/sources/sqliteread",
-	"packaging/macos",
-	"packaging/linux",
-	"packaging/windows",
+	"internal/platform/auditlog",     // the append-only local log
+	"internal/platform/crashjournal", // the append-only crash journal
+	"internal/sources/sqliteread",    // scratch snapshots and cold copies of agent databases
+	"packaging/macos",                // the app bundle and the LaunchAgent
+	"packaging/linux",                // the systemd unit
+	"packaging/windows",              // the scheduled task definition
 }
 
-// writeCapableFiles is the FILE-granular half, for the merged platform package: a directory grant
+// writeCapableFiles is the file-granular half, for merged packages: a directory grant to platform
 // would extend write rights to memstat and buildinfo, which have none and must stay that way.
-//
-//	safeio.go   the sanctioned write path itself
-//	engine/state.go  the fingerprint document (the engine dir itself has no blanket grant)
-//	pause.go    the pause-state flag it must be able to set and clear
-//	packaging/common/service.go  service state
-//	packaging/common/remove.go  the installed standalone executable
-//	packaging/common/selfupdate.go  the cross-supervisor self-update hop guard
 var writeCapableFiles = []string{
-	"internal/platform/safeio.go",
-	"internal/engine/state.go",
-	"packaging/common/service.go",
-	"packaging/common/remove.go",
-	"packaging/common/selfupdate.go",
-	"internal/platform/pause.go",
-	"internal/sources/ignore.go",
+	"internal/platform/safeio.go",    // the sanctioned write path itself
+	"internal/platform/pause.go",     // the pause flag
+	"internal/engine/state.go",       // the fingerprint document
+	"internal/sources/ignore.go",     // the .notrajectories repository marker
+	"packaging/common/service.go",    // service state
+	"packaging/common/remove.go",     // the installed standalone executable
+	"packaging/common/selfupdate.go", // the self-update hop guard
 }
 
 // bannedWrites are the os-level calls that create or truncate a file.
@@ -156,7 +140,8 @@ func TestWritePathLint(t *testing.T) {
 			if !banned {
 				return true
 			}
-			findings = append(findings, formatFinding(rel, fset.Position(call.Pos()).Line, sel.Sel.Name, why))
+			findings = append(findings, fmt.Sprintf("%s:%d: os.%s outside the write allow-list — %s",
+				rel, fset.Position(call.Pos()).Line, sel.Sel.Name, why))
 			return true
 		})
 	})
@@ -167,10 +152,6 @@ func TestWritePathLint(t *testing.T) {
 	if len(findings) > 0 {
 		t.Logf("packages permitted to write: %s", strings.Join(writeCapablePackages, ", "))
 	}
-}
-
-func formatFinding(file string, line int, call, why string) string {
-	return fmt.Sprintf("%s:%d: os.%s outside the write allow-list — %s", file, line, call, why)
 }
 
 // bannedExec are the calls that create a process. os/exec wraps os.StartProcess, so its import is

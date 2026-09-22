@@ -31,17 +31,14 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 win
 .PHONY: dist
 dist: ## Cross-compile the shipper for every supported platform into bin/dist
 	@for p in $(PLATFORMS); do \
-		os=$$(echo $$p | cut -d/ -f1); arch=$$(echo $$p | cut -d/ -f2); \
+		os=$${p%/*}; arch=$${p#*/}; \
 		out=$(DIST)/quesma-shipper-$$os-$$arch; case $$os in windows) out=$$out.exe ;; esac; \
 		echo "building $$out"; \
 		(cd $(MODULE) && CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 			go build -trimpath -ldflags "$(LDFLAGS) -s -w" -o ../$$out ./cmd/quesma-shipper) || exit 1; \
-	done
-	@for arch in amd64 arm64; do \
-		out=$(DIST)/quesma-shipper-windows-$$arch-supervisor.exe; \
-		echo "building $$out"; \
+		[ $$os != windows ] || { out=$(DIST)/quesma-shipper-windows-$$arch-supervisor.exe; echo "building $$out"; \
 		(cd $(MODULE) && CGO_ENABLED=0 GOOS=windows GOARCH=$$arch \
-			go build -trimpath -ldflags "-s -w -H windowsgui" -o ../$$out ./cmd/quesma-shipper-supervisor) || exit 1; \
+			go build -trimpath -ldflags "-s -w -H windowsgui" -o ../$$out ./cmd/quesma-shipper-supervisor) || exit 1; }; \
 	done
 	@echo "built $(DIST)/ ($(VERSION))"
 
@@ -62,21 +59,10 @@ clean: ## Remove build and coverage output
 
 .PHONY: doctor
 doctor: ## Check the tools this repository's targets need
-	@ok=1; \
-	printf '%-10s %-8s %s\n' TOOL STATUS NEEDED-FOR; \
-	check() { \
-	  if command -v "$$1" >/dev/null 2>&1; then \
-	    printf '%-10s %-8s %s\n' "$$1" "ok" "$$3"; \
-	  else \
-	    printf '%-10s %-8s %s  — %s\n' "$$1" "MISSING" "$$3" "$$4"; \
-	    [ "$$2" = required ] && ok=0; \
-	  fi; \
-	}; \
-	check go required "building and testing the client" "https://go.dev/dl"; \
-	check claude optional "make cover-review" "https://claude.com/claude-code"; \
-	echo; \
-	if [ "$$ok" = 1 ]; then echo "ready"; \
-	else echo "install what is marked MISSING, then run make doctor again"; exit 1; fi
+	@command -v go >/dev/null && echo "go      ok  (required: building and testing)" || \
+		{ echo "go      MISSING (required): https://go.dev/dl"; exit 1; }
+	@command -v claude >/dev/null && echo "claude  ok  (optional: make cover-review)" || \
+		echo "claude  missing (optional, for make cover-review): https://claude.com/claude-code"
 
 # ---------------------------------------------------------------------------- test and coverage
 
@@ -91,25 +77,18 @@ race: ## Run the unit suite under the race detector
 # The full local tier measures the shipped binary through a latency-shaped MinIO path. The HTTP
 # protocol peer only verifies device signatures and issues presigned tickets; it models no control
 # plane product. The full corpus is intentionally manual because it costs minutes.
+PERF_SKIP = docker info >/dev/null 2>&1 || { echo "docker is not available; skipping $@"; exit 0; }
+
 .PHONY: perf
 perf: ## Run the full local performance tier (needs Docker)
-	@if ! docker info >/dev/null 2>&1; then \
-		echo "docker is not available; skipping the perf tier"; \
-		exit 0; \
-	fi
-	cd $(MODULE) && go vet -tags perf ./perf/
-	cd $(MODULE) && go test -tags perf -count=1 -timeout 30m -v ./perf/
+	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && \
+		go test -tags perf -count=1 -timeout 30m -v ./perf/
 
 # The same instruments and budgets on the PR-sized corpus. The extra three tests prove that the
 # proxy and resource observations used by the measured scenarios are live.
 .PHONY: perf-smoke
 perf-smoke: ## Run the CI-sized performance tier (needs Docker)
-	@if ! docker info >/dev/null 2>&1; then \
-		echo "docker is not available; skipping the perf smoke tier"; \
-		exit 0; \
-	fi
-	cd $(MODULE) && go vet -tags perf ./perf/
-	cd $(MODULE) && go test -tags perf -count=1 -timeout 10m -v -run \
+	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && go test -tags perf -count=1 -timeout 10m -v -run \
 		'^(TestSmokeTier|TestTheStoreIsReachableOnlyThroughTheProxy|TestASyncAgainstABogusEndpointFailsWithoutFallingBack|TestTheHarnessObservesAChildRun)$$' \
 		./perf/
 

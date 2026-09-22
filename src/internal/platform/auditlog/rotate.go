@@ -20,11 +20,12 @@ func readTail(path string, n int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bytes.Count(cur, []byte{'\n'}) >= n {
+	have := bytes.Count(cur, []byte{'\n'})
+	if have >= n {
 		return cur, nil
 	}
 	// Not enough in the current file: the rest is in the generation before it, if there is one.
-	prev, err := tailFile(path+platform.PreviousLogSuffix, n-bytes.Count(cur, []byte{'\n'}))
+	prev, err := tailFile(path+platform.PreviousLogSuffix, n-have)
 	if err != nil || len(prev) == 0 {
 		return cur, nil
 	}
@@ -76,22 +77,11 @@ func tailFile(path string, n int) ([]byte, error) {
 
 // lastLines returns the trailing n complete lines of b.
 func lastLines(b []byte, n int) []byte {
-	if len(b) == 0 {
-		return nil
-	}
-	end := len(b)
-	if b[end-1] == '\n' {
-		end--
-	}
-	count := 0
-	for i := end - 1; i >= 0; i-- {
-		if b[i] != '\n' {
-			continue
-		}
-		count++
-		if count == n {
-			return b[i+1:]
+	i := len(bytes.TrimSuffix(b, []byte{'\n'}))
+	for ; n > 0; n-- {
+		if i = bytes.LastIndexByte(b[:i], '\n'); i < 0 {
+			return b
 		}
 	}
-	return b
+	return b[i+1:]
 }

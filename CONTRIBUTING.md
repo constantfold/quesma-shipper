@@ -5,10 +5,8 @@ participation is subject to the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Setup
 
-- Install Go 1.27 or newer. No other tool is required. `make doctor` lists the optional ones.
-- Clone the repository. Run `make build` and `make test`.
-- The Go module root is `src/`. Run `go` commands from there, or use the Makefile from the
-  repository root.
+Install Go 1.27 or newer (`make doctor` lists the optional tools), then run `make build` and
+`make test`. The Go module root is `src/`: run `go` commands there, or `make` from the root.
 
 ## Before you open a pull request
 
@@ -16,10 +14,9 @@ participation is subject to the [code of conduct](CODE_OF_CONDUCT.md).
 make check
 ```
 
-This is the commit gate. CI runs the same command. It runs gofmt and go vet, with a Windows
-type-check. It then runs VERSION validation, dead-code detection, and the dependency license check.
-Last, it runs the unit suite under the race detector. `make test` is
-the faster local loop.
+This is the commit gate CI runs: gofmt, go vet with a Windows type-check, VERSION validation,
+dead-code detection, the dependency license check, and the unit suite under the race detector.
+`make test` is the faster local loop.
 
 Open the pull request as a draft. A maintainer marks it ready for review. Put small fixes on the
 same branch. Put a larger follow-up in a stacked pull request.

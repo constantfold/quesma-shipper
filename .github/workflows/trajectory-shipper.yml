@@ -98,6 +98,12 @@ jobs:
             -SupervisorPath bin/dist/quesma-shipper-windows-amd64-supervisor.exe -OutputDir bin/dist
           $setup = (Resolve-Path bin/dist/QuesmaShipperSetup-amd64.exe).Path
           $setupLog = "$env:RUNNER_TEMP\quesma-setup.log"
+          $app = "$env:LOCALAPPDATA\Programs\Quesma Shipper"
+          function Fail($why) {
+            if (Test-Path $setupLog) { Get-Content $setupLog }
+            & "$app\quesma-shipper.exe" postinstall
+            throw "${why}; direct postinstall exited $LASTEXITCODE"
+          }
           $setupProcess = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
             @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$setupLog")
           if ($setupProcess.ExitCode -ne 0) {
@@ -113,9 +119,7 @@ jobs:
             Start-Sleep -Seconds 1
           } while ((Get-Date) -lt $deadline)
           if (-not $supervisor -or -not $shipper) {
-            if (Test-Path $setupLog) { Get-Content $setupLog }
-            & "$env:LOCALAPPDATA\Programs\Quesma Shipper\quesma-shipper.exe" postinstall
-            throw "task did not become live: postinstall exited $LASTEXITCODE (supervisor=$([bool]$supervisor), shipper=$([bool]$shipper))"
+            Fail "task did not become live (supervisor=$([bool]$supervisor), shipper=$([bool]$shipper))"
           }
           $logDir = "$env:USERPROFILE\.local\state\trajectory-shipper\logs"
           if (-not (Test-Path "$logDir\agent.err.log")) {
@@ -125,14 +129,8 @@ jobs:
           $sid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
           $taskName = "\Quesma Shipper - $sid"
           schtasks /Query /TN $taskName | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            if (Test-Path $setupLog) { Get-Content $setupLog }
-            & "$env:LOCALAPPDATA\Programs\Quesma Shipper\quesma-shipper.exe" postinstall
-            $postinstallExit = $LASTEXITCODE
-            throw "scheduled task was not installed; direct postinstall exited $postinstallExit"
-          }
-          $uninstaller = "$env:LOCALAPPDATA\Programs\Quesma Shipper\unins000.exe"
-          $uninstallProcess = Start-Process -FilePath $uninstaller -Wait -PassThru -ArgumentList `
+          if ($LASTEXITCODE -ne 0) { Fail "scheduled task was not installed" }
+          $uninstallProcess = Start-Process -FilePath "$app\unins000.exe" -Wait -PassThru -ArgumentList `
             @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
           if ($uninstallProcess.ExitCode -ne 0) { throw "uninstaller exited $($uninstallProcess.ExitCode)" }
           schtasks /Query /TN $taskName 2>$null | Out-Null
@@ -150,18 +148,17 @@ jobs:
         with:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
-      # The unit suite runs on Linux and Windows; without this it never runs on darwin at all, and
-      # the per-OS code it covers -- path and service handling above all -- is exactly where the
-      # three platforms disagree.
+      # Without this the unit suite never runs on darwin, where path and service handling differ most.
       - run: go test ./...
         working-directory: src
       - name: Build and inspect the rootless package
         run: |
           version="$(sh scripts/release-version.sh)"
           make macos-pkg RELEASE_VERSION="$version"
-          pkgutil --payload-files bin/dist/quesma-shipper-macos-universal.pkg | grep -q 'Applications/Quesma Shipper.app/Contents/MacOS/quesma-shipper'
-          pkgutil --payload-files bin/dist/quesma-shipper-macos-universal.pkg | grep -q '.local/bin/quesma-shipper'
-          (cd src && QUESMA_SHIPPER_PKG="$PWD/../bin/dist/quesma-shipper-macos-universal.pkg" \
+          pkg="$PWD/bin/dist/quesma-shipper-macos-universal.pkg"
+          pkgutil --payload-files "$pkg" | grep -q 'Applications/Quesma Shipper.app/Contents/MacOS/quesma-shipper'
+          pkgutil --payload-files "$pkg" | grep -q '.local/bin/quesma-shipper'
+          (cd src && QUESMA_SHIPPER_PKG="$pkg" \
             QUESMA_SHIPPER_RELEASE_VERSION="$version" go test ./packaging/macos/ -run BuiltPackage -v)
       - name: Install, upgrade, and remove the Homebrew cask
         run: bash scripts/test-homebrew.sh
