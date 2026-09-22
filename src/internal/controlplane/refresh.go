@@ -14,26 +14,17 @@ import (
 type Origin string
 
 const (
-	// OriginFetched is a fresh fetch.
 	OriginFetched Origin = "fetched"
-
-	// OriginCached is the last config fetched, reused because this run could not get a new one.
-	OriginCached Origin = "cached"
-
-	// OriginNone means there is no remote layer at all: an ordinary state, not a degraded one,
-	// because the local layers are a complete configuration.
-	OriginNone Origin = "none"
+	OriginCached  Origin = "cached" // the last config fetched, reused because this run could not get a new one
+	OriginNone    Origin = "none"   // no remote layer: an ordinary state, the local layers are a complete configuration
 )
 
-// Remote is the resolved remote layer: the org's config, served over TLS by the control
-// plane this install enrolled with. It enters the resolver as an ordinary document layer.
+// Remote is the resolved remote layer: the org's config, which enters the resolver as an ordinary document layer.
 type Remote struct {
 	Origin Origin
+	Doc    *config.Document // nil when Origin is OriginNone
 
-	// Doc is the served config. Nil when Origin is OriginNone.
-	Doc *config.Document
-
-	// Expired is true when a cached config past its expiry is in use; it does not stop collection.
+	// Expired is true when a config past its expiry is in use; it does not stop collection.
 	Expired bool
 
 	// Err is why a fetch did not happen or was refused. Reported, never swallowed: a quiet fallback
@@ -47,8 +38,7 @@ type RefreshOptions struct {
 	StateDir   string
 	Now        time.Time
 
-	// Offline skips the network and resolves from the cache: what the read-only verbs use, since
-	// `config show` must explain the config in force without a round-trip that changes it.
+	// Offline resolves from the cache: `config show` must explain the config in force without a round-trip that changes it.
 	Offline bool
 }
 
@@ -59,46 +49,27 @@ func Refresh(ctx context.Context, o RefreshOptions) Remote {
 	if o.Enrollment == nil || o.Enrollment.Endpoint == "" {
 		return Remote{Origin: OriginNone}
 	}
-
-	var fetchErr error
+	fetchErr := errors.New("backend: offline, resolving from the cached config")
 	if !o.Offline {
 		fetched, err := fetch(ctx, o)
 		if err == nil {
 			return fetched
 		}
 		fetchErr = err
-	} else {
-		fetchErr = errors.New("backend: offline, resolving from the cached config")
 	}
 
+	// A cache that no longer parses is damage like any other unreadable file: local config only, the run continues.
 	cached, err := LoadCache(o.StateDir)
+	var doc *config.Document
+	if err == nil {
+		doc, err = config.ParseServedDocument(cached.Config)
+	}
 	if err != nil {
-		// No usable cache and no fetch: no remote layer, and the run still collects locally.
-		return Remote{Origin: OriginNone, Err: unusableCache(fetchErr, err)}
+		// Both halves: a cache that no longer parses is a file to delete, unguessable from "backend unreachable".
+		return Remote{Origin: OriginNone, Err: fmt.Errorf("%w; the cached config is unusable (%v); "+
+			"collecting under local config only. Delete %s to clear it", fetchErr, err, CacheFile)}
 	}
-
-	// Reparsed on load: a cache that no longer parses is damage like any other unreadable file, so
-	// it degrades to local config instead of stopping the run.
-	doc, err := config.ParseServedDocument(cached.Config)
-	if err != nil {
-		return Remote{Origin: OriginNone, Err: unusableCache(fetchErr, err)}
-	}
-
-	return Remote{
-		Origin:  OriginCached,
-		Doc:     doc,
-		Expired: cached.Expired(o.Now),
-		Err:     fetchErr,
-	}
-}
-
-// unusableCache explains a run with neither a fresh config nor a usable cached one. Both halves:
-// a cache that no longer parses is a file to delete, unguessable from "backend unreachable".
-// Both errors are non-nil by construction: Refresh reaches the cache only after a fetch failure
-// (or the offline sentinel), and calls this only on a cache error.
-func unusableCache(fetchErr, cacheErr error) error {
-	return fmt.Errorf("%w; the cached config is unusable (%v); collecting under local config only. "+
-		"Delete %s to clear it", fetchErr, cacheErr, CacheFile)
+	return Remote{Origin: OriginCached, Doc: doc, Expired: cached.Expired(o.Now), Err: fetchErr}
 }
 
 // fetch does one round-trip and caches what it gets.
@@ -107,30 +78,17 @@ func fetch(ctx context.Context, o RefreshOptions) (Remote, error) {
 	if err != nil {
 		return Remote{}, err
 	}
-
-	// Built here, not passed in: both fields are compiled facts, so a caller could vary nothing.
-	req := ConfigRequest{
+	doc, resp, err := c.FetchConfig(ctx, ConfigRequest{
 		AgentVersion:   platform.Current().String(),
 		ConfigVersions: config.AcceptedConfigVersions,
-	}
-
-	f, err := c.FetchConfig(ctx, req)
+	})
 	if err != nil {
 		return Remote{}, err
 	}
-
-	if err := SaveCache(o.StateDir, Cached{
-		Config:    f.Raw,
-		FetchedAt: o.Now,
-		ExpiresAt: f.ExpiresAt,
-	}); err != nil {
+	fresh := Cached{Config: resp.Config, FetchedAt: o.Now, ExpiresAt: resp.ExpiresAt}
+	if err := SaveCache(o.StateDir, fresh); err != nil {
 		return Remote{}, err
 	}
-
-	return Remote{
-		Origin: OriginFetched,
-		Doc:    f.Doc,
-		// A server handing out an already-expired config is misbehaving, and the flag says so.
-		Expired: !f.ExpiresAt.IsZero() && o.Now.After(f.ExpiresAt),
-	}, nil
+	// A server handing out an already-expired config is misbehaving, and the flag says so.
+	return Remote{Origin: OriginFetched, Doc: doc, Expired: fresh.Expired(o.Now)}, nil
 }
