@@ -1,8 +1,6 @@
 package cursorjoin
 
-import (
-	"strings"
-)
+import "strings"
 
 // textEvidence treats an empty side as positional evidence; matching prose confirms identity.
 func textEvidence(transcript, stored string) (evidence, int) {
@@ -18,37 +16,30 @@ func textEvidence(transcript, stored string) (evidence, int) {
 	return evidenceNegative, 0
 }
 
+// normaliseText strips the transcript's wrapper tags, which the store side does not have. The
+// query is the prose, so user_query keeps its contents.
 func normaliseText(s string) string {
-	// Strip the transcript's wrapper tags, which the store side does not have.
-	for _, tag := range []string{"timestamp", "user_query"} {
-		s = stripTag(s, tag)
-	}
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.TrimSpace(s)
+	s = stripTag(s, "timestamp", false)
+	s = stripTag(s, "user_query", true)
+	return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
 }
 
-func stripTag(s, tag string) string {
-	open, close := "<"+tag+">", "</"+tag+">"
+func stripTag(s, tag string, keepInner bool) string {
 	for {
-		i := strings.Index(s, open)
-		if i < 0 {
+		before, rest, ok := strings.Cut(s, "<"+tag+">")
+		if !ok {
 			return s
 		}
-		j := strings.Index(s[i:], close)
-		if j < 0 {
-			return s[:i]
+		inner, after, ok := strings.Cut(rest, "</"+tag+">")
+		if !ok {
+			return before
 		}
-		inner := s[i+len(open) : i+j]
-		if tag == "user_query" {
-			// The query IS the prose. Keep the contents, drop the tags.
-			s = s[:i] + inner + s[i+j+len(close):]
-		} else {
-			s = s[:i] + s[i+j+len(close):]
+		if keepInner {
+			before += inner
 		}
+		s = before + after
 	}
 }
 
 // isRedactedReasoning matches the literal placeholder Cursor writes instead of reasoning.
-func isRedactedReasoning(text string) bool {
-	return strings.TrimSpace(text) == "[REDACTED]"
-}
+func isRedactedReasoning(text string) bool { return strings.TrimSpace(text) == "[REDACTED]" }

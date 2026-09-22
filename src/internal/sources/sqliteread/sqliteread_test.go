@@ -20,28 +20,22 @@ import (
 // newStore builds a state.vscdb-shaped fixture: two key/value tables as Cursor has, planting the rows the filter must catch.
 func newStore(t *testing.T, rows map[string]string) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.vscdb")
-
+	path := filepath.Join(t.TempDir(), "state.vscdb")
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 	defer db.Close()
 
-	for _, stmt := range []string{
-		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
-		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
-	} {
-		_, execErr := db.Exec(stmt)
-		require.NoError(t, execErr)
-	}
+	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+		CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`)
+	require.NoError(t, err)
 	for k, v := range rows {
+		// Auth keys go where Cursor keeps them, the table the enricher does NOT declare.
 		table := "cursorDiskKV"
 		if strings.HasPrefix(k, "cursorAuth/") {
-			// Planted in the table the enricher does NOT declare, and again below in the one it does.
 			table = "ItemTable"
 		}
-		_, insertErr := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v)
-		require.NoError(t, insertErr)
+		_, err := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v)
+		require.NoError(t, err)
 	}
 	require.NoError(t, db.Close())
 	return path
@@ -128,28 +122,22 @@ func TestTheAuthNamespaceExceptionsAreExactKeysOnly(t *testing.T) {
 		o.Table = "ItemTable" // where Cursor keeps the cursorAuth namespace
 		o.KeyPrefixes = []string{"cursorAuth/"}
 	})
-	got := map[string]string{}
-	for _, r := range res.Rows {
-		got[r.Key] = string(r.Value)
-	}
-	assert.Equal(t, map[string]string{
-		"cursorAuth/stripeMembershipType": "enterprise",
-		"cursorAuth/cachedEmail":          "dev@example.com",
-		"cursorAuth/cachedSignUpType":     "Google",
-		"cursorAuth/cachedTeam":           `{"teamId": 1, "name": "Quesma"}`,
-	}, got)
+	assert.Equal(t, []sqliteread.Row{
+		{Key: "cursorAuth/cachedEmail", Value: []byte("dev@example.com")},
+		{Key: "cursorAuth/cachedSignUpType", Value: []byte("Google")},
+		{Key: "cursorAuth/cachedTeam", Value: []byte(`{"teamId": 1, "name": "Quesma"}`)},
+		{Key: "cursorAuth/stripeMembershipType", Value: []byte("enterprise")},
+	}, res.Rows)
 }
 
 // THE FILTER TEST. Auth material lives in the same database as the trajectories.
 func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	const token = "SUPER-SECRET-CURSOR-SESSION-TOKEN"
 	path := newStore(t, map[string]string{
-		// In ItemTable, where Cursor keeps it.
+		// cursorAuth/ lands in ItemTable, CursorAuth/ in the declared table: the filter must pass
+		// neither by table split nor by one spelling.
 		"cursorAuth/accessToken": token,
-		// And in the declared table, spelled two ways, so the filter is not passing by table split or by one spelling.
-		"cursorAuth/refreshToken": token,
-		"CursorAuth/cased":        token,
-
+		"CursorAuth/cased":       token,
 		// The encryption-key fields, nested where they really appear.
 		"composerData:c1": `{"composerId":"c1","blobEncryptionKey":"` + token + `",` +
 			`"speculativeSummarizationEncryptionKey":"` + token + `",` +
@@ -161,20 +149,13 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 		// Deliberately declaring the auth namespace too: the filter is compiled, not something a declaration overrides.
 		o.KeyPrefixes = []string{"composerData:", "bubbleId:", "cursorAuth/", "CursorAuth/"}
 	})
-
-	want := map[string]string{
-		"composerData:c1": `{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`,
-		"bubbleId:c1:b1":  `{"type":1,"text":"hi","nested":{}}`,
-	}
-	require.Len(t, res.Rows, len(want), "only the two trajectory rows may survive")
-	for _, r := range res.Rows {
-		require.Contains(t, want, r.Key)
-		assert.JSONEq(t, want[r.Key], string(r.Value))
-		delete(want, r.Key)
-	}
-	assert.Empty(t, want)
-	assert.NotZero(t, res.DeniedKeys, "denied keys must be reported")
-	assert.NotZero(t, res.StrippedFields, "stripped fields must be reported")
+	// Only the two trajectory rows survive, re-encoded where a field was stripped.
+	assert.Equal(t, []sqliteread.Row{
+		{Key: "bubbleId:c1:b1", Value: []byte(`{"nested":{},"text":"hi","type":1}`)},
+		{Key: "composerData:c1", Value: []byte(`{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`)},
+	}, res.Rows)
+	assert.Equal(t, 1, res.DeniedKeys, "CursorAuth/cased, the one auth key in the declared table")
+	assert.Equal(t, 3, res.StrippedFields)
 }
 
 // Unreadable databases fail through every fallback; a live database must also refuse raw copying.
@@ -184,40 +165,25 @@ func TestUnreadableDatabaseFallbacks(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, want string
-		rows       map[string]string
-		prefixes   []string
-		now        func() time.Time
 		prepare    func(*testing.T, string, string)
 	}{
-		{"all methods fail", "every read method failed",
-			map[string]string{"composerData:c1": `{"composerId":"c1"}`, "bubbleId:c1:b1": `{"type":1,"text":"hi"}`},
-			[]string{"composerData:", "bubbleId:"}, nil,
-			func(t *testing.T, path, scratch string) {
-				inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
-				require.Equal(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first")
-			}},
-		{"live database cannot be copied", "not cold enough",
-			map[string]string{"composerData:c1": `{"composerId":"c1"}`},
-			[]string{"composerData:"}, time.Now,
-			func(t *testing.T, path, _ string) {
-				require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
-			}},
+		{"all methods fail", "every read method failed", func(t *testing.T, path, scratch string) {
+			inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
+			require.Equal(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first")
+		}},
+		{"live database cannot be copied", "not cold enough", func(t *testing.T, path, _ string) {
+			require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := newStore(t, tc.rows)
+			path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
 			scratch := filepath.Join(t.TempDir(), "scratch")
 			tc.prepare(t, path, scratch)
 			if err := os.Chmod(path, 0o000); err != nil {
 				t.Skipf("cannot chmod: %v", err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-			_, err := sqliteread.Read(sqliteread.Options{
-				Path:        path,
-				ScratchDir:  scratch,
-				Table:       "cursorDiskKV",
-				KeyPrefixes: tc.prefixes,
-				Now:         tc.now,
-			})
+			_, err := sqliteread.Read(sqliteread.Options{Path: path, ScratchDir: scratch, Table: "cursorDiskKV"})
 			require.Error(t, err, "an unreadable database produced a successful read")
 			assert.Contains(t, err.Error(), tc.want)
 		})
@@ -267,8 +233,9 @@ func listDir(t *testing.T, dir string) []string {
 	return out
 }
 
-// THE FALLBACK-EQUIVALENCE GATE: every read method returns identical ROW VALUES, which is why hashes come from values and not bytes.
-func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
+// Every read method returns identical row values, which is why hashes come from values and not bytes. Each
+// method leaves the source directory alone; a snapshot replaces crash debris and removes its own copy.
+func TestEveryReadMethodReturnsIdenticalRowsAndCleansUp(t *testing.T) {
 	path := newStore(t, map[string]string{
 		"composerData:c1": `{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`,
 		"bubbleId:c1:b1":  `{"type":1,"text":"hello","createdAt":"2026-07-30T10:00:00Z"}`,
@@ -279,54 +246,29 @@ func TestEveryReadMethodReturnsIdenticalRows(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, old, old))
 
 	before := listDir(t, filepath.Dir(path))
-	methods := []sqliteread.ReadMethod{sqliteread.ReadInPlace, sqliteread.ReadSnapshot, sqliteread.ReadColdCopy}
 	var reference []sqliteread.Row
+	for _, want := range []sqliteread.ReadMethod{sqliteread.ReadInPlace, sqliteread.ReadSnapshot, sqliteread.ReadColdCopy} {
+		scratch := filepath.Join(t.TempDir(), "scratch")
+		leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
+		require.NoError(t, os.MkdirAll(scratch, 0o700))
+		require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
 
-	for _, want := range methods {
-		res := read(t, path, func(o *sqliteread.Options) { o.StartAt = want })
+		res := read(t, path, func(o *sqliteread.Options) { o.ScratchDir, o.StartAt = scratch, want })
 		require.Equalf(t, want, res.Method, "asked for method %s, got %s", want, res.Method)
 		assert.Equal(t, before, listDir(t, filepath.Dir(path)), "method %s changed the source directory", want)
+		if want == sqliteread.ReadSnapshot {
+			assert.Empty(t, listDir(t, scratch))
+		} else {
+			body, err := os.ReadFile(leftover)
+			require.NoError(t, err)
+			assert.Equal(t, "corrupt partial", string(body), "method %s touched the snapshot slot", want)
+			assert.Equal(t, []string{"snapshot-state.vscdb.sqlite"}, listDir(t, scratch))
+		}
 		if reference == nil {
 			reference = res.Rows
 			continue
 		}
 		assert.Equal(t, reference, res.Rows, "method %s", want)
 	}
-}
-
-// A snapshot replaces crash debris and removes its copy; an in-place read leaves scratch alone.
-func TestSnapshotCleanup(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		method   sqliteread.ReadMethod
-		leftover bool
-	}{
-		{"in place leaves existing scratch alone", sqliteread.ReadInPlace, true},
-		{"snapshot leaves no files", sqliteread.ReadSnapshot, false},
-		{"snapshot replaces corrupt leftover", sqliteread.ReadSnapshot, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-			scratch := filepath.Join(t.TempDir(), "scratch")
-			leftover := filepath.Join(scratch, "snapshot-state.vscdb.sqlite")
-			if tc.leftover {
-				require.NoError(t, os.MkdirAll(scratch, 0o700))
-				require.NoError(t, os.WriteFile(leftover, []byte("corrupt partial"), 0o600))
-			}
-			res := read(t, path, func(o *sqliteread.Options) {
-				o.ScratchDir, o.StartAt = scratch, tc.method
-				o.KeyPrefixes = []string{"composerData:"}
-			})
-			require.Equal(t, tc.method, res.Method)
-			require.Len(t, res.Rows, 1)
-			if tc.method == sqliteread.ReadInPlace {
-				assert.Equal(t, []string{"snapshot-state.vscdb.sqlite"}, listDir(t, scratch))
-				body, err := os.ReadFile(leftover)
-				require.NoError(t, err)
-				assert.Equal(t, "corrupt partial", string(body))
-			} else {
-				assert.Empty(t, listDir(t, scratch))
-			}
-		})
-	}
+	assert.Len(t, reference, 3)
 }

@@ -19,14 +19,10 @@ const (
 type matchOutcome int
 
 const (
-	// No bubble accounts for the block; the caller classifies it as mismatch or tail.
-	matchNone matchOutcome = iota
-	// The returned index is the block's bubble.
-	matchFound
-	// The store deduplicated a call already consumed with the same evidence.
-	matchRepeat
-	// Deduplication and a new argument-less call are indistinguishable; attach neither.
-	matchAmbiguous
+	matchNone      matchOutcome = iota // no bubble accounts for the block: mismatch or tail
+	matchFound                         // the returned index is the block's bubble
+	matchRepeat                        // the store deduplicated a call consumed with the same evidence
+	matchAmbiguous                     // a dedup and a new argument-less call are indistinguishable
 )
 
 // matchBlock returns the chosen bubble and its evidence for later repeat detection.
@@ -46,8 +42,7 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 	}
 
 	// Store and transcript order can differ within a turn, leaving real matches behind the cursor.
-	repeat := false
-	repeatEv, repeatN := evidenceNegative, 0
+	repeat, repeatEv, repeatN := false, evidenceNegative, 0
 	for i := cursor - 1; i >= 0; i-- {
 		if state[i].used {
 			// Only identical consumption evidence supports a repeat, at any distance.
@@ -64,12 +59,10 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 		if i < cursor-lookBehind || state[i].declined {
 			continue
 		}
-		ev, n := weigh(events[i])
-		if blk.Type != "tool_use" && ev != evidencePositive {
-			// Prose needs actual overlap to match behind the cursor.
-			continue
+		// Prose needs actual overlap to match behind the cursor.
+		if ev, n := weigh(events[i]); blk.Type == "tool_use" || ev == evidencePositive {
+			behind.consider(i, ev, n, blk, events[i])
 		}
-		behind.consider(i, ev, n, blk, events[i])
 	}
 	if behind.positive >= 0 {
 		return behind.positive, matchFound, evidencePositive, behind.strength

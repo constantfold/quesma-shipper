@@ -1,159 +1,75 @@
 package cursorjoin_test
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/stretchr/testify/assert"
-)
-
-// A directory path is a prefix of every file path under it, so substring evidence made a search
-// of a directory match a read of a file inside it. Whole-value comparison separates them.
-func TestADirectoryArgumentDoesNotMatchAFileBeneathIt(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\naudit the config package\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"deny_additions","path":"/work/api/internal/config"}},{"type":"tool_use","name":"Read","input":{"path":"/work/api/internal/config/resolve.go"}}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"grep","type":2},{"bubbleId":"read","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"audit the config package",
-				"createdAt":"2026-08-18T13:53:00.000Z"}`),
-		// Recorded without arguments, so only its position speaks for it.
-		toolRow("grep", "ripgrep_raw_search", `{}`, "resolve.go:41", "2026-08-18T13:53:01.000Z"),
-		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
-			"package config", "2026-08-18T13:53:02.000Z"),
-	})
-
-	lines := joined(t, db, transcript)
-	matchedBubbles(t, lines[1], "grep", "read")
-}
-
-// Cursor rewrites a command between the transcript and the store, splicing in its attribution.
-// Unstripped, the executed form scores as contradiction on the call's own bubble.
-func TestAVendorRewrittenCommandStillAligns(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\ncommit and open a PR\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"git commit -m \"fix: bound the loader\"","description":"Commit the fix"}},{"type":"tool_use","name":"Shell","input":{"command":"gh pr create --title \"Bound the loader\" --body \"$(cat <<'EOB'\n## Summary\n- bound it\nEOB\n)\"","description":"Open the PR"}}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"commit","type":2},{"bubbleId":"pr","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"commit and open a PR"}`),
-		// What ran: the commit with the trailer spliced in.
-		bubbleRow("commit", `{"bubbleId":"commit","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_commit","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"",
-					"params":"{\"command\":\"git commit --trailer \\\"Co-authored-by: Cursor <cursoragent@cursor.com>\\\" -m \\\"fix: bound the loader\\\"\"}",
-					"result":"1 file changed"}}`),
-		// What ran: the PR body with the footer appended inside the heredoc.
-		bubbleRow("pr", `{"bubbleId":"pr","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_pr","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"",
-					"params":"{\"command\":\"gh pr create --title \\\"Bound the loader\\\" --body \\\"$(cat <<'EOB'\\n## Summary\\n- bound it\\n\\nMade with [Cursor](https://cursor.com)\\nEOB\\n)\\\"\"}",
-					"result":"https://github.com/org/repo/pull/1"}}`),
-	})
-
-	lines := joined(t, db, transcript)
-	matchedBubbles(t, lines[1], "commit", "pr")
-}
-
-// An errored call is recorded with no argument values at all, and recording nothing contradicts
-// nothing: scored as contradiction, the bubble was barred even from the positional fallback.
-func TestAnErroredCallRecordedWithoutArgumentsAligns(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nfix the table\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"StrReplace","input":{"file_path":"/work/api/AUDIT.md","old_string":"| batch B | open |","new_string":"| batch B | shipped |"}}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"edit","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"fix the table"}`),
-		// The errored edit, exactly as observed: no path, no strings, just flags.
-		bubbleRow("edit", `{"bubbleId":"edit","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_edit","name":"edit_file_v2",
-					"status":"error","rawArgs":"",
-					"params":"{\"noCodeblock\":true,\"cloudAgentEdit\":false}",
-					"result":"the model produced an invalid edit"}}`),
-	})
-
-	lines := joined(t, db, transcript)
-	e := matchedBubbles(t, lines[1], "edit")[0]
-	assert.Truef(t, e["status"] == "error", "status = %v", e["status"])
-}
-
-// The store's terminal params carry a parse tree of the command, and one of its fragments
-// equalling an unrelated block's argument let that block steal the terminal bubble. The header
-// order and the read's single comparable value are what make the theft happen here if the parse
-// tree is allowed to speak.
-func TestTheTerminalParseTreeCannotSpeakForAnotherTool(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nsurvey the repo\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"render.yaml"}}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"git show d63a490 -- render.yaml | head -30","description":"Inspect the pin commit"}}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"shell","type":2},{"bubbleId":"read","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"survey the repo"}`),
-		// The read's filename as a shell token, the workspace root under the
-		// sandbox policy: none of it may serve as argument evidence.
-		bubbleRow("shell", `{"bubbleId":"shell","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"call_shell","name":"run_terminal_command_v2",
-					"status":"completed","rawArgs":"",
-					"params":"{\"command\":\"git show d63a490 -- render.yaml | head -30\",\"cwd\":\"\",\"parsingResult\":{\"commands\":[{\"words\":[\"git\",\"show\",\"d63a490\",\"render.yaml\",\"head\"]}]},\"requestedSandboxPolicy\":{\"workspace\":\"/work/api\"},\"commandDescription\":\"Inspect the pin commit\"}",
-					"result":"render.yaml | 2 +-"}}`),
-		toolRow("read", "read_file_v2", `{"path":"render.yaml"}`, "services:\n  - type: web", ""),
-	})
-
-	d := successfulObject(t, run(t, db, unit(t, transcript)))
-	lines := decode(t, d.Payload)
-	for i, want := range []string{"read", "shell"} {
-		matchedBubbles(t, lines[i+1], want)
-	}
-	// The theft's signature outcome: the shell call demoted to a repeat of nothing. Zero, or
-	// the misattribution shipped silently.
-	assert.Equalf(t, 0, d.Repeats, "repeats = %d, want 0: the shell call lost its own bubble", d.Repeats)
-}
-
-// One shared value among several is corroboration, not identity. The store's header order puts
-// the other search first, so a rule letting the shared path speak hands over the wrong bubble.
-func TestALoneSharedValueAmongSeveralIsNotIdentity(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\ncheck the backends\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"StatusConflict|409","path":"/work/api"}}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}}]}}
-`
-	db := newStore(t, []storeRow{
-		// purge before conflict: the reverse of the transcript's order.
-		composerAt(1755500000000, `[
-					{"bubbleId":"b1","type":1},
-					{"bubbleId":"purge","type":2},
-					{"bubbleId":"conflict","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"check the backends"}`),
-		toolRow("purge", "ripgrep_raw_search", `{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}`,
-			"purge.go:14", ""),
-		toolRow("conflict", "ripgrep_raw_search", `{"pattern":"StatusConflict|409","path":"/work/api"}`,
-			"s3.go:88", ""),
-	})
-
-	lines := joined(t, db, transcript)
-	for i, want := range []string{"conflict", "purge"} {
-		matchedBubbles(t, lines[i+1], want)
-	}
-}
-
-// The containment path — for stores that recorded arguments as a bare string — strips the
-// attribution rewrite like every other comparison, in both the plain and the escaped form.
-func TestABareStringStoreWithAttributionStillAligns(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\ncommit and open a PR\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"git commit -m \"fix: bound the loader in the manifest reader\""}}]}}
-{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"gh pr create --title \"Bound the loader\" --body \"## Summary\n- bound it\""}}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"commit","type":2},{"bubbleId":"pr","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"commit and open a PR"}`),
-		// A bare string, not JSON: the executed command with the trailer spliced in.
-		toolRow("commit", "run_terminal_command_v2", `git commit --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>" -m "fix: bound the loader in the manifest reader"`,
-			"1 file changed", ""),
-		// A bare string holding JSON: the executed command appears escaped, footer
-		// included, so the escaped attribution form is the one that must strip.
-		toolRow("pr", "run_terminal_command_v2", `captured {"command":"gh pr create --title \"Bound the loader\" --body \"## Summary\n- bound it\n\nMade with [Cursor](https://cursor.com)\""} (exit 0)`,
-			"https://github.com/org/repo/pull/1", ""),
-	})
-
-	lines := joined(t, db, transcript)
-	for i, want := range []string{"commit", "pr"} {
-		matchedBubbles(t, lines[i+1], want)
-	}
+// Tool-specific shapes of the stored arguments: what they must not match, and what they still must.
+func TestToolArgumentShapes(t *testing.T) {
+	runJoinCases(t, []joinCase{{
+		// A directory path is a prefix of every file under it, so substring evidence matched a search
+		// of a directory to a read of a file inside it.
+		name:       "a directory argument does not match a file beneath it",
+		query:      "audit the config package",
+		transcript: turn(use("Grep", `{"pattern":"deny_additions","path":"/work/api/internal/config"}`), use("Read", `{"path":"/work/api/internal/config/resolve.go"}`)),
+		bubbles: []storeRow{
+			toolRow("grep", "ripgrep_raw_search", `{}`, "resolve.go:41"),
+			toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`, "package config"),
+		},
+		want: map[int][]string{1: {"grep", "read"}},
+	}, {
+		// Cursor splices its attribution into what ran; unstripped, that scores as contradiction.
+		name:  "a vendor-rewritten command still aligns",
+		query: "commit and open a PR",
+		transcript: turn(use("Shell", `{"command":"git commit -m \"fix: bound the loader\"","description":"Commit the fix"}`),
+			use("Shell", `{"command":"gh pr create --title \"Bound the loader\" --body \"$(cat <<'EOB'\n## Summary\n- bound it\nEOB\n)\"","description":"Open the PR"}`)),
+		bubbles: []storeRow{
+			tool{id: "commit", name: "run_terminal_command_v2", result: "1 file changed",
+				params: `{"command":"git commit --trailer \"Co-authored-by: Cursor <cursoragent@cursor.com>\" -m \"fix: bound the loader\""}`}.row(),
+			tool{id: "pr", name: "run_terminal_command_v2", result: "https://github.com/org/repo/pull/1",
+				params: `{"command":"gh pr create --title \"Bound the loader\" --body \"$(cat <<'EOB'\n## Summary\n- bound it\n\nMade with [Cursor](https://cursor.com)\nEOB\n)\""}`}.row(),
+		},
+		want: map[int][]string{1: {"commit", "pr"}},
+	}, {
+		// The containment path for bare-string records strips the attribution too, plain and escaped.
+		name:  "a bare-string store with attribution still aligns",
+		query: "commit and open a PR",
+		transcript: jsonl(turn(use("Shell", `{"command":"git commit -m \"fix: bound the loader in the manifest reader\""}`)),
+			turn(use("Shell", `{"command":"gh pr create --title \"Bound the loader\" --body \"## Summary\n- bound it\""}`))),
+		bubbles: []storeRow{
+			toolRow("commit", "run_terminal_command_v2", `git commit --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>" -m "fix: bound the loader in the manifest reader"`, "1 file changed"),
+			// A bare string holding JSON: the footer appears escaped.
+			toolRow("pr", "run_terminal_command_v2", `captured {"command":"gh pr create --title \"Bound the loader\" --body \"## Summary\n- bound it\n\nMade with [Cursor](https://cursor.com)\""} (exit 0)`, "https://github.com/org/repo/pull/1"),
+		},
+		want: map[int][]string{1: {"commit"}, 2: {"pr"}},
+	}, {
+		// An errored call records only flags, and recording nothing contradicts nothing.
+		name:       "an errored call recorded without arguments aligns",
+		query:      "fix the table",
+		transcript: turn(use("StrReplace", `{"file_path":"/work/api/AUDIT.md","old_string":"| batch B | open |","new_string":"| batch B | shipped |"}`)),
+		bubbles: []storeRow{tool{id: "edit", name: "edit_file_v2", status: "error",
+			params: `{"noCodeblock":true,"cloudAgentEdit":false}`, result: "the model produced an invalid edit"}.row()},
+		want: map[int][]string{1: {"edit"}},
+	}, {
+		// The terminal params carry a parse tree of the command and the workspace root; a fragment of
+		// it equal to the read's single value let the read steal the terminal bubble.
+		name:  "the terminal parse tree cannot speak for another tool",
+		query: "survey the repo",
+		transcript: jsonl(turn(use("Read", `{"file_path":"render.yaml"}`)),
+			turn(use("Shell", `{"command":"git show d63a490 -- render.yaml | head -30","description":"Inspect the pin commit"}`))),
+		bubbles: []storeRow{
+			tool{id: "shell", name: "run_terminal_command_v2", result: "render.yaml | 2 +-",
+				params: `{"command":"git show d63a490 -- render.yaml | head -30","cwd":"","parsingResult":{"commands":[{"words":["git","show","d63a490","render.yaml","head"]}]},"requestedSandboxPolicy":{"workspace":"/work/api"},"commandDescription":"Inspect the pin commit"}`}.row(),
+			toolRow("read", "read_file_v2", `{"path":"render.yaml"}`, "services:\n  - type: web"),
+		},
+		want: map[int][]string{1: {"read"}, 2: {"shell"}},
+	}, {
+		// One shared value among several is corroboration, not identity.
+		name:       "a lone shared value among several is not identity",
+		query:      "check the backends",
+		transcript: jsonl(turn(use("Grep", `{"pattern":"StatusConflict|409","path":"/work/api"}`)), turn(use("Grep", `{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}`))),
+		bubbles: []storeRow{
+			toolRow("purge", "ripgrep_raw_search", `{"pattern":"PurgePrefix|VerifyCapabilities","path":"/work/api"}`, "purge.go:14"),
+			toolRow("conflict", "ripgrep_raw_search", `{"pattern":"StatusConflict|409","path":"/work/api"}`, "s3.go:88"),
+		},
+		want: map[int][]string{1: {"conflict"}, 2: {"purge"}},
+	}})
 }

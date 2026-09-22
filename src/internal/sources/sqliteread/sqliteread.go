@@ -16,23 +16,19 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// ReadMethod names how a read was obtained. Recorded in the manifest's db_provenance.
+// ReadMethod names how a read was obtained; the values are what manifest.schema.json enumerates.
 type ReadMethod string
 
-// The method names are what manifest.schema.json enumerates; a value it does not list makes every derived object unshippable.
 const (
-	// ReadInPlace is the fast path: the live file, opened read-only.
-	ReadInPlace ReadMethod = "readonly_open"
-
-	// ReadSnapshot is a consistent copy made with VACUUM INTO, queried and deleted.
-	ReadSnapshot ReadMethod = "scratch_snapshot"
-
-	// ReadColdCopy is a raw copy of a database nothing is writing, sidecars included.
-	ReadColdCopy ReadMethod = "cold_copy"
+	ReadInPlace  ReadMethod = "readonly_open"    // the live file, opened read-only
+	ReadSnapshot ReadMethod = "scratch_snapshot" // a consistent VACUUM INTO copy, queried and deleted
+	ReadColdCopy ReadMethod = "cold_copy"        // a raw copy of a database nothing is writing, sidecars included
 )
 
-// coldAfter is how long a database must be untouched to count as cold. Generous: being wrong means copying a live database.
-const coldAfter = 5 * time.Minute
+const (
+	coldAfter = 5 * time.Minute // generous: being wrong means copying a live database
+	maxRows   = 200_000
+)
 
 // Row is one key/value pair, already filtered.
 type Row struct {
@@ -40,48 +36,36 @@ type Row struct {
 	Value []byte
 }
 
-// Result is what a read produced.
 type Result struct {
 	Rows   []Row
 	Method ReadMethod
 
-	// Truncated says the row cap stopped the read. A flag, not an error: an error would send the read to the next fallback.
+	// A flag, not an error: an error would send the read to the next fallback.
 	Truncated bool
 
-	// DeniedKeys and StrippedFields count what the compiled filter removed, so the filter's operation is observable rather than assumed.
+	// What the compiled filter removed, so its operation is observable rather than assumed.
 	DeniedKeys     int
 	StrippedFields int
 }
 
-// Options configures a read.
 type Options struct {
-	// Path is the database. Never opened read-write.
-	Path string
+	Path string // never opened read-write
 
-	// ScratchDir is where a snapshot read puts its copy: under the state directory, never beside the source.
+	// Where snapshot and cold-copy reads put their copies: under the state directory, never beside the source.
 	ScratchDir string
 
-	// Table and KeyPrefixes are the read's DECLARED scope, named by the enricher at registration, not discovered here.
+	// The read's declared scope, named by the enricher, not discovered here.
 	Table       string
 	KeyPrefixes []string
 
-	// MaxRows bounds a read; the cap is reported rather than silently applied.
-	MaxRows int
-
-	// Now is injectable for the coldness check.
-	Now func() time.Time
-
-	// StartAt skips the methods before it, so doctor and the tests can exercise a fallback before the day it is needed. Empty starts at the top.
+	// StartAt skips the methods before it, so tests can exercise a fallback. Empty starts at the top.
 	StartAt ReadMethod
 }
-
-// ErrTruncated means MaxRows cut the read short.
-var ErrTruncated = errors.New("sqliteread: row cap reached")
 
 // errSkipped reports a method StartAt skipped, so a failure message cannot imply it was tried.
 var errSkipped = errors.New("skipped by StartAt")
 
-// Read tries each method in order; falling back is only for a method that CANNOT READ the database: a row-cap hit is not that, so it stops here.
+// Read tries each method in order, falling back only when a method cannot read the database.
 func Read(o Options) (Result, error) {
 	if o.Path == "" {
 		return Result{}, errors.New("sqliteread: no database path")
@@ -89,16 +73,8 @@ func Read(o Options) (Result, error) {
 	if o.Table == "" {
 		return Result{}, errors.New("sqliteread: no table declared: an enricher's scope is declared, not discovered")
 	}
-	if o.Now == nil {
-		o.Now = time.Now
-	}
-	if o.MaxRows <= 0 {
-		o.MaxRows = 200_000
-	}
 
 	inPlaceErr, snapshotErr := errSkipped, errSkipped
-
-	// First: in place.
 	if o.StartAt == "" || o.StartAt == ReadInPlace {
 		res, err := readAt(o, o.Path, ReadInPlace)
 		if err == nil {
@@ -106,8 +82,7 @@ func Read(o Options) (Result, error) {
 		}
 		inPlaceErr = err
 	}
-
-	// Second: snapshot. A snapshot is consistent where a byte copy is not, so it beats a raw copy even on a cold database.
+	// A snapshot is consistent where a byte copy is not, so it beats a raw copy even on a cold database.
 	if o.StartAt != ReadColdCopy {
 		res, err := readSnapshot(o)
 		if err == nil {
@@ -115,8 +90,6 @@ func Read(o Options) (Result, error) {
 		}
 		snapshotErr = err
 	}
-
-	// Last: raw copy, cold only.
 	res, err := readColdCopy(o)
 	if err == nil {
 		return res, nil
@@ -138,15 +111,10 @@ func readAt(o Options, path string, method ReadMethod) (Result, error) {
 	}
 	defer db.Close()
 	res, err := query(db, o)
-	if err != nil && !errors.Is(err, ErrTruncated) {
-		return Result{}, err
-	}
-	res.Truncated = errors.Is(err, ErrTruncated)
 	res.Method = method
-	return res, nil
+	return res, err
 }
 
-// readSnapshot is the second method: VACUUM INTO a scratch file, query it, delete it. A leftover is a corrupt partial: delete it, never resume into it.
 func readSnapshot(o Options) (result Result, err error) {
 	if o.ScratchDir == "" {
 		return Result{}, errors.New("sqliteread: no scratch directory for a snapshot read")
@@ -156,15 +124,14 @@ func readSnapshot(o Options) (result Result, err error) {
 	}
 
 	scratch := filepath.Join(o.ScratchDir, "snapshot-"+sanitise(filepath.Base(o.Path))+".sqlite")
-	// Delete any leftover FIRST: a file from a crashed run is a corrupt partial that would query as if valid.
+	// A leftover from a crashed run is a corrupt partial that would query as if valid.
 	if err := removeSnapshot(scratch); err != nil {
 		return Result{}, err
 	}
 	defer func() {
 		if rmErr := removeSnapshot(scratch); rmErr != nil && err == nil {
-			// A snapshot left behind is a copy of an agent's database in the state directory; worth failing the read over.
-			err = fmt.Errorf("sqliteread: snapshot read succeeded but %s could not be removed: %w",
-				scratch, rmErr)
+			// A leftover is a copy of an agent's database in the state directory; worth failing the read over.
+			err = fmt.Errorf("sqliteread: snapshot read succeeded but %s could not be removed: %w", scratch, rmErr)
 			result = Result{}
 		}
 	}()
@@ -176,16 +143,13 @@ func readSnapshot(o Options) (result Result, err error) {
 	defer src.Close()
 
 	// Quoted as a SQL string literal: VACUUM INTO takes an expression, and a path may contain a quote.
-	if _, err := src.Exec("VACUUM INTO " + quoteSQLString(scratch)); err != nil {
+	if _, err := src.Exec("VACUUM INTO '" + strings.ReplaceAll(scratch, "'", "''") + "'"); err != nil {
 		return Result{}, fmt.Errorf("vacuum into %s: %w", scratch, err)
 	}
 
 	return readAt(o, scratch, ReadSnapshot)
 }
 
-// readColdCopy is the last resort: copy db, -wal and -shm together, then open the copy read-only. Cold databases only,
-// and the sidecars must keep MATCHING basenames, or the copy opens without the WAL and silently shows data
-// from before the last checkpoint.
 func readColdCopy(o Options) (result Result, err error) {
 	if o.ScratchDir == "" {
 		return Result{}, errors.New("sqliteread: no scratch directory for a cold copy")
@@ -194,7 +158,7 @@ func readColdCopy(o Options) (result Result, err error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if age := o.Now().Sub(info.ModTime()); age < coldAfter {
+	if age := time.Since(info.ModTime()); age < coldAfter {
 		return Result{}, fmt.Errorf("database was modified %s ago, which is not cold enough for a raw copy "+
 			"(a raw copy of a live database is not consistent)", age.Round(time.Second))
 	}
@@ -221,29 +185,25 @@ func readColdCopy(o Options) (result Result, err error) {
 	return readAt(o, copied, ReadColdCopy)
 }
 
-// CopyCold copies a database and its sidecars into dir, keeping basenames. Returns the copied database's path.
+// CopyCold copies a database and its sidecars into dir. The sidecars must keep matching basenames, or the copy
+// opens without the WAL and silently shows data from before the last checkpoint.
 func CopyCold(src, dir string) (string, error) {
-	base := filepath.Base(src)
-	dst := filepath.Join(dir, base)
-
+	dst := filepath.Join(dir, filepath.Base(src))
 	if err := copyFile(src, dst); err != nil {
 		return "", err
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
-		sidecar := src + suffix
-		if _, err := os.Stat(sidecar); err != nil {
-			// Absent is fine: a checkpointed database has no -wal.
-			continue
-		}
-		if err := copyFile(sidecar, dst+suffix); err != nil {
-			return "", err
+		// Absent is fine: a checkpointed database has no -wal.
+		if _, err := os.Stat(src + suffix); err == nil {
+			if err := copyFile(src+suffix, dst+suffix); err != nil {
+				return "", err
+			}
 		}
 	}
 	return dst, nil
 }
 
 func copyFile(src, dst string) error {
-	// Read-only open of the source. This package never opens an agent's file for writing.
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -261,10 +221,6 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func quoteSQLString(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
 func sanitise(s string) string {
 	b := []byte(s)
 	for i, c := range b {
@@ -275,7 +231,6 @@ func sanitise(s string) string {
 	return string(b)
 }
 
-// removeSnapshot deletes a snapshot and its sidecars.
 func removeSnapshot(path string) error {
 	for _, p := range []string{path, path + "-wal", path + "-shm"} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {

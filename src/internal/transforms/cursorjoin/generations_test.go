@@ -1,189 +1,81 @@
 package cursorjoin_test
 
-import (
-	"strings"
-	"testing"
+import "testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
-
-// The current store generation, four drifts at once: numeric tool and capabilityType enums,
-// capabilityType 15 on every tool bubble, a thinking object rather than isThought, and modelName
-// under modelInfo. A struct that rejects any of them drops the row and reports it as a mismatch.
-func TestTheCurrentStoreGenerationEnriches(t *testing.T) {
-	rows := []storeRow{
-		composerAt(1753700000000, `[{"bubbleId":"u1","type":1},{"bubbleId":"think1","type":2},{"bubbleId":"a1","type":2},{"bubbleId":"tool1","type":2}]`),
-		bubbleRow("u1", `{"bubbleId":"u1","type":1,"text":"list the workspace",
-				"createdAt":"2026-07-28T10:06:09.499Z","requestId":"req-1"}`),
-		// The reasoning bubble: capabilityType 30, a thinking object, no isThought.
-		bubbleRow("think1", `{"bubbleId":"think1","type":2,"text":"","capabilityType":30,
-				"thinking":{"text":"the user wants a listing","signature":"sig"},
-				"createdAt":"2026-07-28T10:06:11.463Z"}`),
-		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Listing the workspace folder contents.\n\n\n",
-				"createdAt":"2026-07-28T10:06:11.477Z","modelInfo":{"modelName":"composer-2.5"}}`),
-		// capabilityType 15 and toolFormerData, numeric tool, arguments in params.
-		bubbleRow("tool1", `{"bubbleId":"tool1","type":2,"text":"","capabilityType":15,
-				"createdAt":"2026-07-28T10:06:11.516Z",
-				"toolFormerData":{"toolCallId":"tool_33e5b6ee","name":"run_terminal_command_v2",
-					"tool":15,"status":"completed","rawArgs":"",
-					"params":"{\"command\":\"ls -la /work/api\",\"cwd\":\"\"}",
-					"result":"{\"output\":\"total 24\\nmain.go\"}"}}`),
-	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-
-	// No decode-failure note either: every fixture row must decode.
-	for _, n := range res.Notes {
-		require.NotContains(t, n, "did not decode")
-	}
-	d := successfulObject(t, res)
-	lines := decode(t, d.Payload)
-
-	blocks := matchedBubbles(t, lines[1], "a1", "tool1")
-	assert.Equal(t, "composer-2.5", blocks[0]["modelName"])
-	tool := blocks[1]
-	assert.Truef(t, tool["tool_call_id"] == "tool_33e5b6ee", "tool_call_id = %v", tool["tool_call_id"])
-	assert.Truef(t, tool["tool_name"] == "run_terminal_command_v2", "tool_name = %v", tool["tool_name"])
-	if s, _ := tool["result"].(string); !strings.Contains(s, "main.go") {
-		t.Errorf("the tool result did not make it into the derived object: %v", tool["result"])
-	}
-	// The thinking bubble must not leak: [REDACTED] leaves nothing to attach it to.
-	assert.NotContains(t, string(d.Payload), "the user wants a listing", "a thinking bubble leaked into the derived object")
-}
-
-// The current transcript generation: reasoning as a plain text block, terminal bubbles with no
-// recorded arguments, and injected follow-up turns that never get bubble rows.
-func TestTheCurrentTranscriptGenerationEnriches(t *testing.T) {
-	// Line 2's first block is the thinking text verbatim; lines 5+ are the injected turns.
-	current := `{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Aug 3, 2026, 9:00 AM (UTC+2)</timestamp>\n<user_query>\nstart the dev server\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"text","text":"I need to check if a dev server is already running, then start it."},{"type":"tool_use","name":"Shell","input":{"command":"pnpm dev","description":"Start the dev server"}}]}}
-{"role":"assistant","message":{"content":[{"type":"text","text":"The server is up on port 5173."}]}}
-{"type":"turn_ended","status":"success"}
-{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Aug 3, 2026, 9:05 AM (UTC+2)</timestamp>\n\n<user_query>Briefly inform the user about the task result.</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"text","text":"The dev server is running."}]}}
-{"type":"turn_ended","status":"success"}
-`
-	rows := []storeRow{
-		composerRow(`[
-				{"bubbleId":"u1","type":1},
-				{"bubbleId":"think1","type":2},
-				{"bubbleId":"tool1","type":2},
-				{"bubbleId":"a1","type":2}]`),
-		bubbleRow("u1", `{"bubbleId":"u1","type":1,"text":"start the dev server"}`),
-		bubbleRow("think1", `{"bubbleId":"think1","type":2,"text":"","capabilityType":30,
-				"thinking":{"text":"I need to check if a dev server is already running, then start it."},
-				"createdAt":"2026-08-03T07:00:01.000Z"}`),
-		// No recorded arguments: position and a compatible name are the evidence.
-		bubbleRow("tool1", `{"bubbleId":"tool1","type":2,"capabilityType":15,
-				"toolFormerData":{"toolCallId":"tool_dev123","name":"run_terminal_command_v2",
-					"tool":15,"status":"completed","rawArgs":"{}","params":"",
-					"result":"{\"output\":\"VITE ready on :5173\"}"}}`),
-		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"The server is up on port 5173."}`),
-	}
-	res := run(t, newStore(t, rows), unit(t, current))
-
-	d := successfulObject(t, res)
-	payload := string(d.Payload)
-
-	// The thinking text block matched the thinking bubble rather than mismatching.
-	lines := decode(t, d.Payload)
-	blocks := matchedBubbles(t, lines[1], "think1", "tool1")
-	assert.Equal(t, "tool_dev123", blocks[1]["tool_call_id"])
-	assert.Contains(t, payload, "VITE ready", "the tool result did not reach the derived object")
-	// The injected trailing turns are tail, not mismatch: carried native-only, said out
-	// loud as an info — the object shipped, so it must not read as loss in Notes.
-	joined := strings.Join(res.Infos, " ")
-	assert.Contains(t, joined, "extend past the store")
-	assert.Equal(t, 7, len(lines))
-}
-
-// The transcript side of the store's enum drift: a strict string field would reject the whole
-// line, which then ships as native_invalid with its enrichment gone and mismatches at zero.
-func TestATypeDriftedTranscriptLineStillDecodesAndEnriches(t *testing.T) {
-	// The assistant line's role and the terminator's status arrive as numbers.
-	drifted := `{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Tuesday, Jul 28, 2026, 12:06 PM (UTC+2)</timestamp>\n<user_query>\nlist the workspace\n</user_query>"}]}}
-{"role":2,"message":{"content":[{"type":"text","text":"Listing the workspace folder contents."},{"type":"tool_use","name":"Shell","input":{"command":"ls -la /work/api","description":"List files in workspace root"}}]}}
-{"type":"turn_ended","status":3}
-`
-	d := successfulObject(t, run(t, fullStore(t), unit(t, drifted)))
-	payload := string(d.Payload)
-	assert.NotContains(t, payload, "native_invalid", "a type-drifted line was filed as invalid JSON, which it is not")
-	assert.Contains(t, payload, "call_abc123", "the drifted assistant line lost its enrichment")
-}
-
-// The observed migration was string to number, but no other shape may cost the bubble either:
-// a decode error in one field discards the whole row.
-func TestAFlexFieldWithAnUnexpectedShapeDoesNotCostTheBubble(t *testing.T) {
-	rows := []storeRow{
-		composerRow(`[
-				{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"list the workspace"}`),
-		bubbleRow("b2", `{"bubbleId":"b2","type":2,"text":"Listing the workspace folder contents."}`),
-		// capabilityType a bool, tool an object: shapes no store has written yet.
-		bubbleRow("b3", `{"bubbleId":"b3","type":2,"capabilityType":true,
-				"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
-					"tool":{"kind":15},"status":"completed",
-					"rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`),
-	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-
-	for _, n := range res.Notes {
-		assert.NotContainsf(t, n, "did not decode", "an unexpected scalar shape cost a whole bubble row: %s", n)
-	}
-
-	d := successfulObject(t, res)
-	assert.Contains(t, string(d.Payload), "call_abc123", "the tool bubble did not survive its drifted fields")
-}
-
-// One store holds reasoning in two encodings at once. Declaring the field an object makes
-// json.Unmarshal reject the whole row of every server-hydrated thought.
-func TestServerHydratedReasoningIsDecodedNotDropped(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nwhy is the loader bounded\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"text","text":"Checking where the loader's bounds are set."},{"type":"text","text":"The bound is the row cap."}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"why is the loader bounded",
-				"createdAt":"2026-08-18T12:41:29.000Z"}`),
-		// Server-hydrated: thinking is a string holding the object.
-		bubbleRow("b2", `{"bubbleId":"b2","type":2,"capabilityType":30,
-				"serverBubbleId":"srv-77","requestId":"req-2",
-				"createdAt":"2026-08-18T12:41:29.766Z",
-				"thinking":"{\"text\":\"Checking where the loader's bounds are set.\",\"isLastThinkingChunk\":true}"}`),
-		// Streamed locally, in the same conversation: thinking is an object.
-		bubbleRow("b3", `{"bubbleId":"b3","type":2,"capabilityType":30,
-				"thinkingStyle":1,"requestId":"req-3",
-				"createdAt":"2026-08-18T12:41:49.000Z",
-				"thinking":{"text":"The bound is the row cap.","signature":"sig-abc"}}`),
-	})
-
-	res := run(t, db, unit(t, transcript))
-	for _, n := range res.Notes {
-		assert.NotContainsf(t, n, "did not decode", "a server-hydrated thought was rejected as undecodable: %s", n)
-	}
-
-	d := successfulObject(t, res)
-
-	// Both reasoning bubbles carry their provenance, whichever writer produced them.
-	lines := decode(t, d.Payload)
-	matchedBubbles(t, lines[1], "b2", "b3")
-}
-
-// A thinking string that parses but not into a known field still carries prose: taking the text
-// field alone would drop the bubble out of the event list as scaffolding.
-func TestAReasoningStringWithNoKnownTextFieldKeepsItsProse(t *testing.T) {
-	transcript := `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nwhy is the loader bounded\n</user_query>"}]}}
-{"role":"assistant","message":{"content":[{"type":"text","text":"Checking the manifest bounds."}]}}
-`
-	db := newStore(t, []storeRow{
-		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"why is the loader bounded",
-				"createdAt":"2026-08-18T12:41:29.000Z"}`),
-		bubbleRow("b2", `{"bubbleId":"b2","type":2,"capabilityType":30,"serverBubbleId":"srv-91",
-				"createdAt":"2026-08-18T12:41:29.766Z",
-				"thinking":"{\"reasoning\":\"Checking the manifest bounds.\",\"isLastThinkingChunk\":true}"}`),
-	})
-
-	lines := joined(t, db, transcript)
-	matchedBubbles(t, lines[1], "b2")
+// Vendor drift on either side. A struct that rejects a drifted field drops the whole row or line,
+// which then reports as a mismatch or ships unenriched.
+func TestStoreAndTranscriptGenerations(t *testing.T) {
+	const loaderQuery = "why is the loader bounded"
+	runJoinCases(t, []joinCase{{
+		// Four drifts at once: numeric tool and capabilityType enums, capabilityType 15 on every tool
+		// bubble, a thinking object rather than isThought, and modelName under modelInfo.
+		name: "the current store generation",
+		rows: conversation(
+			user("b1", "list the workspace"),
+			bubbleRow("think1", `{"type":2,"text":"","capabilityType":30,"thinking":{"text":"the user wants a listing","signature":"sig"}}`),
+			bubbleRow("a1", `{"type":2,"text":"Listing the workspace folder contents.\n\n\n","modelInfo":{"modelName":"composer-2.5"}}`),
+			bubbleRow("tool1", `{"type":2,"text":"","capabilityType":15,"toolFormerData":{"toolCallId":"tool_33e5b6ee",
+				"name":"run_terminal_command_v2","tool":15,"status":"completed","rawArgs":"",
+				"params":"{\"command\":\"ls -la /work/api\",\"cwd\":\"\"}","result":"{\"output\":\"total 24\\nmain.go\"}"}}`),
+		),
+		want:    map[int][]string{1: {"a1", "tool1"}},
+		present: []string{"composer-2.5"},
+		// [REDACTED] reasoning leaves nothing to attach the thinking bubble to.
+		absent: []string{"the user wants a listing"},
+	}, {
+		// Reasoning as a plain text block, a terminal call with no recorded arguments, and injected
+		// follow-up turns that never get bubble rows: tail, carried native-only as an info.
+		name: "the current transcript generation",
+		transcript: jsonl(
+			`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Aug 3, 2026, 9:00 AM (UTC+2)</timestamp>\n<user_query>\nstart the dev server\n</user_query>"}]}}`,
+			turn(text("I need to check if a dev server is already running, then start it."), use("Shell", `{"command":"pnpm dev","description":"Start the dev server"}`)),
+			turn(text("The server is up on port 5173.")),
+			`{"type":"turn_ended","status":"success"}`,
+			`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Aug 3, 2026, 9:05 AM (UTC+2)</timestamp>\n\n<user_query>Briefly inform the user about the task result.</user_query>"}]}}`,
+			turn(text("The dev server is running.")),
+			`{"type":"turn_ended","status":"success"}`),
+		bubbles: []storeRow{
+			user("b1", "start the dev server"),
+			bubbleRow("think1", `{"type":2,"text":"","capabilityType":30,"thinking":{"text":"I need to check if a dev server is already running, then start it."}}`),
+			tool{id: "tool1", name: "run_terminal_command_v2", rawArgs: "{}", result: `{"output":"VITE ready on :5173"}`}.row(),
+			said("a1", "The server is up on port 5173."),
+		},
+		want:    map[int][]string{1: {"think1", "tool1"}, 2: {"a1"}},
+		present: []string{"VITE ready"},
+		infos:   []string{"extend past the store"},
+	}, {
+		// The assistant line's role and the terminator's status arrive as numbers.
+		name: "a type-drifted transcript line still decodes",
+		transcript: `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nlist the workspace\n</user_query>"}]}}
+{"role":2,"message":{"content":[{"type":"text","text":"Listing the workspace folder contents."},{"type":"tool_use","name":"Shell","input":{"command":"ls -la /work/api"}}]}}
+{"type":"turn_ended","status":3}`,
+		rows:   fullRows(),
+		want:   map[int][]string{1: {"b2", "b3"}},
+		absent: []string{"native_invalid"},
+	}, {
+		// capabilityType a bool, tool an object: shapes no store has written yet must not cost the row.
+		name: "a flex field with an unexpected shape",
+		rows: lsRows(`"capabilityType":true,"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
+			"tool":{"kind":15},"status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}`),
+		want: map[int][]string{1: {"b2", "b3"}},
+	}, {
+		// One store holds reasoning in two encodings: server-hydrated thinking is a string holding the
+		// object, locally streamed thinking is the object.
+		name:       "server-hydrated reasoning is decoded, not dropped",
+		query:      loaderQuery,
+		transcript: turn(text("Checking where the loader's bounds are set."), text("The bound is the row cap.")),
+		bubbles: []storeRow{
+			bubbleRow("b2", `{"type":2,"capabilityType":30,"thinking":"{\"text\":\"Checking where the loader's bounds are set.\",\"isLastThinkingChunk\":true}"}`),
+			bubbleRow("b3", `{"type":2,"capabilityType":30,"thinking":{"text":"The bound is the row cap.","signature":"sig-abc"}}`),
+		},
+		want: map[int][]string{1: {"b2", "b3"}},
+	}, {
+		// Taking the known text field alone would drop this bubble out of the event list as scaffolding.
+		name:       "a reasoning string with no known text field keeps its prose",
+		query:      loaderQuery,
+		transcript: turn(text("Checking the manifest bounds.")),
+		bubbles: []storeRow{bubbleRow("b2", `{"type":2,"capabilityType":30,
+			"thinking":"{\"reasoning\":\"Checking the manifest bounds.\",\"isLastThinkingChunk\":true}"}`)},
+		want: map[int][]string{1: {"b2"}},
+	}})
 }
