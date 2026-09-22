@@ -29,22 +29,24 @@ func TestRecycleRetriesAFailedSupervisionProbe(t *testing.T) {
 	require.Equalf(t, 2, probes, "supervision was probed %d times, want 2", probes)
 }
 
-// A truncated run left backlog on disk, so the loop comes back after the catch-up delay
-// rather than the full interval.
-func TestTruncatedRunEarnsTheCatchUpDelay(t *testing.T) {
-	// Shipped is part of the condition: a run that collected nothing has no backlog to chase.
-	require.Equal(t, app.CatchUpDelay, app.NextDelay(formats.Report{Truncated: true, Shipped: 64}, nil, config.DefaultTick))
-}
-
-func TestCompleteRunWaitsTheFullInterval(t *testing.T) {
-	require.Equal(t, config.DefaultTick, app.NextDelay(formats.Report{}, nil, config.DefaultTick))
-}
-
-// An errored run keeps the full interval: re-ticking fast would make one failure a hot loop.
-// A panic is the same case: recoverFlush always surfaces it as an error.
-func TestErroredRunNeverEarnsTheCatchUpDelay(t *testing.T) {
-	rep := formats.Report{Truncated: true}
-	require.Equal(t, config.DefaultTick, app.NextDelay(rep, errors.New("sink unreachable"), config.DefaultTick))
+// Catch-up is only for successful truncated work; failures keep the normal interval.
+func TestNextDelay(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report formats.Report
+		err    error
+		want   time.Duration
+	}{
+		{"backlog", formats.Report{Truncated: true, Shipped: 64}, nil, app.CatchUpDelay},
+		{"complete", formats.Report{}, nil, config.DefaultTick},
+		{"run error", formats.Report{Truncated: true}, errors.New("sink unreachable"), config.DefaultTick},
+		{"error with backlog", formats.Report{Truncated: true, Shipped: 64}, errors.New("sink unreachable"), config.DefaultTick},
+		{"only failed files", formats.Report{Truncated: true, Failed: 64}, nil, config.DefaultTick},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, app.NextDelay(tc.report, tc.err, config.DefaultTick))
+		})
+	}
 }
 
 // The daemon must survive a panic in a tick, so the recovery is exercised through a function
@@ -77,11 +79,4 @@ func TestACleanTickIsUntouched(t *testing.T) {
 	require.Truef(t, !panicked && err == nil, "clean tick: panicked=%v err=%v", panicked, err)
 	assert.Equalf(t, want.Shipped, rep.Shipped, "report was altered: %+v", rep)
 	assert.Equalf(t, "", errOut.String(), "a clean tick wrote to stderr: %q", errOut.String())
-}
-
-// A run that shipped nothing has no backlog worth chasing, whatever Truncated says; per-file
-// failures return no error.
-func TestARunThatShippedNothingWaitsTheFullInterval(t *testing.T) {
-	rep := formats.Report{Truncated: true, Failed: 64, Shipped: 0}
-	require.Equal(t, config.DefaultTick, app.NextDelay(rep, nil, config.DefaultTick))
 }

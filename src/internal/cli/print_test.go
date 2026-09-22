@@ -13,45 +13,32 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// Unchanged files are silent, so a steady-state sync prints no progress at all.
-func TestProgressLineIsSilentOnUnchanged(t *testing.T) {
-	got := progressLine("claude-code", 3, 10, formats.FileOutcome{
-		RelPath:  "projects/p/a.jsonl",
-		Decision: formats.DecisionUnchanged,
-	})
-	require.Equalf(t, "", got, "unchanged file rendered %q", got)
-}
-
-func TestProgressLineRendersShippedWithCounterAndSizes(t *testing.T) {
-	got := progressLine("claude-code", 3, 10, formats.FileOutcome{
-		RelPath:  "projects/p/a.jsonl",
-		Decision: formats.DecisionShipped,
-		BytesIn:  465_000,
-		BytesOut: 120_000,
-	})
-	for _, want := range []string{"[3/10]", "claude-code", "projects/p/a.jsonl", "shipped", "454.1 KB in", "117.2 KB sealed"} {
-		assert.Containsf(t, got, want, "line %q missing %q", got, want)
+// Complete lines pin field order, spacing, reasons, sizes and the lack of a terminator.
+func TestProgressLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		done, total  int
+		file         formats.FileOutcome
+		want         string
+	}{
+		{"unchanged", "claude-code", 3, 10,
+			formats.FileOutcome{RelPath: "projects/p/a.jsonl", Decision: formats.DecisionUnchanged}, ""},
+		{"shipped sizes", "claude-code", 3, 10,
+			formats.FileOutcome{RelPath: "projects/p/a.jsonl", Decision: formats.DecisionShipped,
+				BytesIn: 465_000, BytesOut: 120_000},
+			"[3/10] claude-code  projects/p/a.jsonl  shipped (454.1 KB in, 117.2 KB sealed)"},
+		{"skip reason", "codex", 1, 4,
+			formats.FileOutcome{RelPath: "sessions/big.jsonl", Decision: formats.DecisionSkipped,
+				Reason: "over the 100000000 byte limit for this source"},
+			"[1/4] codex  sessions/big.jsonl  skipped: over the 100000000 byte limit for this source"},
+		{"single line", "claude-code", 1, 1,
+			formats.FileOutcome{RelPath: "a.jsonl", Decision: formats.DecisionShipped, BytesIn: 10, BytesOut: 4},
+			"[1/1] claude-code  a.jsonl  shipped (10 B in, 4 B sealed)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, progressLine(tc.source, tc.done, tc.total, tc.file))
+		})
 	}
-}
-
-// A file that did not ship must say why: "skipped, fine" versus "skipped, go look".
-func TestProgressLineCarriesTheReason(t *testing.T) {
-	got := progressLine("codex", 1, 4, formats.FileOutcome{
-		RelPath:  "sessions/big.jsonl",
-		Decision: formats.DecisionSkipped,
-		Reason:   "over the 100000000 byte limit for this source",
-	})
-	assert.Containsf(t, got, "skipped: over the 100000000 byte limit", "line %q missing the skip reason", got)
-}
-
-// The e2e harness parses these lines, so the shape is a contract: counter, source id, path,
-// decision, and no newline of its own.
-func TestProgressLineIsOneLineWithNoTerminator(t *testing.T) {
-	got := progressLine("claude-code", 1, 1, formats.FileOutcome{
-		RelPath: "a.jsonl", Decision: formats.DecisionShipped, BytesIn: 10, BytesOut: 4,
-	})
-	assert.NotContainsf(t, got, "\n", "the line terminates itself: %q", got)
-	assert.Equal(t, got, "[1/1] claude-code  a.jsonl  shipped (10 B in, 4 B sealed)")
 }
 
 func TestHumanBytes(t *testing.T) {
@@ -68,106 +55,82 @@ func TestHumanBytes(t *testing.T) {
 	}
 }
 
-// The oversize line has to say WHICH file and HOW BIG: a pathological file and ordinary work
-// differ by three orders of magnitude.
-func TestTheOversizeLineNamesTheFileAndItsSize(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{
-		Sources: []formats.SourceOutcome{{
-			SourceID:        "codex-rollouts",
-			Health:          formats.Collected,
-			Oversize:        1,
-			OversizeLargest: 412 << 20,
-			OversizeLimit:   256 << 20,
+// An oversize warning names the source, file, cap and remedy, with the correct singular or plural.
+func TestOversizeSummaries(t *testing.T) {
+	for _, tc := range []struct {
+		source formats.SourceOutcome
+		want   []string
+	}{
+		{formats.SourceOutcome{
+			SourceID: "codex-rollouts", Health: formats.Collected,
+			Oversize: 1, OversizeLargest: 412 << 20, OversizeLimit: 256 << 20,
 			OversizeExample: "sessions/2026/08/01/rollout-2026-08-01-abc.jsonl",
-		}},
-	}, false)
-
-	out := buf.String()
-	for _, want := range []string{
-		"codex-rollouts",
-		"1 file over the",              // singular, because there is one
-		"256.0 MB",                     // the cap it exceeded
-		"412.0 MB",                     // how big it actually is
-		"rollout-2026-08-01-abc.jsonl", // and which one
+		}, []string{"codex-rollouts", "1 file over the", "256.0 MB", "412.0 MB", "rollout-2026-08-01-abc.jsonl"}},
+		{formats.SourceOutcome{
+			SourceID: "claude-code-transcripts", Health: formats.Collected,
+			Oversize: 3, OversizeLargest: 900 << 20, OversizeLimit: 256 << 20,
+			OversizeExample: "projects/x/big.jsonl",
+		}, []string{"claude-code-transcripts", "3 files over the", "256.0 MB", "900.0 MB", "projects/x/big.jsonl"}},
 	} {
-		assert.Containsf(t, out, want, "the summary does not mention %q:\n%s", want, out)
+		t.Run(tc.source.SourceID, func(t *testing.T) {
+			out := summaryOutput(formats.Report{Sources: []formats.SourceOutcome{tc.source}}, false)
+			for _, want := range tc.want {
+				assert.Contains(t, out, want)
+			}
+			assert.Contains(t, out, "max_file_bytes", "the warning must say how to collect the file")
+			assert.NotContains(t, out, "they will not be", "unactionable wording")
+		})
 	}
-	// The cap is per source and configurable, so a reader who wants the file has somewhere to go.
-	assert.Containsf(t, out, "max_file_bytes", "the line does not say how to change the outcome:\n%s", out)
-	assert.NotContainsf(t, out, "they will not be", "the old unactionable wording is back:\n%s", out)
 }
 
 // Only a truncated one-shot sync advises a drain, and only when it left a backlog.
 func TestATruncatedSyncSaysHowToFlushTheRest(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{Truncated: true, Shipped: 64}, true)
-	out := buf.String()
+	out := summaryOutput(formats.Report{Truncated: true, Shipped: 64}, true)
 	assert.Containsf(t, out, "max_files_per_run reached", "the truncation note is gone:\n%s", out)
 	assert.Containsf(t, out, "run --once --drain", "a truncated sync does not say how to flush the rest:\n%s", out)
 }
 
 func TestTheDaemonIsNotToldToDrain(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{Truncated: true, Shipped: 64}, false)
-	assert.NotContainsf(t, buf.String(), "--drain", "the daemon re-ticks on its own; advising a manual drain:\n%s", buf.String())
+	out := summaryOutput(formats.Report{Truncated: true, Shipped: 64}, false)
+	assert.NotContainsf(t, out, "--drain", "the daemon re-ticks on its own; advising a manual drain:\n%s", out)
 }
 
 // Truncation on FAILURES has no backlog worth chasing.
 func TestATruncatedRunThatShippedNothingIsNotToldToDrain(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{Truncated: true, Failed: 64}, true)
-	assert.NotContainsf(t, buf.String(), "--drain", "a run of pure failures was told to drain:\n%s", buf.String())
+	out := summaryOutput(formats.Report{Truncated: true, Failed: 64}, true)
+	assert.NotContainsf(t, out, "--drain", "a run of pure failures was told to drain:\n%s", out)
 }
 
-// The line the counters cannot give: how much moved, how long it took, how fast that was.
-func TestTheStatsLineReportsBytesAndThroughput(t *testing.T) {
-	start := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
-	got := statsLine(formats.Report{
-		StartedAt:       start,
-		FinishedAt:      start.Add(3400 * time.Millisecond),
-		BytesRead:       5_452_595,
-		BytesSealed:     1_468_006,
-		MedianFileBytes: 215_040,
-	})
-	want := "  sent  1.4 MB sealed of 5.2 MB read in 3.4s  (1.5 MB/s, median file 210.0 KB)"
-	assert.Equalf(t, want, got, "stats line:\n got %q\nwant %q", got, want)
-	// A sentence, not a row: a tab would column-align it against differently shaped blocks.
-	assert.NotContainsf(t, got, "\t", "the stats line carries a tab: %q", got)
-}
-
-// A steady-state sync read nothing, and "0 B in 0s" on every tick forever is noise.
-func TestTheStatsLineIsAbsentWhenNothingWasRead(t *testing.T) {
-	start := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
-	assert.Equal(t, "", statsLine(formats.Report{StartedAt: start, FinishedAt: start.Add(time.Second)}))
-}
-
-// A run whose clock never closed has no denominator, and a rate over one is worse than none.
-func TestTheStatsLineIsAbsentWithoutAFinishTime(t *testing.T) {
-	assert.Equal(t, "", statsLine(formats.Report{BytesRead: 1 << 20, BytesSealed: 1 << 19}))
+// A missing denominator suppresses throughput; a zero duration still preserves the median.
+func TestStatsLines(t *testing.T) {
+	at := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		report formats.Report
+		want   string
+	}{
+		{"bytes and throughput", formats.Report{
+			StartedAt: at, FinishedAt: at.Add(3400 * time.Millisecond),
+			BytesRead: 5_452_595, BytesSealed: 1_468_006, MedianFileBytes: 215_040,
+		}, "  sent  1.4 MB sealed of 5.2 MB read in 3.4s  (1.5 MB/s, median file 210.0 KB)"},
+		{"nothing read", formats.Report{StartedAt: at, FinishedAt: at.Add(time.Second)}, ""},
+		{"no finish time", formats.Report{BytesRead: 1 << 20, BytesSealed: 1 << 19}, ""},
+		{"zero duration", formats.Report{
+			StartedAt: at, FinishedAt: at, BytesRead: 4096, BytesSealed: 2048, MedianFileBytes: 4096,
+		}, "  sent  2.0 KB sealed of 4.0 KB read in 0ms  (median file 4.0 KB)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, statsLine(tc.report)) })
+	}
 }
 
 // A paused run says so instead of a summary; no stats line may imply otherwise.
 func TestAPausedRunHasNoStatsLine(t *testing.T) {
-	var buf bytes.Buffer
 	start := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
-	printRunSummary(&buf, formats.Report{
+	out := summaryOutput(formats.Report{
 		Paused: true, PauseReason: "by hand",
 		StartedAt: start, FinishedAt: start.Add(time.Second), BytesRead: 1 << 20,
 	}, false)
-	assert.NotContainsf(t, buf.String(), "sealed of", "a paused run reported throughput:\n%s", buf.String())
-}
-
-// A run inside the clock's resolution keeps its median; the rate goes, since it would be invented.
-func TestAZeroDurationRunDropsTheRateAndKeepsTheMedian(t *testing.T) {
-	at := time.Date(2026, 8, 6, 11, 2, 4, 0, time.UTC)
-	got := statsLine(formats.Report{
-		StartedAt: at, FinishedAt: at,
-		BytesRead: 4096, BytesSealed: 2048, MedianFileBytes: 4096,
-	})
-	assert.NotContainsf(t, got, "/s", "a zero-duration run reported a rate: %q", got)
-	assert.Containsf(t, got, "median file 4.0 KB", "the median went with the rate: %q", got)
-	assert.Containsf(t, got, "in 0ms", "the elapsed time is missing: %q", got)
+	assert.NotContainsf(t, out, "sealed of", "a paused run reported throughput:\n%s", out)
 }
 
 func TestHumanDuration(t *testing.T) {
@@ -189,8 +152,7 @@ func TestHumanDuration(t *testing.T) {
 // Alarm notes print once, not once per heading, and an informational note about a conversation
 // that shipped must not sit under the "DB-side fields lost" banner.
 func TestEnrichNotesPrintOnceAndInfosAreNotReportedAsLoss(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{
+	out := summaryOutput(formats.Report{
 		Sources: []formats.SourceOutcome{{
 			SourceID:       "cursor-transcripts",
 			Health:         formats.Collected,
@@ -200,7 +162,6 @@ func TestEnrichNotesPrintOnceAndInfosAreNotReportedAsLoss(t *testing.T) {
 			EnrichInfos:    []string{"conv-b: 3 events carried native-only in the derived object"},
 		}},
 	}, false)
-	out := buf.String()
 
 	assert.Equal(t, 1, strings.Count(out, "did not align"))
 	require.Truef(t, strings.Contains(out, "1 files sent without their database details") && strings.Contains(out, "enrich errors ×1"), "an alarm heading is missing:\n%s", out)
@@ -215,8 +176,7 @@ func TestEnrichNotesPrintOnceAndInfosAreNotReportedAsLoss(t *testing.T) {
 
 // A source whose enrichment raised no alarm prints its infos and nothing else.
 func TestInfosAloneRaiseNoBanner(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{
+	out := summaryOutput(formats.Report{
 		Sources: []formats.SourceOutcome{{
 			SourceID:    "cursor-transcripts",
 			Health:      formats.Collected,
@@ -224,19 +184,12 @@ func TestInfosAloneRaiseNoBanner(t *testing.T) {
 			EnrichInfos: []string{"conv-b: 1 event carried native-only in the derived object"},
 		}},
 	}, false)
-	out := buf.String()
 	assert.Truef(t, !strings.Contains(out, "ENRICH MISMATCH") && !strings.Contains(out, "enrich errors"), "an info-only run printed an alarm:\n%s", out)
 	assert.Containsf(t, out, "carried native-only", "the info line is missing:\n%s", out)
 }
 
-func TestTheOversizeLinePluralises(t *testing.T) {
-	var buf bytes.Buffer
-	printRunSummary(&buf, formats.Report{
-		Sources: []formats.SourceOutcome{{
-			SourceID: "claude-code-transcripts", Health: formats.Collected,
-			Oversize: 3, OversizeLargest: 900 << 20, OversizeLimit: 256 << 20,
-			OversizeExample: "projects/x/big.jsonl",
-		}},
-	}, false)
-	assert.Containsf(t, buf.String(), "3 files over the", "plural form missing:\n%s", buf.String())
+func summaryOutput(report formats.Report, adviseDrain bool) string {
+	var out bytes.Buffer
+	printRunSummary(&out, report, adviseDrain)
+	return out.String()
 }
