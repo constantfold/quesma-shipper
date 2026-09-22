@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,7 +115,6 @@ func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine
 	env, err := sources.OSEnv()
 	require.NoError(t, err)
 	o.Env = env
-	o.Recipients = []age.Recipient{f.unit.Recipient()}
 	return o
 }
 
@@ -130,68 +127,74 @@ type fixtureEnricher struct {
 
 func (f *fixtureEnricher) DBCandidates() []string { return []string{f.db} }
 
-func runEnrich(t *testing.T, f *fixture, o engine.Options) engine.Report {
-	t.Helper()
-	rep, err := engine.Run(context.Background(), f.store, o)
-	require.NoErrorf(t, err, "run: %v", err)
-	return rep
-}
-
 // A raw/derived pair preserves its provenance while excluding database rows and credentials.
 func TestEnrichedPairContract(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-	rep := runEnrich(t, f, enrichOpts(t, f, db, true))
-	require.Equal(t, 2, rep.Shipped, "raw and derived must both ship")
-	require.NotEmpty(t, f.port.keys(), "nothing shipped, so this test proves nothing")
-
-	var rawManifest, derivedManifest transforms.Manifest
-	for _, k := range f.port.keys() {
-		obj, m, payload := f.openObject(t, k)
-		for _, secret := range []string{sessionToken, blobKey, unusedRowMarker} {
-			assert.NotContains(t, string(obj.Body), secret, "%s ciphertext", k)
-			assert.NotContains(t, string(payload), secret, "%s payload", k)
-			for name, value := range obj.Metadata {
-				assert.NotContains(t, value, secret, "%s metadata %s", k, name)
+	const planted = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"
+	for _, tc := range []struct{ name, result string }{
+		{"original store", ""},
+		{"secret in database tool result", "exported GITHUB_TOKEN=" + planted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			db := cursorFixture(t, f)
+			if tc.result != "" {
+				updateBubble(t, db, "bubbleId:"+enrichConv+":b3", toolResult(tc.result))
 			}
-		}
-		assert.NotEqual(t, "sqlite_rows", m.Gather, k)
-		assert.NotContains(t, m.NativePath, "state.vscdb", k)
-		if m.Derived {
-			derivedManifest = m
-			assert.Equal(t, "true", obj.Metadata["derived"], k)
-			assert.NotEmpty(t, obj.Metadata["artifact-class"], k)
-		} else {
-			rawManifest = m
-			assert.Empty(t, obj.Metadata["derived"], k)
-		}
+			rep := f.runWith(enrichOpts(t, f, db, true))
+			require.Equal(t, 2, rep.Shipped, "raw and derived must both ship")
+			require.Len(t, f.port.keys(), 2, "raw and derived must have distinct keys")
+			f.port.storedOnce(t)
+			assert.Len(t, f.port.sizes(), 2, "raw and derived each authorize their own group")
+
+			var rawManifest, derivedManifest transforms.Manifest
+			for _, k := range f.port.keys() {
+				obj, m, payload := f.openObject(t, k)
+				for _, secret := range []string{sessionToken, blobKey, unusedRowMarker, planted} {
+					assert.NotContains(t, string(obj.Body), secret, "%s ciphertext", k)
+					assert.NotContains(t, string(payload), secret, "%s payload", k)
+					for name, value := range obj.Metadata {
+						assert.NotContains(t, value, secret, "%s metadata %s", k, name)
+					}
+				}
+				assert.NotEqual(t, "sqlite_rows", m.Gather, k)
+				assert.NotContains(t, m.NativePath, "state.vscdb", k)
+				if m.Derived {
+					derivedManifest = m
+					assert.Equal(t, "true", obj.Metadata["derived"], k)
+					assert.NotEmpty(t, obj.Metadata["artifact-class"], k)
+				} else {
+					rawManifest = m
+					assert.Empty(t, obj.Metadata["derived"], k)
+				}
+			}
+			require.NotEqual(t, "", rawManifest.SourceHash, "no raw object shipped")
+			require.True(t, derivedManifest.Derived, "no derived object shipped")
+
+			// derived_from carries the raw object's source hash, the only link downstream can verify.
+			assert.Equal(t, []string{rawManifest.SourceHash}, derivedManifest.DerivedFrom)
+			assert.Truef(t, derivedManifest.Enricher != nil && derivedManifest.Enricher.ID == "cursor-transcript-join" && derivedManifest.Enricher.Version == 4, "enricher = %+v", derivedManifest.Enricher)
+			assert.Equalf(t, string(transforms.StatusOK), derivedManifest.EnrichStatus, "enrich_status = %q", derivedManifest.EnrichStatus)
+
+			// The rows never ship, so DB provenance is the only account of where the fields came from.
+			p := derivedManifest.DBProvenance
+			require.Truef(t, p != nil && p.ReadMethod != "" && p.RowsRead != 0 && len(p.Keyspaces) != 0, "db_provenance is incomplete: %+v", p)
+			assert.Containsf(t, p.DBPath, "state.vscdb", "db_provenance path = %q", p.DBPath)
+			// A real path on someone's machine, so the username placeholder applies here too.
+			assert.NotContainsf(t, p.DBPath, "/Users/"+os.Getenv("USER")+"/", "db_provenance leaks the username: %q", p.DBPath)
+		})
 	}
-	require.NotEqual(t, "", rawManifest.SourceHash, "no raw object shipped")
-	require.True(t, derivedManifest.Derived, "no derived object shipped")
-
-	// derived_from carries the raw object's source hash, the only link downstream can verify.
-	assert.Equal(t, []string{rawManifest.SourceHash}, derivedManifest.DerivedFrom)
-	assert.Truef(t, derivedManifest.Enricher != nil && derivedManifest.Enricher.ID == "cursor-transcript-join" && derivedManifest.Enricher.Version == 4, "enricher = %+v", derivedManifest.Enricher)
-	assert.Equalf(t, string(transforms.StatusOK), derivedManifest.EnrichStatus, "enrich_status = %q", derivedManifest.EnrichStatus)
-
-	// The rows never ship, so DB provenance is the only account of where the fields came from.
-	p := derivedManifest.DBProvenance
-	require.Truef(t, p != nil && p.ReadMethod != "" && p.RowsRead != 0 && len(p.Keyspaces) != 0, "db_provenance is incomplete: %+v", p)
-	assert.Containsf(t, p.DBPath, "state.vscdb", "db_provenance path = %q", p.DBPath)
-	// A real path on someone's machine, so the username placeholder applies here too.
-	assert.NotContainsf(t, p.DBPath, "/Users/"+os.Getenv("USER")+"/", "db_provenance leaks the username: %q", p.DBPath)
 }
 
 // Recent transcripts are re-read for enrichment; only changed derived output uploads, onto the same key.
 func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 	f := newFixture(t)
 	db := cursorFixture(t, f)
-	first := runEnrich(t, f, enrichOpts(t, f, db, true))
+	first := f.runWith(enrichOpts(t, f, db, true))
 	require.Equal(t, 2, first.Shipped)
 	keys := f.port.keys()
 
 	f.reopen()
-	second := runEnrich(t, f, enrichOpts(t, f, db, true))
+	second := f.runWith(enrichOpts(t, f, db, true))
 	assert.Zero(t, second.Shipped)
 	assert.ElementsMatch(t, keys, f.port.keys())
 
@@ -199,7 +202,7 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 		// Only the database changes: size/mtime filtering must still read the recent transcript.
 		updateBubble(t, db, "bubbleId:"+enrichConv+":b3", toolResult(result))
 		f.reopen()
-		rep := runEnrich(t, f, enrichOpts(t, f, db, true))
+		rep := f.runWith(enrichOpts(t, f, db, true))
 		require.Equal(t, 1, rep.Shipped, "only the derived revision may ship")
 		assert.ElementsMatch(t, keys, f.port.keys())
 		found := false
@@ -215,11 +218,11 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 func TestDisablingTheEnricherLeavesAByteIdenticalRawRun(t *testing.T) {
 	withEnricher := newFixture(t)
 	dbA := cursorFixture(t, withEnricher)
-	runEnrich(t, withEnricher, enrichOpts(t, withEnricher, dbA, true))
+	withEnricher.runWith(enrichOpts(t, withEnricher, dbA, true))
 
 	without := newFixture(t)
 	dbB := cursorFixture(t, without)
-	runEnrich(t, without, enrichOpts(t, without, dbB, false))
+	without.runWith(enrichOpts(t, without, dbB, false))
 
 	// Disabling must change exactly one thing, the derived object, and leave raw collection alone.
 	rawWith := rawManifests(t, withEnricher)
@@ -248,7 +251,7 @@ func TestAMismatchShipsRawOnlyAndRaisesTheAlarm(t *testing.T) {
 	updateBubble(t, db, "bubbleId:"+enrichConv+":b2",
 		`{"bubbleId":"b2","type":2,"text":"a completely different sentence about nothing"}`)
 
-	rep := runEnrich(t, f, enrichOpts(t, f, db, true))
+	rep := f.runWith(enrichOpts(t, f, db, true))
 
 	// Raw ships regardless, which keeps a drifted join from becoming a collection outage.
 	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only: %+v", rep.Shipped, rep.Sources)
@@ -276,7 +279,7 @@ func TestPreviewComputesTheDerivedObjectWithoutUploading(t *testing.T) {
 
 	o := enrichOpts(t, f, db, true)
 	o.DryRun = true
-	rep := runEnrich(t, f, o)
+	rep := f.runWith(o)
 
 	assert.Lenf(t, f.port.keys(), 0, "preview uploaded %v", f.port.keys())
 	// Preview must cover the derived object too: it is the one built from a database.
@@ -296,29 +299,10 @@ func TestNoDatabaseShipsRawOnlyWithoutAnAlarm(t *testing.T) {
 	f := newFixture(t)
 	cursorFixture(t, f)
 
-	rep := runEnrich(t, f, enrichOpts(t, f, filepath.Join(f.home, "nope", "state.vscdb"), true))
+	rep := f.runWith(enrichOpts(t, f, filepath.Join(f.home, "nope", "state.vscdb"), true))
 	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only", rep.Shipped)
 	// An install with no store has nothing to derive from; counting it would bury the real alarm.
 	assert.Equalf(t, 0, rep.EnrichMismatch, "a missing database raised %d mismatches", rep.EnrichMismatch)
-}
-
-// The derived object goes through the same redaction as a raw file.
-func TestTheDerivedPayloadIsScrubbed(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-
-	// A planted secret in the tool RESULT: a store-side field that can only reach the sink through
-	// the derived object, so it is what an unredacted derived path would leak.
-	const planted = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"
-	updateBubble(t, db, "bubbleId:"+enrichConv+":b3",
-		toolResult("exported GITHUB_TOKEN="+planted))
-
-	runEnrich(t, f, enrichOpts(t, f, db, true))
-
-	for _, k := range f.port.keys() {
-		_, _, payload := f.openObject(t, k)
-		assert.NotContainsf(t, string(payload), planted, "%s: a secret in a tool result shipped unredacted", k)
-	}
 }
 
 func toolResult(result string) string {

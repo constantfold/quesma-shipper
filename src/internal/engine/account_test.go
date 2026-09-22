@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
@@ -31,16 +29,14 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	now := o.Now()
 	o.Now = func() time.Time { return now }
 	f.port.FailAll = errors.New("offline")
-	if _, err := engine.Run(context.Background(), f.store, o); err != nil {
-		t.Fatal(err)
-	}
+	f.runWith(o)
 	if _, err := os.Stat(filepath.Join(f.stateDir, "snapshots")); !os.IsNotExist(err) {
 		t.Fatal("account collection staged files")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"fresh","tokens":{"id_token":"x.eyJlbWFpbCI6ImRldkBleGFtcGxlLm9yZyJ9.x"}}`), 0600))
 	f.reopen()
 	f.port.FailAll = nil
-	rep := runEnrich(t, f, o)
+	rep := f.runWith(o)
 	require.Lenf(t, rep.Sources, 1, "expected one account source, got %d", len(rep.Sources))
 	require.Truef(t, rep.Shipped == 1 && rep.Sources[0].Unreadable == 1 && rep.Sources[0].Reason != "", "retry current bucket must upload and report partial snapshot: %+v", rep)
 	keys := f.port.keys()
@@ -57,10 +53,10 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	}
 	f.reopen()
 	now = now.Add(time.Minute)
-	rep = runEnrich(t, f, o)
+	rep = f.runWith(o)
 	require.Truef(t, rep.Shipped == 0 && rep.Unchanged == 1 && len(f.port.keys()) == 1, "same bucket should skip uploaded object: %+v", rep)
 	now = now.Add(5 * time.Minute)
-	rep = runEnrich(t, f, o)
+	rep = f.runWith(o)
 	require.Equalf(t, 1, rep.Shipped, "new bucket %+v", rep)
 	require.Len(t, f.port.keys(), 2, "remote history overwritten")
 }
@@ -76,10 +72,10 @@ func TestAccountDisabledAndPreviewDoNotCapture(t *testing.T) {
 	require.NoError(t, os.MkdirAll(home, 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey"}`), 0600))
 	o.Plan.Sources = []sources.Resolved{{Source: spec, Root: home, Enabled: false}}
-	runEnrich(t, f, o)
+	f.runWith(o)
 	o.Plan.Sources[0].Enabled = true
 	o.DryRun = true
-	runEnrich(t, f, o)
+	f.runWith(o)
 	if _, err := os.Stat(filepath.Join(f.stateDir, "snapshots")); !os.IsNotExist(err) {
 		t.Fatal("disabled/preview collection wrote snapshots")
 	}
@@ -98,7 +94,7 @@ func TestSourceScrubSetting(t *testing.T) {
 			f.writeTranscript("projects/demo/session.jsonl", raw)
 			o := f.opts()
 			o.Plan.Sources[0].Scrub = tc.setting
-			rep := runEnrich(t, f, o)
+			rep := f.runWith(o)
 			require.Equalf(t, 1, rep.Shipped, "shipped: %+v", rep)
 			for _, key := range f.port.keys() {
 				_, m, payload := f.openObject(t, key)

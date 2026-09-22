@@ -136,6 +136,11 @@ func (f *fixture) run(adjust ...func(*engine.Options)) engine.Report {
 	for _, fn := range adjust {
 		fn(&o)
 	}
+	return f.runWith(o)
+}
+
+func (f *fixture) runWith(o engine.Options) engine.Report {
+	f.t.Helper()
 	rep, err := engine.Run(context.Background(), f.store, o)
 	require.NoErrorf(f.t, err, "run: %v", err)
 	return rep

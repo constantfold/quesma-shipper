@@ -200,26 +200,6 @@ func TestPreviewAuthorizesNothing(t *testing.T) {
 	assert.Equalf(t, 0, f.store.Len(), "preview committed %d fingerprints", f.store.Len())
 }
 
-// Derived objects take the upload path too, after every raw unit of the source has shipped.
-func TestDerivedObjectsShipThroughTheUploadPath(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-	port := newPort()
-
-	o := enrichOpts(t, f, db, true)
-	o.Upload = port
-	rep, err := engine.Run(context.Background(), f.store, o)
-	require.NoErrorf(t, err, "run: %v", err)
-
-	require.Equalf(t, 2, rep.Shipped, "expected a raw + derived pair, shipped %d: %+v", rep.Shipped, rep.Sources)
-	port.storedOnce(t)
-
-	port.mu.Lock()
-	defer port.mu.Unlock()
-	assert.Lenf(t, port.objects, 2, "%d distinct keys authorized for a raw + derived pair", len(port.objects))
-	assert.Lenf(t, port.groups, 2, "groups %v; the raw pass and the enricher each authorize their own", port.groups)
-}
-
 // An unauthorized enricher group reports once and commits nothing, while raw objects keep their
 // commits. The halt must come back out of engine.Run, or the run would exit zero and look healthy.
 func TestAnUnavailableControlPlaneStopsTheDerivedGroup(t *testing.T) {
