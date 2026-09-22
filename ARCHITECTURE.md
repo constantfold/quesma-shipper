@@ -72,6 +72,7 @@ The main files name the decisions they own:
 | State ownership and disk representation | `internal/engine/{state,state_wire}.go` |
 | Scrub orchestration and replacement plans | `internal/transforms/{scrub,redaction}.go` |
 | Cursor alignment, evidence ranking, argument comparison | `internal/transforms/cursorjoin/{align,match,args}.go` |
+| Tick judgement and failure persistence | `app/{judge,failure_record}.go` |
 | Diagnostic agent summaries, source details, history | `app/diagnose_{agents,sources,history}.go` |
 
 `sources.Discover` dispatches to the compiled collectors. Enrichers retain their

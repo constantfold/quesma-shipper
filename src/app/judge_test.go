@@ -18,8 +18,7 @@ import (
 )
 
 func TestJudgeTick(t *testing.T) {
-	// With a run id, as the run loop always has one: a panicked tick counts only because it carries
-	// one, and a fixture without it would assert the one-shot verb's rule against the tick's path.
+	// Only panics attributed to a collection run count toward its failure streak.
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}, runID: "0123456789abcdef"}
 
 	r.JudgeTick(errors.New("flush failed"), formats.Report{}, false, platform.Delta{})
@@ -32,16 +31,14 @@ func TestJudgeTick(t *testing.T) {
 	rec = readFailureRecord(r.eff.StateDir)
 	require.Truef(t, rec.ConsecutiveFailures == 2 && rec.Latest().Message == "still failing" && rec.Latest().Kind == formats.FailurePanic, "second failure did not update the record: %+v", rec)
 
-	// Recovery resets the count and keeps the failure: "when did this install last fail" outlives
-	// the fix.
+	// Recovery clears the streak but preserves failure history.
 	r.JudgeTick(nil, formats.Report{}, false, platform.Delta{})
 	rec = readFailureRecord(r.eff.StateDir)
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "success left consecutive_failures at %d", rec.ConsecutiveFailures)
 	assert.Truef(t, rec.Latest() != nil && rec.Latest().Message == "still failing", "recovery erased the last failure: %+v", rec)
 }
 
-// The two classification corrections: lock contention is neither a success nor a failure, and a nil
-// error that shipped nothing while everything attempted failed is a failure.
+// Lock contention is neutral; failing every attempted upload is a failure.
 func TestJudgeTickClassifies(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
@@ -58,15 +55,13 @@ func TestJudgeTickClassifies(t *testing.T) {
 		}}},
 	}, false, platform.Delta{})
 	require.Error(t, tickErr, "an all-uploads-failed run did not classify as a failure")
-	// The count alone cannot tell a refused PUT from an unreachable control plane, so the reason
-	// has to travel: without it every such event reads identically and the log is unactionable.
+	// Preserve the cause so an operator can distinguish different upload failures.
 	assert.Containsf(t, tickErr.Error(), "authorized nothing", "the verdict does not say why nothing shipped: %v", tickErr)
 	if rec := readFailureRecord(r.eff.StateDir); rec.ConsecutiveFailures != 1 || rec.Latest() == nil {
 		t.Errorf("an all-uploads-failed run did not record: %+v", rec)
 	}
 }
 
-// A run that shipped something is not a failure, however much also failed beside it.
 func TestJudgeTickAcceptsAPartialRun(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
@@ -86,9 +81,7 @@ func TestJudgeTickPlaceholdersTheUsername(t *testing.T) {
 	assert.NotContainsf(t, rec.Latest().Message, "/"+name+"/", "the persisted message still carries the username: %q", rec.Latest().Message)
 }
 
-// The bound is the whole design: this rides a document that already ships every run, so it must
-// not grow. Newest kept, oldest dropped, and consecutive heartbeats overlap so a version nobody
-// read loses nothing.
+// Keep the newest events within the heartbeat's fixed history limit.
 func TestTheFailureLogIsBoundedAndKeepsTheNewest(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
@@ -105,7 +98,6 @@ func TestTheFailureLogIsBoundedAndKeepsTheNewest(t *testing.T) {
 	assert.Equalf(t, formats.MaxRecentFailures+15, rec.ConsecutiveFailures, "consecutive_failures = %d, want every failed run counted", rec.ConsecutiveFailures)
 }
 
-// Recovery clears the count but keeps the log: what happened is still worth reading after the fix.
 func TestRecoveryKeepsTheLog(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 	r.JudgeTick(errors.New("the sink refused"), formats.Report{}, false, platform.Delta{})
@@ -116,30 +108,43 @@ func TestRecoveryKeepsTheLog(t *testing.T) {
 	assert.Truef(t, len(rec.Recent) == 1 && rec.Latest().Message == "the sink refused", "recovery erased the log: %+v", rec.Recent)
 }
 
-// A panic in any verb has to outlive the terminal it printed to. The state dir is resolved without
-// the configuration on purpose, so this works on an install whose config is what broke.
-func TestRecordPanicPersistsWithoutAResolvedConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
-	stateDir, err := StateDirWithoutConfig()
-	if err != nil {
-		t.Skipf("no resolvable state directory here: %v", err)
+// These failures must persist even when configuration cannot produce a Runtime.
+func TestFailuresWithoutResolvedConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record func()
+		want   formats.FailureEvent
+		count  int
+	}{
+		{"panic", func() { RecordPanic("enroll", "runtime error: index out of range [3] with length 0") },
+			formats.FailureEvent{Kind: formats.FailurePanic,
+				Message: "panic in enroll: runtime error: index out of range [3] with length 0"}, 0},
+		{"startup", func() { RecordStartupFailure("sync", "cccccccccccccccc", errors.New("unparseable")) },
+			formats.FailureEvent{Kind: formats.FailureInit, RunID: "cccccccccccccccc",
+				Message: "sync could not start: unparseable"}, 1},
+		{"update", func() { RecordUpdateFailure("self-update from 1.2.3 did not happen: tuf: no such target") },
+			formats.FailureEvent{Kind: formats.FailureUpdate,
+				Message: "self-update from 1.2.3 did not happen: tuf: no such target"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			stateDir, err := StateDirWithoutConfig()
+			if err != nil {
+				t.Skipf("no resolvable state directory here: %v", err)
+			}
+			tc.record()
+			rec := readFailureRecord(stateDir)
+			require.NotNil(t, rec.Latest(), "the failure was not persisted under %s", stateDir)
+			got := *rec.Latest()
+			assert.NotEmpty(t, got.At)
+			got.At = ""
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.count, rec.ConsecutiveFailures)
+		})
 	}
-
-	RecordPanic("enroll", "runtime error: index out of range [3] with length 0")
-
-	rec := readFailureRecord(stateDir)
-	require.Truef(t, rec.Latest() != nil, "the panic was not persisted under %s", stateDir)
-	assert.Equalf(t, formats.FailurePanic, rec.Latest().Kind, "a panic was recorded as %q", rec.Latest().Kind)
-	assert.Containsf(t, rec.Latest().Message, "enroll", "the record does not name the verb that crashed: %q", rec.Latest().Message)
-	assert.Containsf(t, rec.Latest().Message, "index out of range", "the record does not say what happened: %q", rec.Latest().Message)
-	// The count answers "how many COLLECTION runs failed in a row". A one-shot verb crashing is
-	// not one of those, and moving the count would report a broken daemon on a healthy install.
-	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a verb panic moved the collection failure count to %d", rec.ConsecutiveFailures)
 }
 
-// The heartbeat's failure half is read off disk, not built from the run assembling it: a run that
-// got far enough to upload is by definition not the one that failed.
+// A later Runtime must pick up failures persisted by an earlier one.
 func TestFailureRecordSurvivesIntoTheHeartbeat(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir}}
@@ -151,8 +156,7 @@ func TestFailureRecordSurvivesIntoTheHeartbeat(t *testing.T) {
 	assert.Equalf(t, 1, rec.ConsecutiveFailures, "consecutive_failures = %d, want 1", rec.ConsecutiveFailures)
 }
 
-// Store corruption is the one condition that can lose a file permanently, and it does not fail the
-// run that finds it. Recorded so it is visible, not counted so it does not read as a broken daemon.
+// Discarding corrupt state records a warning without counting a failed collection.
 func TestStoreCorruptionIsRecordedButNotCounted(t *testing.T) {
 	r := &Runtime{eff: &config.Effective{StateDir: t.TempDir()}}
 
@@ -164,8 +168,7 @@ func TestStoreCorruptionIsRecordedButNotCounted(t *testing.T) {
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a discarded store moved the failed-run count to %d", rec.ConsecutiveFailures)
 }
 
-// The re-enrollment case end to end: the discard that recovers the install must clear the streak
-// those refusals built up, without the discard itself becoming the streak's newest reason.
+// Re-enrollment clears the prior failure streak while retaining the discard warning.
 func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {
@@ -190,8 +193,7 @@ func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 	}
 }
 
-// The point of the field: a reader has to be able to tell twenty runs that each failed once from
-// one run that failed twenty times, which a flat list of messages cannot express.
+// Run IDs distinguish repeated failures from separate runs.
 func TestEventsAreAttributedToTheRunThatRecordedThem(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"} {
@@ -207,44 +209,6 @@ func TestEventsAreAttributedToTheRunThatRecordedThem(t *testing.T) {
 	assert.Truef(t, len(got) == 2 && got[0] == want[0] && got[1] == want[1], "tick events not attributed:\n got %v\nwant %v", got, want)
 }
 
-// The startup path has no Runtime to carry the id -- that is the failure it reports -- so the
-// caller hands it over instead, and this is the only thing proving it does.
-func TestAStartupFailureIsAttributedToItsRun(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	stateDir, err := StateDirWithoutConfig()
-	if err != nil {
-		t.Skipf("no resolvable state directory here: %v", err)
-	}
-
-	RecordStartupFailure("sync", "cccccccccccccccc", errors.New("unparseable"))
-
-	rec := readFailureRecord(stateDir)
-	latest := rec.Latest()
-	require.Truef(t, latest != nil, "the startup failure was not persisted under %s", stateDir)
-	assert.Equalf(t, "cccccccccccccccc", latest.RunID, "startup failure carries run id %q, want the one the caller passed", latest.RunID)
-}
-
-// Self-update is the remediation channel: an install that cannot replace itself cannot be fixed
-// remotely, so the one failure that must never be stderr-only is this one. Uncounted, because
-// collection around it succeeded.
-func TestAnUpdateFailureIsRecordedButNotCounted(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	stateDir, err := StateDirWithoutConfig()
-	if err != nil {
-		t.Skipf("no resolvable state directory here: %v", err)
-	}
-
-	RecordUpdateFailure("self-update from 1.2.3 did not happen: tuf: no such target")
-
-	rec := readFailureRecord(stateDir)
-	latest := rec.Latest()
-	require.Truef(t, latest != nil, "the update failure was not persisted under %s", stateDir)
-	assert.Equalf(t, formats.FailureUpdate, latest.Kind, "recorded as %q, want %q", latest.Kind, formats.FailureUpdate)
-	assert.Containsf(t, latest.Message, "tuf: no such target", "the record does not say why the update failed: %q", latest.Message)
-	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a failed self-update moved the collection failure count to %d", rec.ConsecutiveFailures)
-}
-
-// The crash used to reach only the heartbeat; the persisted event is what survives the process.
 func TestACrashIsPersistedLocally(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	stateDir, err := StateDirWithoutConfig()
@@ -268,8 +232,7 @@ func TestACrashIsPersistedLocally(t *testing.T) {
 	require.Len(t, readFailureRecord(stateDir).Recent, 2)
 }
 
-// One standing event however long the stall lasts: a stuck tick re-reported twenty times would
-// evict the rest of the log.
+// Repeated stall warnings must not evict other failures from the bounded log.
 func TestAStalledTickIsRecordedOnce(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "eeeeeeeeeeeeeeee"}
@@ -283,8 +246,7 @@ func TestAStalledTickIsRecordedOnce(t *testing.T) {
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a stall moved consecutive_failures to %d; the tick may yet complete", rec.ConsecutiveFailures)
 }
 
-// A stall that recovered leaves its event as the newest one through every clean tick after it; a
-// later stall must replace it, not be deduplicated away behind a stale timestamp.
+// A new stall replaces the old event even when intervening clean ticks appended nothing.
 func TestALaterStallReplacesTheStandingEvent(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "ffffffffffffffff"}
@@ -299,8 +261,7 @@ func TestALaterStallReplacesTheStandingEvent(t *testing.T) {
 	require.Truef(t, len(rec.Recent) == 1 && strings.Contains(rec.Latest().Message, "tick 900"), "want one stalled event naming tick 900, got %+v", rec.Recent)
 }
 
-// fires counts watchdog fires: without an upload port the warning line is the only thing a fire
-// writes, so waiting for a count replaces a wall-clock guess.
+// Wait for actual watchdog warnings rather than guessing how long the goroutine needs.
 type fires chan struct{}
 
 func (c fires) Write(p []byte) (int, error) { c <- struct{}{}; return len(p), nil }
@@ -320,8 +281,7 @@ func watchFires(r *Runtime, n, want int) {
 	<-done
 }
 
-// The in-memory copy exists for the disk that cannot be written; once a write succeeds it must be
-// dropped, or the daemon would clobber events other processes append between its ticks.
+// Successful writes must release the fallback record so other processes' events remain visible.
 func TestJudgeMergesEventsFromOtherWriters(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir}}
@@ -336,10 +296,7 @@ func TestJudgeMergesEventsFromOtherWriters(t *testing.T) {
 	require.Lenf(t, rec.Recent, 2, "the other writer's event was clobbered: %+v", rec.Recent)
 }
 
-// The facts ride every outcome, a clean one included: memory pressure and a pathological redaction
-// degrade an install without any step erroring, so the healthy run's cost is the baseline that makes
-// the next one readable. Figures rather than events, because they would recur every tick and evict
-// the log.
+// Clean runs also persist resource costs, providing a baseline without adding failure events.
 func TestTheFactsRideACleanRunToo(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runtime{eff: &config.Effective{StateDir: dir, MaxFilesPerRun: 512}}
