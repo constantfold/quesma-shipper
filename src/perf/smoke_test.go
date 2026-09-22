@@ -100,8 +100,7 @@ func smokeBaseline(t *testing.T, m *smokeMachine) time.Duration {
 		reps = append(reps, obs.Elapsed)
 	}
 	best := slices.Min(reps)
-	t.Logf("unshaped baseline on %d files: reps %s, best %v",
-		m.files, durationList(reps), best.Round(time.Millisecond))
+	t.Logf("unshaped baseline on %d files: reps %s, best %v", m.files, durationList(reps), best.Round(time.Millisecond))
 	return best
 }
 
@@ -258,8 +257,7 @@ func stageSmokeMachine(t *testing.T) *smokeMachine {
 	t.Helper()
 	w := stageSmokeWorld(t)
 	bytes := stageCorpusFiles(t, w, smokeCorpusFiles)
-	t.Logf("smoke corpus: %d files, %d bytes staged, child at GOMAXPROCS=%d",
-		smokeCorpusFiles, bytes, w.gomaxprocs)
+	t.Logf("smoke corpus: %d files, %d bytes staged, child at GOMAXPROCS=%d", smokeCorpusFiles, bytes, w.gomaxprocs)
 	return &smokeMachine{w: w, files: smokeCorpusFiles, bytes: bytes}
 }
 

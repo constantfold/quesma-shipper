@@ -58,6 +58,16 @@ func mintIngestUser(ctx context.Context, container *tcminio.MinioContainer) erro
 	return nil
 }
 
+func pathStyleS3(endpoint, key, secret string) *awss3.Client {
+	return awss3.NewFromConfig(aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider(key, secret, ""),
+	}, func(o *awss3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
+}
+
 type perfInstall struct {
 	id, org, origin, bucket string
 	key                     ed25519.PublicKey
@@ -155,14 +165,7 @@ func parseDeviceAuthorization(header string) (org, install string, sig []byte, o
 }
 
 func issueTickets(ctx context.Context, install perfInstall, req perfAuthorizeRequest) ([]map[string]any, error) {
-	client := awss3.NewFromConfig(aws.Config{
-		Region:      "us-east-1",
-		Credentials: credentials.NewStaticCredentialsProvider(ingestUserKey, ingestUserSecret, ""),
-	}, func(o *awss3.Options) {
-		o.BaseEndpoint = aws.String(install.origin)
-		o.UsePathStyle = true
-	})
-	presigner := awss3.NewPresignClient(client)
+	presigner := awss3.NewPresignClient(pathStyleS3(install.origin, ingestUserKey, ingestUserSecret))
 	expires := time.Now().Add(5 * time.Minute).UTC()
 	root := "v1/organization=" + install.org + "/install=" + install.id + "/"
 	tickets := make([]map[string]any, 0, len(req.Objects))

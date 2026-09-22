@@ -191,10 +191,8 @@ func compareGolden(t *testing.T, name string, got []goldenObject, payloads map[s
 	assert.Equal(t, string(want), string(encoded), "golden index %s", indexPath)
 	for file, body := range payloads {
 		wantBody, err := os.ReadFile(filepath.Join(dir, "payloads", file))
-		if err != nil {
-			t.Errorf("no golden payload %s: %v", file, err)
-			continue
+		if assert.NoErrorf(t, err, "no golden payload %s", file) {
+			assert.Equal(t, string(wantBody), string(body), "golden payload %s", file)
 		}
-		assert.Equal(t, string(wantBody), string(body), "golden payload %s", file)
 	}
 }

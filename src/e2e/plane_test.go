@@ -21,8 +21,7 @@ import (
 const vendPreamble = "trajectory-shipper-upload-authorize-v2\nPOST\n/v2/uploads/authorize\n"
 
 type authorizeRequest struct {
-	WriterID string    `json:"writer_id"`
-	IssuedAt time.Time `json:"issued_at"`
+	WriterID string `json:"writer_id"`
 	Objects  []struct {
 		ObjectID   string            `json:"object_id"`
 		Key        string            `json:"key"`

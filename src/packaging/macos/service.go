@@ -23,11 +23,9 @@ func launchdPath(home string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", bundleIdentifier+".plist")
 }
 
-// installedApp is where the package puts the bundle.
-func installedApp(home string) string { return filepath.Join(home, "Applications", appName) }
-
+// installedExecutable is inside the bundle where the package puts it.
 func installedExecutable(home string) string {
-	return filepath.Join(installedApp(home), "Contents", "MacOS", executableName)
+	return filepath.Join(home, "Applications", appName, "Contents", "MacOS", executableName)
 }
 
 // renderPlist: KeepAlive and RunAtLoad survive a dying process and a reboot; Background keeps off the interactive share.
@@ -139,7 +137,15 @@ func PostInstall() error {
 	if err := checkInstallOwner(exe, launchdPath(home)); err != nil {
 		return err
 	}
-	return supervise(exe, home)
+	// The default state directory: packaging cannot import config, and Installer carries no override.
+	spec, err := common.ServiceSpecFor(exe, filepath.Join(home, ".local", "state", "trajectory-shipper"), 0, 0)
+	if err != nil {
+		return err
+	}
+	if err := common.ValidateInstall(spec); err != nil {
+		return err
+	}
+	return installService(spec)
 }
 
 func checkInstallOwner(exe, plist string) error {
@@ -154,19 +160,6 @@ func checkInstallOwner(exe, plist string) error {
 		return fmt.Errorf("another installation owns the background service (%s); uninstall it without purging local state before changing installation methods", previous)
 	}
 	return nil
-}
-
-// supervise uses the default state directory: packaging cannot import config, and Installer carries no override.
-func supervise(exe, home string) error {
-	stateDir := filepath.Join(home, ".local", "state", "trajectory-shipper")
-	spec, err := common.ServiceSpecFor(exe, stateDir, 0, 0)
-	if err != nil {
-		return err
-	}
-	if err := common.ValidateInstall(spec); err != nil {
-		return err
-	}
-	return installService(spec)
 }
 
 func waitForLabelGone(within time.Duration) error {
@@ -240,12 +233,10 @@ func ServiceState(ctx context.Context) Status {
 
 	out, err := exec.CommandContext(ctx, launchctl, "print", guiService()).CombinedOutput()
 	if err != nil {
-		switch {
-		case st.Installed:
+		st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
+		if st.Installed {
 			// Written but not loaded is the state that collects nothing while looking installed.
 			st.Detail = "plist present but NOT loaded: re-run the Quesma Shipper installer"
-		default:
-			st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
 		}
 		return st
 	}

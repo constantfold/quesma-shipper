@@ -52,8 +52,7 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 
 // A sync whose tickets name a dead second-org endpoint must neither fall back elsewhere nor report success.
 func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
-	bucket, err := createVersionedBucket(context.Background(),
-		fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
+	bucket, err := createVersionedBucket(context.Background(), fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
 	// Real, so the emptiness assertion below is an answer rather than a NoSuchBucket.
 	require.NoError(t, err, "create the second org's bucket")
 	w := stageWorldIn(t, "nowhere", deadEndpoint, bucket)

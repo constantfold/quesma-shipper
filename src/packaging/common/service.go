@@ -105,8 +105,7 @@ func ValidateInstall(spec Spec) error {
 }
 
 // ErrCronManual signals that the caller must print the hint rather than claim an install.
-var ErrCronManual = errors.New("supervise: this host has no systemd --user; " +
-	"add the printed crontab line yourself")
+var ErrCronManual = errors.New("supervise: this host has no systemd --user; add the printed crontab line yourself")
 
 // ErrTaskDeleteUnverified marks an unconfirmed Windows task delete; it must not block removal.
 var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")

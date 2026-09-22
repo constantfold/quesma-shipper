@@ -61,8 +61,7 @@ func ReadWhole(path string, maxBytes int64) ([]byte, os.FileInfo, error) {
 	var r io.Reader = f
 	if maxBytes > 0 {
 		if info.Size() > maxBytes {
-			return nil, info, fmt.Errorf("%w: %s is %d bytes, limit %d",
-				ErrTooLarge, path, info.Size(), maxBytes)
+			return nil, info, fmt.Errorf("%w: %s is %d bytes, limit %d", ErrTooLarge, path, info.Size(), maxBytes)
 		}
 		r = io.LimitReader(f, maxBytes+1)
 	}
@@ -77,8 +76,7 @@ func ReadWhole(path string, maxBytes int64) ([]byte, os.FileInfo, error) {
 	}
 	body := buf.Bytes()
 	if maxBytes > 0 && int64(len(body)) > maxBytes {
-		return nil, info, fmt.Errorf("%w: %s grew past the limit %d during the read",
-			ErrTooLarge, path, maxBytes)
+		return nil, info, fmt.Errorf("%w: %s grew past the limit %d during the read", ErrTooLarge, path, maxBytes)
 	}
 	return body, info, nil
 }

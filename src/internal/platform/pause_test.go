@@ -66,8 +66,7 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 
 // The structural form of "no config can undo it": the guarantee is in what this package cannot see.
 func TestPauseCannotSeeConfigOrBackend(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps",
-		"github.com/QuesmaOrg/quesma-shipper/internal/platform").Output()
+	out, err := exec.Command("go", "list", "-deps", "github.com/QuesmaOrg/quesma-shipper/internal/platform").Output()
 	if err != nil {
 		t.Skipf("go list unavailable: %v", err)
 	}

@@ -46,10 +46,6 @@ func renderUnit(spec Spec) string {
 	for _, a := range append([]string{spec.Executable}, spec.Args...) {
 		parts = append(parts, systemdQuote(a))
 	}
-	cmd := strings.Join(parts, " ")
-
-	stop := common.ExitTimeout(spec)
-
 	var env strings.Builder
 	if spec.Home != "" {
 		fmt.Fprintf(&env, "Environment=HOME=%s\n", spec.Home)
@@ -82,7 +78,7 @@ StandardError=journal
 
 [Install]
 WantedBy=default.target
-`, cmd, env.String(), int(stop.Seconds()))
+`, strings.Join(parts, " "), env.String(), int(common.ExitTimeout(spec).Seconds()))
 }
 
 func InstallService(spec Spec) error {

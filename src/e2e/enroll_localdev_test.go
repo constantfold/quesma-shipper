@@ -41,7 +41,7 @@ func TestLocalDevMintsIdentityAndKeepsItOnRerun(t *testing.T) {
 
 	second, err := identity.Load(statePath(w))
 	require.NoError(t, err)
-	assert.Truef(t, first.InstallID == second.InstallID, "re-run changed install_id: %s -> %s", first.InstallID, second.InstallID)
+	assert.Equal(t, first.InstallID, second.InstallID, "re-run changed install_id")
 	cfgAfter, err := os.ReadFile(userConfigPath(w))
 	require.NoError(t, err)
 	assert.Equalf(t, string(own), string(cfgAfter), "re-run rewrote the user's own config file")
