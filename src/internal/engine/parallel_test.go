@@ -63,7 +63,7 @@ type slowPort struct {
 	*fakePort
 	peak
 	barrier chan struct{}
-	once sync.Once
+	once    sync.Once
 }
 
 func (p *slowPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
