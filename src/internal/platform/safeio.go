@@ -154,7 +154,7 @@ func OpenTruncating(path string, perm os.FileMode) (*os.File, error) {
 // point. The temp name is random, never derived from the pid: a temp stranded by a crash is inert
 // garbage next to its document and can never collide with a later write. CreateTemp's O_EXCL
 // refuses to create through a planted name, symlink included.
-func WriteAtomic(path string, data []byte, perm os.FileMode) error {
+func WriteAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	dir := filepath.Dir(path)
 
 	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
@@ -162,26 +162,24 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("safeio: create temp for %s: %w", path, err)
 	}
 	tmp := f.Name()
-	cleanup := func() {
-		f.Close()
-		os.Remove(tmp)
-	}
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
-		cleanup()
 		return fmt.Errorf("safeio: write temp for %s: %w", path, err)
 	}
 	// fsync before rename: a rename that lands before the data is durable can leave an empty file after a crash.
 	if err := f.Sync(); err != nil {
-		cleanup()
 		return fmt.Errorf("safeio: fsync temp for %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("safeio: close temp for %s: %w", path, err)
 	}
 	// Chmod explicitly: CreateTemp always creates 0600, and the caller's perm must hold past the umask.
 	if err := os.Chmod(tmp, perm); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("safeio: chmod temp for %s: %w", path, err)
 	}
 	// Windows refuses to replace a file another handle has open; readers are brief, so retry.
@@ -193,7 +191,6 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if renameErr != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("safeio: rename temp for %s: %w", path, renameErr)
 	}
 	syncDir(dir)
