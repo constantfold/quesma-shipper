@@ -72,9 +72,7 @@ func (t *thinkingData) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	// A named type, so decoding the object form does not re-enter this method.
-	type plain struct {
-		Text string `json:"text"`
-	}
+	type plain thinkingData
 	if b[0] == '"' {
 		var inner string
 		if err := json.Unmarshal(b, &inner); err != nil {
@@ -119,12 +117,7 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		*f = flexString(s)
-		return nil
+		return json.Unmarshal(b, (*string)(f))
 	}
 	// Any other shape keeps its raw JSON text rather than costing the record it sits in.
 	*f = flexString(b)
@@ -239,15 +232,8 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string
 func isScaffolding(b *bubble) bool {
 	// A tool call or a reasoning bubble is an event whatever else it is flagged with; one the
 	// transcript does not mention simply goes unconsumed, which alignment tolerates.
-	if b.ToolFormerData != nil {
+	if b.ToolFormerData != nil || b.reasoningText() != "" {
 		return false
 	}
-	if b.reasoningText() != "" {
-		return false
-	}
-	if b.IsCapabilityIteration || b.CapabilityType != "" {
-		return true
-	}
-	// Neither text nor a tool call: an artefact of how the store records turn boundaries.
-	return b.Text == ""
+	return b.IsCapabilityIteration || b.CapabilityType != "" || b.Text == ""
 }

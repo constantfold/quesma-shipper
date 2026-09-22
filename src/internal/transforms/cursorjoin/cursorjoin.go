@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
@@ -167,36 +168,14 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 		DBRowsRead:   len(read.Rows),
 	}
 
-	c := ix.composers[conv]
-	bubbles := ix.bubbles[conv]
-
-	// A conversation with no headers, no inline array and no bubble rows is a draft, not a
-	// mismatch. Most composerData rows on a real machine are drafts.
-	inline := 0
-	headers := 0
-	if c != nil {
-		inline = len(c.Conversation)
-		headers = len(c.FullConversationHeadersOnly)
-	}
-	if max(headers, inline, len(bubbles)) == 0 {
-		d.Status = transforms.StatusSkipped
-		return d, ""
-	}
-
-	ordered := orderBubbles(c, bubbles, ix.order[conv])
+	ordered := orderBubbles(ix.composers[conv], ix.bubbles[conv], ix.order[conv])
 	if len(ordered) == 0 {
 		d.Status = transforms.StatusSkipped
 		return d, ""
 	}
 
 	// Dropped before alignment: left in, they would mismatch rows that never had a counterpart.
-	events := make([]*bubble, 0, len(ordered))
-	for _, b := range ordered {
-		if isScaffolding(b) {
-			continue
-		}
-		events = append(events, b)
-	}
+	events := slices.DeleteFunc(ordered, isScaffolding)
 
 	a, err := alignAndRender(u.Content, events)
 	if err == nil {
