@@ -2,6 +2,7 @@ package packs
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -22,16 +23,12 @@ type Gate int32
 // AlwaysGate belongs to a matcher with nothing to prefilter on: it runs on every value.
 const AlwaysGate Gate = -1
 
-const (
-	// maxGates bounds Seen to a fixed-size value type, which is what makes a scan
-	// allocation-free. Exceeding it is a loud build error, never a wider bitset.
-	maxGates  = 256
-	seenWords = maxGates / 64
-)
+// maxGates bounds Seen to a fixed-size value type, which keeps a scan allocation-free.
+const maxGates = 256
 
 // Seen is one scan's answer: the gates whose keywords occur in the scanned value.
 type Seen struct {
-	bits [seenWords]uint64
+	bits [maxGates / 64]uint64
 }
 
 // Has reports whether the gate's keyword set was present.
@@ -81,28 +78,23 @@ func (b *PrefilterBuilder) AddKeywords(keywords []string) (Gate, error) {
 		if k == "" {
 			return 0, fmt.Errorf("packs: prefilter: empty keyword: a marker present in every value is not a prefilter")
 		}
-		folded, err := foldKeyword(k)
-		if err != nil {
-			return 0, err
+		// The automaton scans bytes, so a multi-byte rune would leave its rule quietly unprefiltered.
+		if !isASCII(k) {
+			return 0, fmt.Errorf("packs: prefilter: keyword %q is not ASCII: keyword matching folds bytes, not runes", k)
 		}
-		b.keywords = append(b.keywords, gatedKeyword{folded: folded, gate: g})
+		b.keywords = append(b.keywords, gatedKeyword{folded: strings.ToLower(k), gate: g})
 	}
 	b.gates++
 	return g, nil
 }
 
-// foldKeyword lower-cases an ASCII keyword and rejects anything else loudly: the automaton
-// scans bytes, so a multi-byte rune would leave its rule quietly unprefiltered.
-func foldKeyword(k string) (string, error) {
-	out := make([]byte, len(k))
-	for i := 0; i < len(k); i++ {
-		c := k[i]
-		if c >= utf8.RuneSelf {
-			return "", fmt.Errorf("packs: prefilter: keyword %q is not ASCII: keyword matching folds bytes, not runes", k)
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
 		}
-		out[i] = asciiLower(c)
 	}
-	return string(out), nil
+	return true
 }
 
 func asciiLower(c byte) byte {

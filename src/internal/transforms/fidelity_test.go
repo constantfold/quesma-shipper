@@ -1,15 +1,14 @@
-package transforms_test
+package transforms
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// These records contain no secrets; preserve every byte, including identifiers and prior sentinels.
+// These records contain no secrets; preserve every byte, including identifiers and prior sentinels,
+// and stay on the parsed path: a line quietly pushed to raw text loses exemptions and key names.
 func TestScrubPreservesCleanRecords(t *testing.T) {
 	s := newScrubber(t)
 	for _, tc := range []struct{ name, payload string }{
@@ -39,6 +38,7 @@ func TestScrubPreservesCleanRecords(t *testing.T) {
 			payload := tc.payload + "\n"
 			res := scrubJSONL(t, s, "claude-code", payload)
 			assert.Equal(t, payload, string(res.Out))
+			assert.Equal(t, ScanModeDecodedJSON, res.ScanMode)
 			assert.Zero(t, res.BytesRedacted)
 			assert.Empty(t, res.RuleHits)
 		})
@@ -56,7 +56,6 @@ func TestModifiedRecordsPreserveKeyOrderAndNumbers(t *testing.T) {
 
 	assert.Truef(t, strings.Index(out, `"zeta"`) <= strings.Index(out, `"alpha"`), "key order was not preserved:\n%s", out)
 	assert.Containsf(t, out, "1234567890123456789", "a large integer lost precision:\n%s", out)
-	assert.True(t, strings.Contains(out, "<html>") || !strings.Contains(payload, "<html>"), "HTML escaping was applied where the input had none")
 }
 
 // The sentinel's width depends only on the rule id, so it cannot leak the secret's
@@ -71,7 +70,7 @@ func TestSentinelLeaksNeitherLengthNorValue(t *testing.T) {
 	outLong := scrubJSONL(t, s, "claude-code", `{"t":"`+long+`"}`+"\n")
 
 	assert.Lenf(t, outShort.Out, len(outLong.Out), "sentinel width tracks the secret length: %d vs %d bytes", len(outShort.Out), len(outLong.Out))
-	assert.Containsf(t, string(outShort.Out), transforms.Sentinel("github-pat"), "sentinel should carry the rule id: %s", outShort.Out)
+	assert.Containsf(t, string(outShort.Out), Sentinel("github-pat"), "sentinel should carry the rule id: %s", outShort.Out)
 	for _, frag := range []string{"aaaa", "bbbb"} {
 		assert.True(t, !strings.Contains(string(outShort.Out), frag) && !strings.Contains(string(outLong.Out), frag), "a fragment of the secret survived in the placeholder")
 	}

@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"encoding/json"
@@ -10,8 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 var update = flag.Bool("update", false, "regenerate the conformance vectors (scrub and container)")
@@ -52,17 +50,17 @@ func TestConformanceRedaction(t *testing.T) {
 
 	var v scrubVectors
 	readVectors(t, scrubVectorPath, &v)
-	assert.Equalf(t, transforms.Sentinel("{rule_id}"), v.Sentinel, "sentinel form drifted: vector %q, code %q", v.Sentinel, transforms.Sentinel("{rule_id}"))
+	assert.Equalf(t, Sentinel("{rule_id}"), v.Sentinel, "sentinel form drifted: vector %q, code %q", v.Sentinel, Sentinel("{rule_id}"))
 
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.Exemptions = v.Exemptions
 	cfg.Username = v.Username
-	s, err := transforms.New(cfg)
+	s, err := New(cfg)
 	require.NoError(t, err)
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
-			res, err := s.Scrub([]byte(c.Before), transforms.Hint{Family: c.Family, JSONL: c.JSONL})
+			res, err := s.Scrub([]byte(c.Before), Hint{Family: c.Family, JSONL: c.JSONL})
 			require.NoErrorf(t, err, "engine error: %v", err)
 			assert.Equalf(t, c.After, string(res.Out), "output drifted:\n got %q\nwant %q", res.Out, c.After)
 			if c.ScanMode != "" && res.ScanMode != c.ScanMode {
@@ -105,14 +103,14 @@ func generateScrubVectors(t *testing.T) []byte {
 	t.Helper()
 	var out scrubVectors
 	readVectors(t, scrubVectorPath, &out)
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.Exemptions, cfg.Username = out.Exemptions, out.Username
-	s, err := transforms.New(cfg)
+	s, err := New(cfg)
 	require.NoError(t, err)
-	out.Sentinel = transforms.Sentinel("{rule_id}")
+	out.Sentinel = Sentinel("{rule_id}")
 	for i := range out.Vectors {
 		c := &out.Vectors[i]
-		res, err := s.Scrub([]byte(c.Before), transforms.Hint{Family: c.Family, JSONL: c.JSONL})
+		res, err := s.Scrub([]byte(c.Before), Hint{Family: c.Family, JSONL: c.JSONL})
 		require.NoError(t, err)
 		c.After, c.RuleHits, c.ScanMode = string(res.Out), res.RuleHits, res.ScanMode
 	}

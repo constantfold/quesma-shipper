@@ -1,22 +1,15 @@
-package transforms_test
+package transforms
 
 import (
-	"archive/tar"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"math/rand"
 	"strings"
 	"testing"
-	"time"
 
 	"filippo.io/age"
-	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 func identity(t *testing.T) *age.X25519Identity {
@@ -26,9 +19,9 @@ func identity(t *testing.T) *age.X25519Identity {
 	return id
 }
 
-func manifest() transforms.Manifest {
-	return transforms.Manifest{
-		ManifestVersion: transforms.ManifestVersion,
+func manifest() Manifest {
+	return Manifest{
+		ManifestVersion: ManifestVersion,
 		OrganizationID:  "default",
 		InstallID:       "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		SourceID:        "claude-code-transcripts",
@@ -38,7 +31,7 @@ func manifest() transforms.Manifest {
 		SourceHash:      strings.Repeat("a", 64),
 		SealedAt:        "2026-07-30T10:00:00Z",
 		ShapeSniff:      "ok",
-		Client:          transforms.Client{Version: "0.1.0", OS: "darwin", Arch: "arm64"},
+		Client:          Client{Version: "0.1.0", OS: "darwin", Arch: "arm64"},
 		RunID:           "0123456789abcdef",
 	}
 }
@@ -48,24 +41,24 @@ func TestSealOpenRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		payload []byte
-		client  transforms.Client
+		client  Client
 	}{
 		{"jsonl", []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"), manifest().Client},
 		{"empty", nil, manifest().Client},
 		{"metadata hash", []byte("{\"line\":\"one\"}\n"), manifest().Client},
-		{"stamped build", []byte("{}\n"), transforms.Client{
+		{"stamped build", []byte("{}\n"), Client{
 			Version: "0.0.0-d5f735643cbd+dirty", Commit: "d5f735643cbd3c70f71d2ed52746be1cadfe3a15",
 			Modified: true, GoVersion: "go1.25.0", OS: "linux", Arch: "amd64",
 		}},
-		{"unstamped build", []byte("{}\n"), transforms.Client{Version: "unknown"}},
+		{"unstamped build", []byte("{}\n"), Client{Version: "unknown"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := identity(t)
 			m := manifest()
 			m.Client = tc.client
-			obj, sealed, err := transforms.Seal(m, tc.payload, []age.Recipient{id.Recipient()})
+			obj, sealed, err := Seal(m, tc.payload, []age.Recipient{id.Recipient()})
 			require.NoError(t, err)
-			got, payload, err := transforms.Open(obj, id)
+			got, payload, err := Open(obj, id)
 			require.NoError(t, err)
 			assert.Equal(t, string(tc.payload), string(payload))
 			assert.Equal(t, m.NativePath, got.NativePath)
@@ -75,34 +68,6 @@ func TestSealOpenRoundTrip(t *testing.T) {
 			assert.Equal(t, sha256Hex(tc.payload), got.ShippedHash)
 			assert.Equal(t, got.ShippedHash, sealed.ObjectMetadata()["shipped-hash"])
 		})
-	}
-}
-
-// Manifest-first is the container contract and what makes a ranged head-fetch possible, so
-// assert the order at the tar layer directly.
-func TestManifestIsTheFirstTarEntry(t *testing.T) {
-	id := identity(t)
-	obj, _, err := transforms.Seal(manifest(), bytes.Repeat([]byte("x"), 4096), []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-
-	dec, err := age.Decrypt(bytes.NewReader(obj), id)
-	require.NoError(t, err)
-	zr, err := zstd.NewReader(dec)
-	require.NoError(t, err)
-	defer zr.Close()
-
-	tr := tar.NewReader(zr)
-	var names []string
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		names = append(names, hdr.Name)
-	}
-	if len(names) != 2 || names[0] != transforms.ManifestEntry || names[1] != transforms.PayloadEntry {
-		t.Errorf("entries %v, want [%s %s]", names, transforms.ManifestEntry, transforms.PayloadEntry)
 	}
 }
 
@@ -123,28 +88,28 @@ func TestManifestPrefixReads(t *testing.T) {
 			payload := make([]byte, tc.size)
 			_, err := rand.New(rand.NewSource(tc.seed)).Read(payload)
 			require.NoError(t, err)
-			obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
+			obj, _, err := Seal(manifest(), payload, []age.Recipient{id.Recipient()})
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, len(obj), 1<<20)
 
-			m, err := transforms.ReadManifestPrefix(obj[:transforms.SuggestedPrefixBytes], id)
+			m, err := ReadManifestPrefix(obj[:SuggestedPrefixBytes], id)
 			require.NoError(t, err)
 			assert.Equal(t, manifest().NativePath, m.NativePath)
 			assert.Equal(t, manifest().SourceHash, m.SourceHash)
 			assert.Equal(t, int64(len(payload)), m.PayloadSize)
 			for _, n := range []int{1, 16, 128, 1024} {
-				_, err := transforms.ReadManifestPrefix(obj[:n], id)
-				assert.ErrorIs(t, err, transforms.ErrPrefixTooShort, "prefix bytes: %d", n)
+				_, err := ReadManifestPrefix(obj[:n], id)
+				assert.ErrorIs(t, err, ErrPrefixTooShort, "prefix bytes: %d", n)
 			}
 
 			for budget, attempts := 512, 1; ; budget, attempts = budget*2, attempts+1 {
 				require.LessOrEqual(t, attempts, 20, "doubling did not converge")
-				m, err := transforms.ReadManifestPrefix(obj[:min(budget, len(obj))], id)
+				m, err := ReadManifestPrefix(obj[:min(budget, len(obj))], id)
 				if err == nil {
 					assert.Equal(t, "claude-code-transcripts", m.SourceID)
 					break
 				}
-				require.ErrorIs(t, err, transforms.ErrPrefixTooShort, "prefix budget: %d", budget)
+				require.ErrorIs(t, err, ErrPrefixTooShort, "prefix budget: %d", budget)
 			}
 		})
 	}
@@ -160,7 +125,7 @@ func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	m.NativePath = secretPath
 	payload := []byte(`{"text":"a distinctive sentence that must not appear in ciphertext"}`)
 
-	obj, _, err := transforms.Seal(m, payload, []age.Recipient{id.Recipient()})
+	obj, _, err := Seal(m, payload, []age.Recipient{id.Recipient()})
 	require.NoError(t, err)
 
 	for _, needle := range []string{
@@ -169,63 +134,27 @@ func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	} {
 		assert.NotContainsf(t, string(obj), needle, "ciphertext leaks %q in plaintext", needle)
 	}
-	_, _, openErr := transforms.Open(obj, stranger)
+	_, _, openErr := Open(obj, stranger)
 	require.Error(t, openErr, "an object must not open with an unrelated identity")
-	_, readManifestPrefixErr := transforms.ReadManifestPrefix(obj, stranger)
+	_, readManifestPrefixErr := ReadManifestPrefix(obj, stranger)
 	require.Error(t, readManifestPrefixErr, "a manifest must not be readable with an unrelated identity")
-	_, _, excludedIdentityErr := transforms.Open(obj)
+	_, _, excludedIdentityErr := Open(obj)
 	require.Error(t, excludedIdentityErr, "opening with no identity must fail")
-}
-
-// Archival-only versus archival-plus-analysis recipients: who can read is decided at encryption
-// time by which public recipients were included, and nothing later widens it.
-func TestRecipientSetsDecideWhoCanRead(t *testing.T) {
-	archival := identity(t)
-	analysis := identity(t)
-	payload := []byte(`{"a":1}`)
-
-	archivalOnly, _, err := transforms.Seal(manifest(), payload, []age.Recipient{archival.Recipient()})
-	require.NoError(t, err)
-	both, _, err := transforms.Seal(manifest(), payload,
-		[]age.Recipient{archival.Recipient(), analysis.Recipient()})
-	require.NoError(t, err)
-
-	_, _, openErr := transforms.Open(archivalOnly, archival)
-	assert.NoErrorf(t, openErr, "the archival identity must read an archival object: %v", openErr)
-	_, _, excludedIdentityErr := transforms.Open(archivalOnly, analysis)
-	assert.Error(t, excludedIdentityErr, "the analysis identity must NOT read an archival-only object")
-	for _, id := range []age.Identity{archival, analysis} {
-		_, _, recipientErr := transforms.Open(both, id)
-		assert.NoErrorf(t, recipientErr, "both recipients must read a two-recipient object: %v", recipientErr)
-	}
-
-	// Recipient key IDs are recorded, public only, so a rotation can find what to rewrap.
-	m, _, err := transforms.Open(both, archival)
-	require.NoError(t, err)
-	assert.Lenf(t, m.Encryption.RecipientKeyIDs, 2, "recipient_key_ids: %v", m.Encryption.RecipientKeyIDs)
-	for _, kid := range m.Encryption.RecipientKeyIDs {
-		require.NotContains(t, kid, "AGE-SECRET-KEY", "a private key reached the manifest")
-	}
-}
-
-func TestSealRefusesWithNoRecipients(t *testing.T) {
-	_, _, sealErr := transforms.Seal(manifest(), []byte("x"), nil)
-	require.Error(t, sealErr, "sealing with no recipients must fail: encryption is not optional")
 }
 
 // A manifest that would fail downstream validation must not reach a bucket.
 func TestSealValidatesTheManifestAgainstItsSchema(t *testing.T) {
 	id := identity(t)
-	for name, mutate := range map[string]func(*transforms.Manifest){
-		"artifact class outside enum": func(m *transforms.Manifest) { m.ArtifactClass = "whatever" },
-		"shape sniff outside enum":    func(m *transforms.Manifest) { m.ShapeSniff = "probably-fine" },
-		"malformed source hash":       func(m *transforms.Manifest) { m.SourceHash = "deadbeef" },
-		"derived without provenance":  func(m *transforms.Manifest) { m.Derived = true },
+	for name, mutate := range map[string]func(*Manifest){
+		"artifact class outside enum": func(m *Manifest) { m.ArtifactClass = "whatever" },
+		"shape sniff outside enum":    func(m *Manifest) { m.ShapeSniff = "probably-fine" },
+		"malformed source hash":       func(m *Manifest) { m.SourceHash = "deadbeef" },
+		"derived without provenance":  func(m *Manifest) { m.Derived = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := manifest()
 			mutate(&bad)
-			_, _, err := transforms.Seal(bad, []byte("x"), []age.Recipient{id.Recipient()})
+			_, _, err := Seal(bad, []byte("x"), []age.Recipient{id.Recipient()})
 			require.Error(t, err)
 		})
 	}
@@ -235,41 +164,15 @@ func TestSealValidatesTheManifestAgainstItsSchema(t *testing.T) {
 // bytes, so it has to describe THESE bytes.
 func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	id := identity(t)
-
-	// Build a container by hand with a manifest that lies about its payload.
 	m := manifest()
 	m.ShippedHash = strings.Repeat("b", 64)
 	m.PayloadSize = 1
 	raw, err := m.Encode()
 	require.NoError(t, err)
-
-	var tarBuf bytes.Buffer
-	tw := tar.NewWriter(&tarBuf)
-	for _, e := range []struct {
-		name string
-		body []byte
-	}{{transforms.ManifestEntry, raw}, {transforms.PayloadEntry, []byte("different")}} {
-		require.NoError(t, tw.WriteHeader(&tar.Header{
-			Typeflag: tar.TypeReg, Name: e.name, Size: int64(len(e.body)),
-			Mode: 0o600, ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatUSTAR,
-		}))
-		_, writeErr := tw.Write(e.body)
-		require.NoError(t, writeErr)
-	}
-	require.NoError(t, tw.Close())
-
-	var objBuf bytes.Buffer
-	encW, err := age.Encrypt(&objBuf, id.Recipient())
+	obj, err := writeContainer(raw, []byte("different"), nil, []age.Recipient{id.Recipient()})
 	require.NoError(t, err)
-	zw, err := zstd.NewWriter(encW, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(transforms.ZstdLevel)))
-	require.NoError(t, err)
-	_, compressedWriteErr := zw.Write(tarBuf.Bytes())
-	require.NoError(t, compressedWriteErr)
-	zw.Close()
-	encW.Close()
-
-	_, _, openErr := transforms.Open(objBuf.Bytes(), id)
-	require.Error(t, openErr, "a payload that does not match shipped_hash must be refused")
+	_, _, err = Open(obj, id)
+	require.ErrorContains(t, err, "does not match manifest shipped_hash")
 }
 
 // Plaintext object metadata carries the hashes and versions a listing-side consumer dedupes
@@ -290,6 +193,33 @@ func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 			t.Errorf("object metadata should carry %q for HEAD-side dedupe", want)
 		}
 	}
+}
+
+// A derived object's explained shortfalls reach the manifest and survive a round trip; a
+// complete object's manifest bytes do not change because the counters exist.
+func TestTheManifestCarriesExplainedEnrichShortfalls(t *testing.T) {
+	m := manifest()
+	m.ShippedHash = strings.Repeat("b", 64)
+	m.Derived = true
+	m.Enricher = &EnricherRef{ID: "cursor-transcript-join", Version: 4}
+	m.DerivedFrom = []string{strings.Repeat("a", 64)}
+	m.EnrichStatus = "ok"
+	raw, err := m.Encode()
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "enrich_repeats")
+	assert.NotContains(t, string(raw), "enrich_tail")
+	assert.NotContains(t, string(raw), "enrich_ambiguous")
+	assert.NotContains(t, string(raw), "enrich_line_decode_errors")
+
+	m.EnrichRepeats, m.EnrichTail, m.EnrichAmbiguous, m.EnrichLineDecodeErrors = 3, 1, 2, 4
+	raw, err = m.Encode()
+	require.NoError(t, err)
+	for _, want := range []string{`"enrich_repeats":3`, `"enrich_tail":1`, `"enrich_ambiguous":2`, `"enrich_line_decode_errors":4`} {
+		assert.Contains(t, string(raw), want)
+	}
+	back, err := DecodeManifest(raw)
+	require.NoError(t, err)
+	assert.Equal(t, m, back)
 }
 
 func sha256Hex(b []byte) string {

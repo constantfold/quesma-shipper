@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"encoding/json"
@@ -11,8 +11,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 // BenchmarkScrubSynthetic is the portable harness a change can be iterated against;
@@ -24,9 +22,9 @@ func BenchmarkScrubSynthetic(b *testing.B) {
 }
 
 func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.Username = "devuser"
-	s, err := transforms.New(cfg)
+	s, err := New(cfg)
 	require.NoError(b, err)
 
 	cases := []struct {
@@ -43,7 +41,7 @@ func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				res, err := s.Scrub(tc.payload, transforms.Hint{Family: "claude-code", JSONL: true})
+				res, err := s.Scrub(tc.payload, Hint{Family: "claude-code", JSONL: true})
 				require.NoError(b, err)
 				require.NotEqual(b, 0, len(res.Out), "empty output")
 			}
@@ -156,6 +154,66 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 	}
 }
 
+// BenchmarkScrubSyntheticAt is BenchmarkScrubSynthetic's corpus with '@' in it: the original has
+// none, so the email rule (the most expensive pattern on real data) never fires there. A second
+// benchmark rather than an edit to the first, whose numbers are the tracked series.
+func BenchmarkScrubSyntheticAt(b *testing.B) {
+	benchmarkSynthetic(b, syntheticTranscriptAt, syntheticBigValueAt)
+}
+
+// randCommandOutputAt carries the '@' shapes tool output actually has: scoped package specs,
+// decorators, doc tags, ssh targets, git author lines. Most are NOT emails, which is the point:
+// the rule's cost is paid on every '@' and recovered only on the few that complete a match.
+func randCommandOutputAt(rng *rand.Rand, n int) string {
+	var sb strings.Builder
+	sb.Grow(n + 128)
+	for sb.Len() < n {
+		switch rng.Intn(10) {
+		case 0:
+			fmt.Fprintf(&sb, "npm WARN deprecated @quesma/%s@%d.%d.%d: use @quesma/%s instead\n",
+				proseWords[rng.Intn(len(proseWords))], rng.Intn(9), rng.Intn(20), rng.Intn(20),
+				proseWords[rng.Intn(len(proseWords))])
+		case 1:
+			fmt.Fprintf(&sb, "commit %s\nAuthor: Dev User <devuser@example.com>\n", randString(rng, hexDigits, 40))
+		case 2:
+			fmt.Fprintf(&sb, "  @param {%s} %s - %s\n", proseWords[rng.Intn(len(proseWords))],
+				proseWords[rng.Intn(len(proseWords))], randProse(rng, 40))
+		case 3:
+			fmt.Fprintf(&sb, "ssh devuser@build-%02d.internal.example: %s\n", rng.Intn(40),
+				randProse(rng, 40))
+		case 4:
+			fmt.Fprintf(&sb, "@decorator(name=\"%s\")\ndef %s(self):\n", proseWords[rng.Intn(len(proseWords))],
+				proseWords[rng.Intn(len(proseWords))])
+		default:
+			sb.WriteString(randCommandOutput(rng, 120+rng.Intn(240)))
+		}
+	}
+	return sb.String()
+}
+
+func syntheticTranscriptAt(size int) []byte {
+	rng := rand.New(rand.NewSource(20260818))
+	var b strings.Builder
+	b.Grow(size + 4096)
+	encoder := json.NewEncoder(&b)
+
+	for i := 0; b.Len() < size; i++ {
+		line := syntheticToolResult(rng, randCommandOutputAt)
+		if i%37 == 0 {
+			line["message"].(map[string]any)["content"] =
+				"export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
+		}
+		if err := encoder.Encode(line); err != nil {
+			panic(err)
+		}
+	}
+	return []byte(b.String())
+}
+
+func syntheticBigValueAt(size int) []byte {
+	return syntheticBigValueWith(size, 20260819, randCommandOutputAt)
+}
+
 const hexDigits = "0123456789abcdef"
 
 func randUUID(rng *rand.Rand) string {
@@ -226,7 +284,7 @@ const benchRealDataCap = 256 << 20
 // lengths, secret density and prose no generator reproduces. It skips unless SCRUB_BENCH_DIR
 // names a directory of .jsonl files, so CI never depends on private data.
 //
-//	SCRUB_BENCH_DIR=$HOME/.claude/projects go test ./internal/scrub/ \
+//	SCRUB_BENCH_DIR=$HOME/.claude/projects go test ./internal/transforms/ \
 //	    -bench BenchmarkScrubRealData -benchmem -run '^$' -benchtime 1x
 //
 // Run it serially: it is minutes long, and a benchmark sharing the machine moves the number
@@ -266,11 +324,11 @@ func BenchmarkScrubRealData(b *testing.B) {
 	require.NotEqualf(b, 0, total, "no .jsonl files under %s", root)
 	b.Logf("real corpus: %d files, %.1f MiB", len(files), float64(total)/(1<<20))
 
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.Username = "devuser"
-	s, err := transforms.New(cfg)
+	s, err := New(cfg)
 	require.NoError(b, err)
-	hint := transforms.Hint{Family: "claude-code", JSONL: true}
+	hint := Hint{Family: "claude-code", JSONL: true}
 	b.SetBytes(int64(total))
 	b.ReportAllocs()
 	for b.Loop() {

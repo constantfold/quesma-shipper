@@ -11,8 +11,8 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// maxDepth bounds recursion in the JSON walk. Lines beyond it fall back to the raw
-// scanner; 256 is 25 times deeper than the deepest observed transcript record.
+// maxDepth bounds recursion in the JSON walk; deeper lines fall back to the raw scanner. 256 is
+// 25 times deeper than the deepest observed transcript record.
 const maxDepth = 256
 
 var (
@@ -27,9 +27,8 @@ var decoderOptions = []jsontext.Options{
 	jsontext.AllowInvalidUTF8(true),
 }
 
-// jsonWalker validates, decodes, and records source edits in one token pass. The
-// bytes.Buffer lets jsontext borrow directly from the original line rather than copy
-// it into the decoder's streaming buffer.
+// jsonWalker validates, decodes, and records source edits in one token pass. The bytes.Buffer
+// lets jsontext borrow from the original line rather than copy it into its streaming buffer.
 type jsonWalker struct {
 	s      *Scrubber
 	family string
@@ -151,12 +150,12 @@ func (w *jsonWalker) readString() (raw []byte, rawStart int, text string, err er
 	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
 		return nil, 0, "", errStringToken
 	}
-	body := raw[1 : len(raw)-1]
-	if bytes.IndexByte(body, '\\') < 0 && utf8.Valid(body) {
-		return raw, int(w.dec.InputOffset()) - len(raw), string(body), nil
+	rawStart = int(w.dec.InputOffset()) - len(raw)
+	if body := raw[1 : len(raw)-1]; bytes.IndexByte(body, '\\') < 0 && utf8.Valid(body) {
+		return raw, rawStart, string(body), nil
 	}
 	decoded, _ := jsontext.AppendUnquote(nil, raw)
-	return raw, int(w.dec.InputOffset()) - len(raw), string(decoded), nil
+	return raw, rawStart, string(decoded), nil
 }
 
 func joinFieldPath(parent, child string) string {

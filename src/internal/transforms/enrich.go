@@ -12,80 +12,53 @@ import (
 type Status string
 
 const (
-	// StatusOK means the derived object is complete.
-	StatusOK Status = "ok"
-
-	// StatusSkipped means there was legitimately nothing to derive. Not an alarm.
-	StatusSkipped Status = "skipped"
-
-	// StatusMismatch means the join did not line up. THE alarm: the alignment rules are
-	// undocumented vendor behaviour, and a drifted join silently loses the fields it carries.
+	StatusOK      Status = "ok"      // the derived object is complete
+	StatusSkipped Status = "skipped" // nothing to derive; not an alarm
+	// The join did not line up. THE alarm: the alignment rules are undocumented vendor
+	// behaviour, and a drifted join silently loses the fields it carries.
 	StatusMismatch Status = "mismatch"
-
-	// StatusError means the read or the computation failed.
-	StatusError Status = "error"
+	StatusError    Status = "error" // the read or the computation failed
 )
 
 // RawUnit is one staged raw file an enricher may read: staged CONTENT, not a path to re-open,
 // so derived_from attests to the bytes that shipped and enrichers get no filesystem access.
 type RawUnit struct {
-	// NativePath is the file's path, for naming the derived object and for the join key.
-	NativePath string
-
-	// Content is the raw pre-redaction bytes, as staged.
-	Content []byte
-
-	// SourceHash becomes an entry in derived_from.
-	SourceHash string
+	NativePath string // names the derived object and is the join key
+	Content    []byte // raw pre-redaction bytes, as staged
+	SourceHash string // becomes an entry in derived_from
 }
 
 // Input is what an enricher gets.
 type Input struct {
-	// Units are the staged raw units of this source in this flush.
-	Units []RawUnit
-
-	// DBPath is the declared agent database; empty means absent, which is not an error.
-	DBPath string
-
-	// ScratchDir is where the read ladder may put a snapshot: never beside the source.
-	ScratchDir string
+	Units      []RawUnit // this source's staged raw units in this flush
+	DBPath     string    // the declared agent database; empty means absent, not an error
+	ScratchDir string    // where the read ladder may put a snapshot: never beside the source
 }
 
 // Derived is one derived object.
 type Derived struct {
-	// The derived object's own path, which becomes its mirror key. By convention
-	// <input path>.enriched.jsonl, so it sits beside its input in any listing.
+	// Becomes the mirror key; by convention <input path>.enriched.jsonl, beside its input.
 	NativePath string
 
-	// Payload is the derived bytes, pre-redaction, taking the same path as a raw file.
-	Payload []byte
-
-	// DerivedFrom is the source hash of every raw input this was computed from.
-	DerivedFrom []string
-
-	// OutputHash is the change signal: the object re-ships only when it changes, which is
-	// what determinism buys.
-	OutputHash string
+	Payload     []byte   // pre-redaction, taking the same path as a raw file
+	DerivedFrom []string // the source hash of every raw input
+	OutputHash  string   // the object re-ships only when this changes
 
 	Status Status
 
-	// Counts events that did not align. Non-zero with StatusOK is impossible by contract:
-	// a mismatch aborts the derived entry.
+	// Non-zero with StatusOK is impossible by contract: a mismatch aborts the derived entry.
 	Mismatches int
 
-	// Store shortfalls the join explains, shipped native-only inside a StatusOK object.
-	// One counter per class, so a conversation with holes is not byte-identical downstream
-	// to a complete one.
+	// Store shortfalls the join explains, shipped native-only inside a StatusOK object, one
+	// counter per class so a conversation with holes is not byte-identical to a complete one.
 	Repeats int
 	Tail    int
 
-	// Events the evidence could not decide, where the join attached nothing rather than
-	// guess. An undecided hole, not an explained one.
+	// Events the evidence could not decide, where the join attached nothing rather than guess.
 	Ambiguous int
 
-	// Transcript lines before the tail that did not decode. An alarm, unlike the three
-	// above: those lines' blocks never reached the join, so their enrichment is lost while
-	// the object still ships.
+	// Transcript lines before the tail that did not decode: an alarm, since their blocks never
+	// reached the join while the object still ships.
 	LineDecodeErrors int
 
 	// Read provenance: the rows never ship, so this is the only account of their origin.
@@ -107,13 +80,11 @@ type EnrichResult struct {
 	Mismatched int
 	Errors     int
 
-	// Human-readable reasons for the audit log and `doctor`. Never payload bytes or redacted
-	// values: diagnostics must not become a side channel for the content being read.
-	// Alarms only — each note explains data that did not ship.
+	// Alarms for the audit log and `doctor`, each explaining data that did not ship. Never
+	// payload bytes or redacted values: diagnostics must not become a side channel.
 	Notes []string
 
-	// Informational notes about objects that DID ship. Kept apart from Notes so no reporting
-	// path has to re-parse note text to decide whether it is looking at loss.
+	// Informational notes about objects that DID ship, apart so no reader re-parses note text.
 	Infos []string
 }
 
@@ -133,13 +104,12 @@ type Enricher interface {
 	// one the catalog never approved. nil when the enricher has no database.
 	DBCandidates() []string
 
-	// Whether the enricher derives from staged raw units. A unit-free enricher runs on EVERY
-	// flush, because its input is the agent's store, which moves on its own schedule:
-	// otherwise an idle but logged-in install never reports its account at all.
+	// A unit-free enricher runs on EVERY flush, because its input is the agent's store, which
+	// moves on its own schedule: otherwise an idle install never reports its account at all.
 	NeedsUnits() bool
 
-	// Enrich derives objects, returning a result rather than an error for anything short of a
-	// programming fault: no enricher failure should stop a flush.
+	// Enrich returns a result rather than an error for anything short of a programming fault:
+	// no enricher failure should stop a flush.
 	Enrich(Input) EnrichResult
 }
 

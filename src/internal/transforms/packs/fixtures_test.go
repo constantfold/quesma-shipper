@@ -32,6 +32,13 @@ func ruleByID(t testing.TB, pack, id string) *Rule {
 	return nil
 }
 
+// MatchScanned is MatchScannedIn with a scan of its own.
+func (r *Rule) MatchScanned(value string) []Span {
+	var scan ValueScan
+	scan.Reset(value)
+	return r.MatchScannedIn(value, &scan)
+}
+
 type probe struct{ in, want string }
 
 func checkProbes(t *testing.T, r *Rule, probes []probe) {
@@ -41,10 +48,10 @@ func checkProbes(t *testing.T, r *Rule, probes []probe) {
 		for _, s := range r.MatchScanned(p.in) {
 			matches = append(matches, p.in[s.Start:s.End])
 		}
-		if p.want == "" {
-			assert.Empty(t, matches, "%s on %q", r.id, p.in)
-		} else {
-			assert.Contains(t, matches, p.want, "%s on %q", r.id, p.in)
+		var want []string
+		if p.want != "" {
+			want = []string{p.want}
 		}
+		assert.Equal(t, want, matches, "%s on %q", r.id, p.in)
 	}
 }
