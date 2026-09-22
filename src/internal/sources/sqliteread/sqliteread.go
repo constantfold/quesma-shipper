@@ -5,11 +5,13 @@ package sqliteread
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -233,4 +235,104 @@ func removeSnapshot(path string) error {
 		}
 	}
 	return nil
+}
+
+func query(db *sql.DB, o Options) (Result, error) {
+	// Prefixes are bound, never interpolated, and stay literal under LIKE.
+	conds := make([]string, len(o.KeyPrefixes))
+	args := make([]any, len(o.KeyPrefixes))
+	for i, p := range o.KeyPrefixes {
+		conds[i] = `key LIKE ? ESCAPE '\'`
+		args[i] = likeEscaper.Replace(p) + "%"
+	}
+	q := `SELECT key, value FROM "` + strings.ReplaceAll(o.Table, `"`, `""`) + `"`
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " OR ")
+	}
+	// Ordered, so an enricher's output does not depend on SQLite's row order.
+	rows, err := db.Query(q+" ORDER BY key", args...)
+	if err != nil {
+		return Result{}, err
+	}
+	defer rows.Close()
+
+	var res Result
+	for rows.Next() {
+		if len(res.Rows) >= maxRows {
+			res.Truncated = true
+			return res, nil
+		}
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return Result{}, err
+		}
+		// Applied to every row of every read: auth material lives in the same database as the trajectories.
+		if !keyDenied(key) {
+			res.Rows = append(res.Rows, Row{Key: key, Value: scrubValue(value)})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Result{}, err
+	}
+	return res, nil
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// The compiled row and field deny, configurable at no layer: auth material shares the database with trajectories.
+
+// deniedKeyPrefixes are keyspaces no enricher may read: cursorAuth/* holds Cursor's own session tokens.
+var deniedKeyPrefixes = []string{"cursorauth/", "cursorauth."}
+
+// deniedFields are stripped from every value at any depth: Cursor's blob keys, stored beside the content they protect.
+var deniedFields = []string{"blobEncryptionKey", "speculativeSummarizationEncryptionKey"}
+
+// allowedExactKeys are the compiled exceptions to the prefix deny. EXACT keys only: a prefix would ship the next key Cursor adds.
+var allowedExactKeys = map[string]bool{
+	"cursorauth/stripemembershiptype": true, // the plan (free/pro/business/enterprise)
+	"cursorauth/cachedemail":          true, // which account the plan belongs to
+	"cursorauth/cachedsignuptype":     true, // how the account authenticates (Google, ...)
+	"cursorauth/cachedteam":           true, // {teamId, name}, no credential material
+}
+
+// keyDenied is case-insensitive: the namespace is spelled more than one way.
+func keyDenied(key string) bool {
+	lower := strings.ToLower(key)
+	return !allowedExactKeys[lower] && slices.ContainsFunc(deniedKeyPrefixes, func(p string) bool {
+		return strings.HasPrefix(lower, p)
+	})
+}
+
+// scrubValue removes denied fields at any depth; a value that is not JSON has no fields to strip.
+func scrubValue(raw []byte) []byte {
+	var v any
+	// Verbatim when nothing was stripped: re-marshalling reorders keys.
+	if json.Unmarshal(raw, &v) != nil || stripFields(v) == 0 {
+		return raw
+	}
+	out, _ := json.Marshal(v) // cannot fail on a value json.Unmarshal produced
+	return out
+}
+
+// stripFields deletes in place; maps and slices share their backing storage with v.
+func stripFields(v any) int {
+	removed := 0
+	switch t := v.(type) {
+	case map[string]any:
+		for _, f := range deniedFields {
+			if _, ok := t[f]; ok {
+				delete(t, f)
+				removed++
+			}
+		}
+		for _, child := range t {
+			removed += stripFields(child)
+		}
+	case []any:
+		for _, child := range t {
+			removed += stripFields(child)
+		}
+	}
+	return removed
 }

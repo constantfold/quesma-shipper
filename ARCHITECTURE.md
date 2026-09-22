@@ -66,7 +66,7 @@ The main files name the decisions they own:
 | Concern | Files under `src/` |
 | --- | --- |
 | Configuration order, merge, validation, roots | `internal/config/{resolve,merge,validate,roots}.go` |
-| Discovery, traversal, lazy reads, format probes | `internal/sources/{gather,walk,candidate,sniff_file}.go` |
+| Discovery, traversal, lazy reads, format probes | `internal/sources/{gather,walk,sniff_file}.go` |
 | SQLite read fallbacks and scoped, filtered queries | `internal/sources/sqliteread/{sqliteread,query}.go` |
 | Run policy and per-source collection | `internal/engine/{engine,collect}.go` |
 | Admission and concurrency | `internal/engine/pool.go` |

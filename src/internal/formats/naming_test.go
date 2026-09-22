@@ -52,9 +52,7 @@ func TestSegmentEncodingIsInjective(t *testing.T) {
 	seen := map[string]string{}
 	for _, in := range []string{"a b", "a%20b", "a%2520b", "a/b", "a-b", "a_b", "a.b", "a~b", "100%", "100%25", "été", "%C3%A9"} {
 		got := formats.CanonicalPath(in, "jane")
-		if prev, dup := seen[got]; dup {
-			t.Errorf("collision: %q and %q both encode to %q", prev, in, got)
-		}
+		assert.NotContainsf(t, seen, got, "collision: %q and %q both encode to %q", seen[got], in, got)
 		seen[got] = in
 	}
 }

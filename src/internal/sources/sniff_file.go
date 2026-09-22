@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"strings"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
@@ -102,12 +101,11 @@ func sniffJSONL(head []byte, truncated bool) (formats.SniffResult, string) {
 		return formats.SniffUnexpectedShape, ""
 	}
 
-	line, terminated := firstLine(head)
-
+	line, _, terminated := bytes.Cut(head, []byte{'\n'})
 	// "No newline" means two things: a truncated head simply ran past the scan budget, a whole file with none is real drift.
 	unjudgeable := !terminated && truncated
 
-	if strings.TrimSpace(line) == "" {
+	if len(bytes.TrimSpace(line)) == 0 {
 		if unjudgeable {
 			return formats.SniffOK, ""
 		}
@@ -115,7 +113,7 @@ func sniffJSONL(head []byte, truncated bool) (formats.SniffResult, string) {
 	}
 
 	var rec map[string]json.RawMessage
-	if json.Unmarshal([]byte(line), &rec) != nil {
+	if json.Unmarshal(line, &rec) != nil {
 		if unjudgeable {
 			return formats.SniffOK, ""
 		}
@@ -161,12 +159,4 @@ func versionFrom(rec map[string]json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-// firstLine returns the first line and whether a terminator was seen: a line cut off by the budget is not malformed.
-func firstLine(head []byte) (string, bool) {
-	if line, _, found := bytes.Cut(head, []byte{'\n'}); found {
-		return string(bytes.TrimRight(line, "\r")), true
-	}
-	return string(head), false
 }

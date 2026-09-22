@@ -201,10 +201,7 @@ func TestColdCopyKeepsSidecarsAndRefusesOverwrite(t *testing.T) {
 
 	// A copy that omits or RENAMES the -wal opens without the WAL's contents, since SQLite finds the sidecar by basename.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
-		want := copied + suffix
-		if _, err := os.Stat(want); err != nil {
-			t.Errorf("%s did not land beside the copy: %v", filepath.Base(want), err)
-		}
+		assert.FileExists(t, copied+suffix, "did not land beside the copy")
 	}
 	assert.Equalf(t, filepath.Base(src), filepath.Base(copied), "the copy was renamed: %s vs %s", filepath.Base(copied), filepath.Base(src))
 	// Overwriting could mix a fresh database with stale sidecars.

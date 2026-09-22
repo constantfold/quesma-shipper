@@ -146,9 +146,6 @@ func (f *RepoFilter) scopeOf(cwd string) gitScope {
 }
 
 func (f *RepoFilter) Match(src Resolved, c Candidate) bool {
-	if f == nil {
-		return false
-	}
 	_, marked := f.Marker(f.CWD(src, c))
 	return marked
 }
