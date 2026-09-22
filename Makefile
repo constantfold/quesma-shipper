@@ -75,7 +75,7 @@ race: ## Run the unit suite under the race detector
 	cd $(MODULE) && go test -race $(PKG)
 
 # Both tiers measure the shipped binary against a latency-shaped MinIO; the full corpus costs minutes, so it is manual.
-PERF_SKIP = docker info >/dev/null 2>&1 || { echo "docker is not available; skipping $@"; exit 0; }
+PERF_SKIP = docker info >/dev/null 2>&1 || { [ -z "$$CI" ] || { echo "docker is not available in CI"; exit 1; }; echo "docker is not available; skipping $@"; exit 0; }
 
 .PHONY: perf
 perf: ## Run the full local performance tier (needs Docker)

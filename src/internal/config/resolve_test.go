@@ -64,6 +64,8 @@ func TestResolveRejects(t *testing.T) {
 		{name: "include reaching agent credentials", layer: remote, body: "sources:\n  - id: claude-code-transcripts\n    include: [\"**\"]\n", want: "deny"},
 		// Expansion is an attack surface: the deny list acts on the expanded value, never the template.
 		{name: "env root pointing into ~/.ssh", env: map[string]string{"CLAUDE_CONFIG_DIR": "HOME/.ssh"}, want: "deny"},
+		{name: "local telemetry endpoint", layer: user, body: "telemetry_endpoint: /v1/telemetry\n", want: "telemetry_endpoint"},
+		{name: "served telemetry URL", layer: remote, body: "telemetry_endpoint: https://elsewhere.example.com/t\n", want: "telemetry_endpoint"},
 		{name: "cleartext upload target", layer: user, body: "upload_targets:\n  - origin: http://example.com\n    addressing: virtual-hosted\n", want: "loopback"},
 		{name: "repeated upload target", layer: user, body: "upload_targets:\n  - origin: https://a.example.com\n    addressing: virtual-hosted\n  - origin: https://A.example.com:443\n    addressing: virtual-hosted\n", want: "repeats origin"},
 		{name: "env root expanding to a relative path", env: map[string]string{"CLAUDE_CONFIG_DIR": "relative/path"}},
