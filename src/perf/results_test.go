@@ -36,8 +36,7 @@ const (
 	// Names the file the rows are appended to; CI points it at the workspace so the upload finds it.
 	resultsEnv = "SHIPPER_PERF_RESULTS"
 
-	// Not GITHUB_SHA: on a pull_request that is the ephemeral refs/pull/N/merge commit, so every PR
-	// row would be keyed to an object no repository keeps.
+	// Not GITHUB_SHA: on a pull_request that is the ephemeral merge commit no repository keeps.
 	shaEnv = "SHIPPER_PERF_GIT_SHA"
 )
 

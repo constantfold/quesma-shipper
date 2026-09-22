@@ -21,8 +21,7 @@ const shapedRTT = 50 * time.Millisecond
 // Selects only what came off the machine; the heartbeat and project map change every run by design.
 const transcriptPrefix = "mirror/source=claude-code-transcripts/"
 
-// A backlog against a far store must not cost one round trip per file, and a "faster" run that did
-// different work is not faster. One rtt could be a coincidence; -short keeps only the first row.
+// A far store must not cost one round trip per file, and the shaped run must do the same work; -short runs one rtt.
 func TestBacklogFirstSyncOverlapsRoundTrips(t *testing.T) {
 	base, files, baseObs := backlogSync(t)
 	baseline := min(baseObs.Elapsed, timingRun(t))
