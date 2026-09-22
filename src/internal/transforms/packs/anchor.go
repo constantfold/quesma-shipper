@@ -8,8 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// anchorScan finds corpus keywords, then verifies an anchored regex. Keywords must start every
-// match; rules with interior keywords declare sweep instead. TestAnchorMatchesSweep checks that.
+// anchorScan finds the keywords that start every match, then verifies an anchored regex (TestAnchorMatchesSweep).
 type anchorScan struct {
 	verify   *regexp.Regexp // \A(?:pattern), run against value[p:], keeps every group number
 	lits     []string       // the entry literals: the rule's corpus keywords
@@ -21,8 +20,7 @@ const (
 	maxAnchorLits = 8 // the litCursor's fixed scratch; the corpora carry at most five
 	minAnchorLen  = 2 // a single-byte literal lands on prose constantly
 
-	// litCursor positions out of band of any byte offset.
-	litUnscanned = -2
+	litUnscanned = -2 // litCursor positions out of band of any byte offset
 	litExhausted = -1
 )
 
@@ -38,8 +36,7 @@ func newAnchorScan(pattern string, keywords []string, sweep bool) (*anchorScan, 
 	}
 	wordEdge := strings.HasPrefix(rest, `\b`)
 	for _, k := range keywords {
-		// With \b in front, a non-word entry byte depends on the byte before it, which verify cannot
-		// see. With (?i), the search visits only the two ASCII cases of the first byte.
+		// \b before a non-word entry byte reads a byte verify cannot see; (?i) search tries two ASCII cases.
 		if len(k) < minAnchorLen || !isASCII(k) || wordEdge && !isWordByte(k[0]) ||
 			fold && !foldOrbitASCII(rune(asciiLower(k[0]))) {
 			return nil, nil

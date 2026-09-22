@@ -68,12 +68,7 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 		return res
 	}
 
-	read, err := sqliteread.Read(sqliteread.Options{
-		Path:        in.DBPath,
-		ScratchDir:  in.ScratchDir,
-		Table:       table,
-		KeyPrefixes: e.Keyspaces(),
-	})
+	read, err := sqliteread.Read(sqliteread.Options{Path: in.DBPath, ScratchDir: in.ScratchDir, Table: table, KeyPrefixes: e.Keyspaces()})
 	if err != nil {
 		// Fail open: this costs the flush's DB-side fields, not the raw transcripts.
 		res.Errors = len(in.Units)
@@ -156,18 +151,13 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	// Set before the status check: Enrich reports this loss whether or not an object ships.
 	d.LineDecodeErrors = a.lineDecodeErrors
 	if a.mismatches > 0 {
-		d.Status = transforms.StatusMismatch
-		d.Mismatches = a.mismatches
+		d.Status, d.Mismatches = transforms.StatusMismatch, a.mismatches
 		return d, fmt.Sprintf("%s: %d transcript events did not align with the store; no derived object, raw "+
 			"transcript ships (the join rules are vendor behaviour and drift)", conv, a.mismatches)
 	}
-	d.Payload = a.out
-	d.OutputHash = transforms.Hash(a.out)
-	d.Status = transforms.StatusOK
+	d.Payload, d.OutputHash, d.Status = a.out, transforms.Hash(a.out), transforms.StatusOK
 	// Onto the object, not only into a note: the note dies with the flush.
-	d.Repeats = a.repeats
-	d.Tail = a.tail
-	d.Ambiguous = a.ambiguous
+	d.Repeats, d.Tail, d.Ambiguous = a.repeats, a.tail, a.ambiguous
 
 	// Informational, not alarms: observed vendor behaviour, not rule drift.
 	var infos []string

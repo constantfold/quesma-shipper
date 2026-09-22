@@ -18,7 +18,6 @@ const (
 	lookBehind = 64
 )
 
-// matchOutcome is what matchBlock concluded about one content block.
 type matchOutcome int
 
 const (
@@ -31,7 +30,6 @@ const (
 // matchBlock returns the chosen bubble and its evidence for later repeat detection.
 func matchBlock(blk block, role string, events []*bubble, cursor int, state []bubbleState) (int, matchOutcome, evidence, int) {
 	weigh := func(b *bubble) (evidence, int) { return blk.evidenceFor(b, role) }
-
 	// Forward positives win; lesser grades wait until both windows have been searched.
 	fwd, behind := newMatchWindow(), newMatchWindow()
 	for i := cursor; i < min(len(events), cursor+lookAhead); i++ {
@@ -202,8 +200,7 @@ func textEvidence(transcript, stored string) (evidence, int) {
 	return evidenceNegative, 0
 }
 
-// normaliseText strips the transcript's wrapper tags, which the store side does not have. The
-// query is the prose, so user_query keeps its contents.
+// normaliseText strips the transcript's wrapper tags, which the store lacks; user_query keeps its contents.
 func normaliseText(s string) string {
 	s = stripTag(s, "timestamp", false)
 	s = stripTag(s, "user_query", true)

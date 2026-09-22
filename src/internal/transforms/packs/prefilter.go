@@ -20,10 +20,10 @@ type keywordNode struct {
 // Gate identifies one registered keyword set; AlwaysGate belongs to a matcher with none.
 type Gate int32
 
-const AlwaysGate Gate = -1
-
-// maxGates keeps Seen a fixed-size value type, so a scan is allocation-free.
-const maxGates = 256
+const (
+	AlwaysGate Gate = -1
+	maxGates        = 256 // keeps Seen a fixed-size value, so a scan is allocation-free
+)
 
 // Seen holds the gates whose keywords occur in the scanned value.
 type Seen struct {
@@ -47,8 +47,7 @@ func (s *Seen) set(g Gate) {
 	s.bits[g>>6] |= uint64(1) << uint(g&63)
 }
 
-// PrefilterBuilder collects keyword sets and compiles them into one Prefilter. Registration
-// order fixes gate ids and insertion order fixes the trie, so the automaton is deterministic.
+// PrefilterBuilder compiles keyword sets into one Prefilter; registration order fixes Gate ids and the trie.
 type PrefilterBuilder struct {
 	keywords []gatedKeyword
 	gates    int
@@ -85,12 +84,7 @@ func (b *PrefilterBuilder) AddKeywords(keywords []string) (Gate, error) {
 }
 
 func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(s, func(r rune) bool { return r >= utf8.RuneSelf })
 }
 
 func asciiLower(c byte) byte {

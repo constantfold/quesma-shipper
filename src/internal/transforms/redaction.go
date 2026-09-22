@@ -40,8 +40,7 @@ func (p valuePlan) apply(value string) string {
 	return b.String()
 }
 
-// planValue applies the full ladder to one decoded JSON string without building the rewritten
-// value. An exempt field stands down the heuristics and nothing else.
+// planValue plans one decoded JSON string; an exempt field stands down the heuristics and nothing else.
 func (s *Scrubber) planValue(value, key, field, family string, scan *packs.ValueScan) valuePlan {
 	entropy := s.entropy
 	if s.exempt["*"][field] || s.exempt[family][field] {
@@ -71,8 +70,7 @@ func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key stri
 		heuristicSpans = entropy.Match(value)
 	}
 
-	// One level of base64, never recursion, so work stays bounded per byte. The whole encoded
-	// value goes: a patched re-encoding would rewrite bytes the shipper preserves.
+	// One level of base64 keeps work bounded; the whole value goes, as a re-encoding would rewrite bytes.
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 && len(value) >= base64MinLength {
 		if id, hit := s.base64Hit(value, scan); hit {
 			return wholeValuePlan(value, id)
@@ -82,25 +80,18 @@ func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key stri
 	resolved, redacted, hits := resolveSpans(value, patternSpans, heuristicSpans)
 	plan := valuePlan{redacted: redacted, hits: hits}
 	for _, span := range resolved {
-		plan.spans = append(plan.spans, replacementSpan{
-			Start: span.Start, End: span.End, Replacement: Sentinel(span.RuleID),
-		})
+		plan.spans = append(plan.spans, replacementSpan{Start: span.Start, End: span.End, Replacement: Sentinel(span.RuleID)})
 	}
 
 	// Runs last and unconditionally, including on values already redacted.
-	if s.pathUser != "" {
-		pathSpans, n := pathUserReplacementSpans(value, s.pathUser, plan.spans)
-		if n > 0 {
-			plan.spans = append(plan.spans, pathSpans...)
-			slices.SortFunc(plan.spans, func(a, b replacementSpan) int {
-				return cmp.Compare(a.Start, b.Start)
-			})
-			plan.redacted += n
-			if plan.hits == nil {
-				plan.hits = map[string]int{}
-			}
-			plan.hits["path-user"]++
+	if pathSpans, n := pathUserReplacementSpans(value, s.pathUser, plan.spans); n > 0 {
+		plan.spans = append(plan.spans, pathSpans...)
+		slices.SortFunc(plan.spans, func(a, b replacementSpan) int { return cmp.Compare(a.Start, b.Start) })
+		plan.redacted += n
+		if plan.hits == nil {
+			plan.hits = map[string]int{}
 		}
+		plan.hits["path-user"]++
 	}
 	return plan
 }
@@ -113,9 +104,7 @@ func wholeValuePlan(value, ruleID string) valuePlan {
 	}
 }
 
-// pathUserReplacementSpans finds username occurrences in the detector-rewritten value without
-// building it: a neighbouring sentinel contributes its boundary byte, and a swallowed occurrence
-// no longer exists.
+// pathUserReplacementSpans finds the username as if in the rewritten value: sentinels bound it, and swallow it.
 func pathUserReplacementSpans(value, username string, blocked []replacementSpan) ([]replacementSpan, int) {
 	if len(username) < 2 || value == "" || !strings.Contains(value, username) {
 		return nil, 0
@@ -148,9 +137,7 @@ func pathUserReplacementSpans(value, username string, blocked []replacementSpan)
 			rightOK = !isAlnumByte(blocked[blockedAt].Replacement[0])
 		}
 		if leftOK && rightOK {
-			spans = append(spans, replacementSpan{
-				Start: start, End: end, Replacement: formats.UserPlaceholder,
-			})
+			spans = append(spans, replacementSpan{Start: start, End: end, Replacement: formats.UserPlaceholder})
 			redacted += len(username)
 		}
 		from = end
@@ -165,10 +152,7 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 	if !base64Shaped(trimmed) {
 		return "", false
 	}
-	for _, enc := range []*base64.Encoding{
-		base64.StdEncoding, base64.RawStdEncoding,
-		base64.URLEncoding, base64.RawURLEncoding,
-	} {
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		decoded, err := enc.DecodeString(trimmed)
 		if err != nil || len(decoded) == 0 {
 			continue
@@ -190,8 +174,7 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 	return "", false
 }
 
-// base64Shaped covers both alphabets, padding, and the carriage return the decoders skip. Only
-// the rejection has to be sound, since what passes still goes through the real decoder.
+// base64Shaped covers both alphabets, padding and the skipped carriage return; only rejection must be sound.
 func base64Shaped(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -213,8 +196,7 @@ func Sentinel(ruleID string) string {
 	return sentinelPrefix + ":" + ruleID + "__"
 }
 
-// sentinelPrefix is the part of every sentinel inside the entropy candidate alphabet, so the
-// entropy matcher skips candidates carrying it, or a re-scrub eats the previous pass's ledger.
+// sentinelPrefix is the sentinel part inside the entropy alphabet, skipped so a re-scrub keeps the ledger.
 const sentinelPrefix = "__REDACTED"
 
 // prioritizedSpan resolves overlaps by confidence: 0 is a pattern rule, 1 a heuristic.
@@ -241,11 +223,7 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 		if a.Start != b.Start {
 			return cmp.Compare(a.Start, b.Start)
 		}
-		return cmp.Or(
-			cmp.Compare(a.priority, b.priority),
-			cmp.Compare(b.End, a.End),
-			cmp.Compare(a.RuleID, b.RuleID),
-		)
+		return cmp.Or(cmp.Compare(a.priority, b.priority), cmp.Compare(b.End, a.End), cmp.Compare(a.RuleID, b.RuleID))
 	})
 
 	// Keeping both would nest placeholders or split one secret across two.
@@ -268,16 +246,9 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 	return resolved, redacted, hits
 }
 
-// dropOverlappedHeuristics removes heuristic spans intersecting a pattern span and widens that
-// span over any reach past it, so one secret yields one confidently attributed placeholder.
+// dropOverlappedHeuristics drops heuristics intersecting a pattern span, widening it over their reach.
 func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
-	var patterns []prioritizedSpan
-	for _, s := range spans {
-		if s.priority == 0 {
-			patterns = append(patterns, s)
-		}
-	}
-
+	patterns := slices.DeleteFunc(slices.Clone(spans), func(s prioritizedSpan) bool { return s.priority != 0 })
 	out := make([]prioritizedSpan, 0, len(spans))
 	for _, s := range spans {
 		if s.priority == 0 {

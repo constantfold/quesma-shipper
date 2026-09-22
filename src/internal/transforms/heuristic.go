@@ -8,8 +8,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// EntropyConfig tunes the generic-entropy backstop, the rule most likely to start eating content.
-// Pure-hex candidates get their own threshold: 16 symbols cap entropy at 4.0 bits per char.
+// EntropyConfig tunes the generic-entropy backstop; hex gets its own threshold, as 16 symbols cap it at 4 bits.
 type EntropyConfig struct {
 	MinLength         int
 	MinBitsPerChar    float64
@@ -18,15 +17,10 @@ type EntropyConfig struct {
 
 // DefaultEntropyConfig is the calibrated baseline; calibration_test.go holds it to account.
 func DefaultEntropyConfig() EntropyConfig {
-	return EntropyConfig{
-		MinLength:         24,
-		MinBitsPerChar:    4.2,
-		MinBitsPerCharHex: 3.8,
-	}
+	return EntropyConfig{MinLength: 24, MinBitsPerChar: 4.2, MinBitsPerCharHex: 3.8}
 }
 
-// entropyMatcher is the backstop for high-entropy strings no pattern rule claimed. Exemptions are
-// checked before it: redacting a uuid or a tool_use_id kills the causal DAG.
+// entropyMatcher backstops high-entropy strings; exemptions come first, as redacting a uuid kills the DAG.
 type entropyMatcher struct {
 	cfg    EntropyConfig
 	minRun int      // candidate length floor, at least 1
@@ -42,16 +36,13 @@ func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
 	return &entropyMatcher{cfg: cfg, minRun: max(cfg.MinLength, 1), skip: skip}
 }
 
-// isCandidateByte is the entropy candidate alphabet: base64url and hex, plus the "+" and "=" of
-// standard base64. "/" is deliberately NOT in it: with it a candidate is a whole path prefix,
-// 55% of all redaction hits on a real archive. The accepted residual, a std-base64 secret whose
-// slashes split it under MinLength, is recorded in TestBareBase64WithSlashIsAKnownEscape.
+// isCandidateByte is base64url plus "+" and "=". Not "/": whole path prefixes were 55% of hits on a real
+// archive; the residual is recorded in TestBareBase64WithSlashIsAKnownEscape.
 func isCandidateByte(c byte) bool {
 	return isAlnumByte(c) || c == '+' || c == '=' || c == '_' || c == '-'
 }
 
-// A class entry's low bits carry 1 + the byte's rank in the alphabet (0 is out of class), and the
-// hex bit marks a hex digit. 128 slots rather than 67 let the compiler prove the index in range.
+// A class entry is 1 + alphabet rank (0 is out) plus the hex bit; 128 slots elide the bounds check.
 const (
 	entropySymbols   = 66
 	entropyHexBit    = 0x80
@@ -80,8 +71,7 @@ func isHexByte(c byte) bool {
 
 func (m *entropyMatcher) RuleID() string { return "generic-entropy" }
 
-// Match probes every minRun'th byte, since a candidate run must cover a grid point, and finds
-// exactly the runs, in order, a byte-at-a-time scan would.
+// Match probes every minRun'th byte, which any candidate covers, finding exactly the byte walk's runs.
 func (m *entropyMatcher) Match(value string) []Span {
 	if len(value) < m.cfg.MinLength {
 		return nil
@@ -105,8 +95,7 @@ func (m *entropyMatcher) Match(value string) []Span {
 			continue
 		}
 		candidate := value[start:i]
-		// Entropy first, as it rejects nearly everything. The skip keeps a re-scrub idempotent:
-		// __USER__, __REDACTED and the not-yet-rewritten username all ADD entropy.
+		// Entropy first, as it rejects nearly everything; the skip keeps a re-scrub idempotent.
 		if !m.clears(candidate) || m.skipsCandidate(candidate) {
 			continue
 		}
@@ -119,8 +108,7 @@ func (m *entropyMatcher) skipsCandidate(candidate string) bool {
 	return slices.ContainsFunc(m.skip, func(s string) bool { return containsDelimited(candidate, s) })
 }
 
-// containsDelimited requires non-alphanumeric neighbours, as formats.ApplyUserPlaceholder does,
-// so a token that merely embeds the username mid-run never earns the skip.
+// containsDelimited requires non-alphanumeric neighbours, as formats.ApplyUserPlaceholder does.
 func containsDelimited(s, sub string) bool {
 	if sub == "" {
 		return false
@@ -131,9 +119,7 @@ func containsDelimited(s, sub string) bool {
 			return false
 		}
 		i += at
-		leftOK := i == 0 || !isAlnumByte(s[i-1])
-		rightOK := i+len(sub) == len(s) || !isAlnumByte(s[i+len(sub)])
-		if leftOK && rightOK {
+		if (i == 0 || !isAlnumByte(s[i-1])) && (i+len(sub) == len(s) || !isAlnumByte(s[i+len(sub)])) {
 			return true
 		}
 		// One byte on, so an occurrence starting inside this one is still seen.
@@ -161,8 +147,7 @@ func (m *entropyMatcher) clears(candidate string) bool {
 	return exactEntropyBits(&counts, float64(len(candidate))) >= threshold
 }
 
-// exactEntropyBits is the Shannon sum the thresholds were fitted against. The ascending rank order
-// is a correctness property: float addition does not associate.
+// exactEntropyBits is the fitted Shannon sum; ascending rank order matters, as float addition does not associate.
 func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	h := 0.0
 	for _, c := range counts[:entropySymbols+1] {

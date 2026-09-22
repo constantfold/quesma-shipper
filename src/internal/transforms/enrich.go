@@ -7,8 +7,7 @@ import (
 	"encoding/hex"
 )
 
-// Status is the outcome of one enrichment. Anything but StatusOK means that window's DB-side
-// fields are lost until a release fixes the join, so these are health alarms.
+// Status is one enrichment's outcome; anything but StatusOK loses DB-side fields, so these are alarms.
 type Status string
 
 const (
@@ -18,8 +17,7 @@ const (
 	StatusError    Status = "error"    // the read or the computation failed
 )
 
-// RawUnit is one staged raw file an enricher may read: staged CONTENT, not a path to re-open,
-// so derived_from attests to the bytes that shipped and enrichers get no filesystem access.
+// RawUnit is staged CONTENT, not a path, so derived_from attests to shipped bytes and enrichers get no filesystem.
 type RawUnit struct {
 	NativePath string // names the derived object and is the join key
 	Content    []byte // raw pre-redaction bytes, as staged
@@ -35,8 +33,7 @@ type Input struct {
 
 // Derived is one derived object.
 type Derived struct {
-	// Becomes the mirror key; by convention <input path>.enriched.jsonl, beside its input.
-	NativePath string
+	NativePath string // the mirror key: by convention <input path>.enriched.jsonl
 
 	Payload     []byte   // pre-redaction, taking the same path as a raw file
 	DerivedFrom []string // the source hash of every raw input
@@ -45,13 +42,8 @@ type Derived struct {
 	Status     Status
 	Mismatches int // non-zero only without an object: a mismatch aborts the derived entry
 
-	// Shortfalls shipped native-only inside a StatusOK object, counted so a conversation with holes
-	// is not byte-identical to a complete one: explained store gaps, events the evidence could not
-	// decide, and mid-file transcript lines that did not decode (an alarm).
-	Repeats          int
-	Tail             int
-	Ambiguous        int
-	LineDecodeErrors int
+	// Native-only shortfalls inside a StatusOK object, counted so one with holes differs from a complete one.
+	Repeats, Tail, Ambiguous, LineDecodeErrors int
 
 	// Read provenance: the rows never ship, so this is the only account of their origin.
 	DBReadMethod string
@@ -65,15 +57,10 @@ type EnrichResult struct {
 	Version    int
 	Objects    []Derived // empty is a normal outcome
 
-	// Inputs that produced nothing, split because only Mismatched is an alarm.
-	Skipped    int
-	Mismatched int
-	Errors     int
+	Skipped, Mismatched, Errors int // inputs that produced nothing; only Mismatched is an alarm
 
-	// Notes are alarms explaining data that did not ship, Infos notes about objects that did.
-	// Never payload bytes or redacted values: diagnostics must not become a side channel.
-	Notes []string
-	Infos []string
+	// Notes explain data that did not ship, Infos objects that did; never payload bytes (no side channel).
+	Notes, Infos []string
 }
 
 // Enricher is a compiled per-source hook.
@@ -86,12 +73,10 @@ type Enricher interface {
 	Table() string
 	Keyspaces() []string
 
-	// Agent database locations in preference order, with catalog-root ~ and $VAR syntax. Compiled
-	// in, never configured: an arbitrary SQLite path is one the catalog never approved.
+	// Compiled-in agent database locations in preference order, with catalog-root ~ and $VAR syntax.
 	DBCandidates() []string
 
-	// A unit-free enricher runs on EVERY flush: its input is the agent's store, which moves on
-	// its own schedule, so an idle install would otherwise never report.
+	// A unit-free enricher runs on EVERY flush, since the store moves while an install sits idle.
 	NeedsUnits() bool
 
 	// Enrich returns a result, never an error: no enricher failure should stop a flush.
@@ -101,7 +86,6 @@ type Enricher interface {
 // Registry is the compiled set, keyed by Enricher.ID. Config can only enable or disable entries.
 type Registry map[string]Enricher
 
-// NewRegistry builds the compiled registry.
 func NewRegistry(es ...Enricher) Registry {
 	r := Registry{}
 	for _, e := range es {

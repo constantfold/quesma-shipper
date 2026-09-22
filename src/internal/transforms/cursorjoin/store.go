@@ -49,8 +49,7 @@ type bubble struct {
 	} `json:"modelInfo"`
 }
 
-// thinkingData decodes reasoning as an object, or as that object serialised into a string on
-// server-hydrated rows. A strict field would reject the whole row.
+// thinkingData decodes reasoning as an object, or as one serialised into a string on server-hydrated rows.
 type thinkingData struct {
 	Text string `json:"text"`
 }
@@ -88,8 +87,7 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// toolFormerData is the tool call as the store records it. Tool is a string in older stores, a
-// numeric enum in current.
+// toolFormerData is the tool call as the store records it; Tool is a string in older stores, an enum now.
 type toolFormerData struct {
 	ToolCallID string     `json:"toolCallId"`
 	Name       string     `json:"name"`
@@ -114,11 +112,11 @@ func indexRows(rows []sqliteread.Row) *indexed {
 	for _, r := range rows {
 		if id, ok := strings.CutPrefix(r.Key, composerPrefix); ok {
 			var c composerData
-			if err := json.Unmarshal(r.Value, &c); err != nil {
+			if json.Unmarshal(r.Value, &c) != nil {
 				ix.decodeErrors++
-				continue
+			} else {
+				ix.composers[id] = &c
 			}
-			ix.composers[id] = &c
 			continue
 		}
 		rest, ok := strings.CutPrefix(r.Key, bubblePrefix)
@@ -141,8 +139,7 @@ func indexRows(rows []sqliteread.Row) *indexed {
 	return ix
 }
 
-// orderBubbles takes fullConversationHeadersOnly, the only place the order is recorded, then the
-// inline array, then a key scan for the errored turns whose header list is empty.
+// orderBubbles takes the recorded header order, then the inline array, then a key scan (errored turns).
 func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []*bubble) []*bubble {
 	var out []*bubble
 	if c != nil {
@@ -168,8 +165,7 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []*bubbl
 	return out
 }
 
-// isScaffolding reports a bubble with no transcript counterpart by design; tool calls and reasoning
-// are always events.
+// isScaffolding reports a bubble with no transcript counterpart by design; tool calls and reasoning never are.
 func isScaffolding(b *bubble) bool {
 	if b.ToolFormerData != nil || b.reasoningText() != "" {
 		return false

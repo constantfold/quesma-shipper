@@ -78,8 +78,7 @@ type Scrubber struct {
 	keyNames  *keyNameMatcher
 	prefilter *packs.Prefilter
 
-	// Source family ("*" for all) to the field paths the heuristics skip, matched exactly: dotted,
-	// with "[]" for array elements, as in content[].image.hex.
+	// Source family ("*" for all) to exact field paths the heuristics skip, as in content[].image.hex.
 	exempt map[string]map[string]bool
 
 	// A pathological input can make a pattern backtrack for seconds without erroring.
@@ -164,16 +163,11 @@ func New(cfg Config) (*Scrubber, error) {
 	return s, nil
 }
 
-// Scrub redacts a payload. Errors are engine errors and fail closed; a line that does not parse
-// is raw-text scanned instead, which is what lets a torn tail still ship.
+// Scrub redacts a payload; errors fail closed, and a line that does not parse is raw-text scanned.
 func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	started := time.Now()
 	defer func() { s.noteCost(time.Since(started), len(payload)) }()
-	res := Result{
-		RuleHits:   map[string]int{},
-		BytesTotal: len(payload),
-		ScanMode:   ScanModeDecodedJSON,
-	}
+	res := Result{RuleHits: map[string]int{}, BytesTotal: len(payload), ScanMode: ScanModeDecodedJSON}
 	// Per-call scratch: one Scrubber serves many goroutines.
 	var scan packs.ValueScan
 	if !hint.JSONL {

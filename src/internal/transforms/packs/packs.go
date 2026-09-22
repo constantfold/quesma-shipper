@@ -25,9 +25,8 @@ const (
 
 // Span is one matched byte range.
 type Span struct {
-	Start  int
-	End    int
-	RuleID string
+	Start, End int
+	RuleID     string
 }
 
 type ruleSpec struct {
@@ -56,8 +55,7 @@ type Rule struct {
 	checksum func(string) bool
 	guard    func(value string, start, end int) bool
 
-	// At most one fast path replaces the regex sweep, each answering exactly as it would: a byte
-	// walk of its own, a slot in the shared PII walk, or an anchor on the corpus keywords.
+	// At most one exact fast path replaces the sweep: a byte walk, a shared PII walk slot, or an anchor.
 	hand   func(value string) []Span
 	fused  fusedKind
 	anchor *anchorScan
@@ -79,8 +77,7 @@ func (r *Rule) RuleID() string { return r.id }
 // Keywords are the rule's literal markers, for registering with a shared Prefilter.
 func (r *Rule) Keywords() []string { return r.keywords }
 
-// MatchScannedIn finds every occurrence in a value the caller has already scanned for keywords,
-// with scan Reset to this exact value.
+// MatchScannedIn finds every occurrence in a value already keyword-scanned, with scan Reset to it.
 func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
 	switch {
 	case r.fused != fusedNone:
@@ -98,11 +95,10 @@ func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
 func (r *Rule) checked(found []Span, value string) []Span {
 	out := found[:0]
 	for _, s := range found {
-		if !r.accepts(value, s.Start, s.End) {
-			continue
+		if r.accepts(value, s.Start, s.End) {
+			s.RuleID = r.id
+			out = append(out, s)
 		}
-		s.RuleID = r.id
-		out = append(out, s)
 	}
 	if len(out) == 0 {
 		return nil
@@ -128,9 +124,8 @@ func (r *Rule) matchSweep(value string) []Span {
 	return out
 }
 
-// matchAnchored reproduces FindAll's loop by literal search: a position with no entry literal cannot
-// start a match, so the leftmost candidate that verifies IS the leftmost match. A rejected
-// candidate moves one byte, so a nested match stays findable.
+// matchAnchored is FindAll by literal search: matches start at entry literals, so the leftmost verified
+// candidate is the leftmost match. A rejected one moves one byte, keeping nested matches.
 func (r *Rule) matchAnchored(value string) []Span {
 	s := r.anchor
 	var cursor litCursor
@@ -178,11 +173,7 @@ func (r *Rule) span(value string, loc []int) (Span, bool) {
 	return Span{Start: start, End: end, RuleID: r.id}, true
 }
 
-var checksums = map[string]func(string) bool{
-	"iban":  ibanValid,
-	"pesel": peselValid,
-	"pan":   panValid,
-}
+var checksums = map[string]func(string) bool{"iban": ibanValid, "pesel": peselValid, "pan": panValid}
 
 // A guard sees the characters around the match, for what \b cannot say.
 var guards = map[string]func(value string, start, end int) bool{
@@ -256,10 +247,7 @@ func compileSpec(spec ruleSpec) (*Rule, error) {
 
 // Available lists the packs with an embedded corpus, plus the code-only heuristic pack.
 func Available() []string {
-	entries, err := corpora.ReadDir("data")
-	if err != nil {
-		return nil
-	}
+	entries, _ := corpora.ReadDir("data") // embedded at build time, so it cannot fail
 	out := []string{GenericEntropy}
 	for _, e := range entries {
 		out = append(out, strings.TrimSuffix(e.Name(), ".json"))

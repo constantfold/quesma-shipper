@@ -1,8 +1,7 @@
 package transforms
 
-// CompiledExemptions is the compiled baseline: an entry must be an exact field path naming
-// a field that structurally cannot carry a user secret. Detector-scoped, so the pattern
-// packs still scan these fields. The copy is fresh, since callers merge served additions in.
+// CompiledExemptions lists exact field paths that structurally cannot carry a user secret. Only the
+// heuristics skip them; the copy is fresh, since callers merge served additions in.
 func CompiledExemptions() map[string][]string {
 	return map[string][]string{
 		"claude-code": {
@@ -27,8 +26,7 @@ func CompiledExemptions() map[string][]string {
 			"content[].image.hex",
 		},
 		"project-map": {
-			// Paths carrying __USER__, which ADDS entropy. Inert while the inventory is raw-text
-			// scanned, so a later jsonl sniff cannot silently expose them to the backstop.
+			// Paths carrying __USER__, which ADDS entropy; inert while raw-text scanned, ready for a jsonl sniff.
 			"cwd", "project_dir",
 		},
 		"*": {"timestamp", "version"},
