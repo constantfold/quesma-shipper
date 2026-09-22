@@ -136,24 +136,14 @@ func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string
 	for name := range md {
 		switch {
 		case name == "source-hash" || name == "ticket-id":
-			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
-				"metadata %q is derived by the server and may not be requested", name)
+			return controlplane.UploadMetadata{}, nil, fmt.Errorf("metadata %q is derived by the server and may not be requested", name)
 		case !slices.Contains(upload.MetadataNames, name):
-			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
-				"metadata %q is outside the closed request set", name)
+			return controlplane.UploadMetadata{}, nil, fmt.Errorf("metadata %q is outside the closed request set", name)
 		}
 	}
-	out := controlplane.UploadMetadata{
-		ManifestVersion: md["manifest-version"],
-		SourceID:        md["source-id"],
-		ShippedHash:     md["shipped-hash"],
-		ArtifactClass:   md["artifact-class"],
-		AgentVersion:    md["agent-version"],
-		ShapeSniff:      md["shape-sniff"],
-		Derived:         md["derived"],
-		EnrichStatus:    md["enrich-status"],
-		Kind:            md["kind"],
-	}
+	out := controlplane.UploadMetadata{ManifestVersion: md["manifest-version"], SourceID: md["source-id"],
+		ShippedHash: md["shipped-hash"], ArtifactClass: md["artifact-class"], AgentVersion: md["agent-version"],
+		ShapeSniff: md["shape-sniff"], Derived: md["derived"], EnrichStatus: md["enrich-status"], Kind: md["kind"]}
 	// The control plane accepts up to 128 bytes of printable ASCII; the sealed manifest keeps anything else.
 	v := out.AgentVersion
 	if len(v) <= 128 && !strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
@@ -220,14 +210,6 @@ func uploadTargets(eff *config.Effective) (upload.UploadTargetList, error) {
 
 // toUploadTicket copies one issued ticket into the uploader's shape.
 func toUploadTicket(t controlplane.Ticket) upload.Ticket {
-	return upload.Ticket{
-		TicketID:            t.TicketID,
-		ObjectID:            t.ObjectID,
-		Method:              t.Method,
-		URL:                 t.URL,
-		ExpiresAt:           t.ExpiresAt,
-		RequiredHeaders:     maps.Clone(t.RequiredHeaders),
-		ContentLength:       t.ContentLength,
-		ContentLengthSigned: t.ContentLengthSigned,
-	}
+	return upload.Ticket{TicketID: t.TicketID, ObjectID: t.ObjectID, Method: t.Method, URL: t.URL, ExpiresAt: t.ExpiresAt,
+		RequiredHeaders: maps.Clone(t.RequiredHeaders), ContentLength: t.ContentLength, ContentLengthSigned: t.ContentLengthSigned}
 }

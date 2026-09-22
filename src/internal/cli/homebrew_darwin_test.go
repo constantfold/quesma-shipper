@@ -40,9 +40,7 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		t.Setenv(app.NoSelfUpdateEnv, "")
 		out.Reset()
 		maybeSelfUpdate(context.Background(), build, true, &out)
-		if transport.calls == 0 || !strings.Contains(out.String(), "test update endpoint unavailable") {
-			t.Fatalf("automatic update did not reach TUF: %s", &out)
-		}
+		require.Truef(t, transport.calls != 0 && strings.Contains(out.String(), "test update endpoint unavailable"), "automatic update did not reach TUF: %s", &out)
 		execute := func(args ...string) error {
 			out.Reset()
 			cmd := Root(build, &out, &out)
@@ -50,9 +48,8 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 			return cmd.Execute()
 		}
 		transport.calls = 0
-		if err := execute("update"); err == nil || transport.calls == 0 || !strings.Contains(err.Error(), "test update endpoint unavailable") {
-			t.Fatalf("manual update did not reach TUF: %v", err)
-		}
+		require.ErrorContains(t, execute("update"), "test update endpoint unavailable", "manual update did not reach TUF")
+		require.NotZero(t, transport.calls, "manual update did not reach TUF")
 		_, paths, err := app.ResolveEffective()
 		require.NoError(t, err)
 		require.NoError(t, os.MkdirAll(paths.StateDir, 0o700))
@@ -60,16 +57,13 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		require.NoError(t, os.WriteFile(marker, []byte("state"), 0o600))
 		for _, args := range [][]string{{"uninstall"}, {"uninstall", "--purge"}} {
 			purge := len(args) > 1
-			if err := execute(args...); err == nil || !strings.Contains(err.Error(), "uninstall asks first") || !strings.Contains(out.String(), "Homebrew command") {
-				t.Fatalf("uninstall confirmation: %v, %s", err, &out)
-			}
+			require.ErrorContains(t, execute(args...), "uninstall asks first")
+			require.Contains(t, out.String(), "Homebrew command")
 			require.FileExists(t, marker, "state changed before confirmation")
-			if err := execute(append(args, "--yes")...); err != nil || !strings.Contains(out.String(), packaging.BrewUninstall) {
-				t.Fatalf("uninstall --yes: %v, %s", err, &out)
-			}
-			if _, err := os.Stat(marker); (!purge && err != nil) || (purge && !os.IsNotExist(err)) {
-				t.Fatalf("state after purge=%v: %v", purge, err)
-			}
+			require.NoError(t, execute(append(args, "--yes")...))
+			require.Contains(t, out.String(), packaging.BrewUninstall)
+			_, err := os.Stat(marker)
+			require.Truef(t, (purge && os.IsNotExist(err)) || (!purge && err == nil), "state after purge=%v: %v", purge, err)
 		}
 		return
 	}

@@ -86,18 +86,10 @@ func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine
 	t.Helper()
 	o := f.opts()
 	o.Sources = []sources.Resolved{{
-		Source: sources.Source{
-			ID:            "cursor-transcripts",
-			Family:        "cursor",
-			Gather:        "file_glob",
-			ArtifactClass: "trajectory",
-			Include:       []string{"**/agent-transcripts/**/*.jsonl"},
-			Enrichers:     map[string]bool{"cursor-transcript-join": enricherOn},
-			Sniff:         &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536},
-		},
-		Root:            filepath.Join(f.home, ".cursor", "projects"),
-		Enabled:         true,
-		SpecFingerprint: strings.Repeat("c", 64),
+		Source: sources.Source{ID: "cursor-transcripts", Family: "cursor", Gather: "file_glob", ArtifactClass: "trajectory",
+			Include: []string{"**/agent-transcripts/**/*.jsonl"}, Sniff: &sources.Sniff{Kind: "jsonl", MaxScanBytes: 65536},
+			Enrichers: map[string]bool{"cursor-transcript-join": enricherOn}},
+		Root: filepath.Join(f.home, ".cursor", "projects"), Enabled: true, SpecFingerprint: strings.Repeat("c", 64),
 	}}
 	o.Enrichers = transforms.NewRegistry(&fixtureEnricher{Enricher: cursorjoin.New(), db: dbPath})
 	env, err := sources.OSEnv()

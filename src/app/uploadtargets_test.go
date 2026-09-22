@@ -40,24 +40,13 @@ func TestUploadTargetsRefusesTheWholeListOnOneBadEntry(t *testing.T) {
 
 // A converted ticket must pass the real validator, not merely compare equal.
 func TestToUploadTicketFeedsValidation(t *testing.T) {
-	target, err := upload.NewUploadTarget(upload.TargetSpec{
-		Origin:     "https://acme.s3.example.com",
-		Addressing: upload.VirtualHosted,
-	})
+	target, err := upload.NewUploadTarget(upload.TargetSpec{Origin: "https://acme.s3.example.com", Addressing: upload.VirtualHosted})
 	require.NoErrorf(t, err, "target: %v", err)
-	prepared := upload.PreparedUpload{
-		ObjectID:   "01J0000000000000000000000A",
-		Key:        "organization=acme/source=claude-code/object.age",
-		Body:       []byte("sealed"),
-		SourceHash: "sha256:abc",
-		Metadata:   map[string]string{"manifest-version": "3", "artifact-class": "trajectory", "kind": "mirror"},
-	}
-	issued := controlplane.Ticket{
-		TicketID:  "ticket-1",
-		ObjectID:  prepared.ObjectID,
-		Method:    "PUT",
-		URL:       "https://acme.s3.example.com/organization%3Dacme/source%3Dclaude-code/object.age?X-Amz-Signature=deadbeef",
-		ExpiresAt: time.Unix(1750000000, 0).UTC(),
+	prepared := upload.PreparedUpload{ObjectID: "01J0000000000000000000000A", Key: "organization=acme/source=claude-code/object.age",
+		Body: []byte("sealed"), SourceHash: "sha256:abc",
+		Metadata: map[string]string{"manifest-version": "3", "artifact-class": "trajectory", "kind": "mirror"}}
+	issued := controlplane.Ticket{TicketID: "ticket-1", ObjectID: prepared.ObjectID, Method: "PUT", ExpiresAt: time.Unix(1750000000, 0).UTC(),
+		URL: "https://acme.s3.example.com/organization%3Dacme/source%3Dclaude-code/object.age?X-Amz-Signature=deadbeef",
 		RequiredHeaders: controlplane.TicketHeaders{
 			"x-amz-meta-source-hash":      prepared.SourceHash,
 			"x-amz-meta-ticket-id":        "ticket-1",
@@ -66,8 +55,7 @@ func TestToUploadTicketFeedsValidation(t *testing.T) {
 			"x-amz-meta-kind":             "mirror",
 			"x-amz-tagging":               "class=trajectory",
 		},
-		ContentLength:       int64(len(prepared.Body)),
-		ContentLengthSigned: true,
+		ContentLength: int64(len(prepared.Body)), ContentLengthSigned: true,
 	}
 
 	ticket := toUploadTicket(issued)
