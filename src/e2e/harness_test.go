@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/internal/cli"
@@ -163,56 +165,39 @@ func (s *fakeStore) stored() []storedPut {
 	return append([]storedPut(nil), s.puts...)
 }
 
+func (s *fakeStore) storedWhere(keep func(key string) bool) []storedPut {
+	return slices.DeleteFunc(s.stored(), func(p storedPut) bool { return !keep(p.Key) })
+}
+
 // mirrorPuts are the trajectory objects, dropping the heartbeat every run writes.
 func (s *fakeStore) mirrorPuts() []storedPut {
-	var out []storedPut
-	for _, p := range s.stored() {
-		if strings.Contains(p.Key, "/mirror/") {
-			out = append(out, p)
-		}
-	}
-	return out
+	return s.storedWhere(func(key string) bool { return strings.Contains(key, "/mirror/") })
 }
 
 func (s *fakeStore) heartbeats() []storedPut {
-	var out []storedPut
-	for _, p := range s.stored() {
-		if strings.HasSuffix(p.Key, heartbeatKey) {
-			out = append(out, p)
-		}
-	}
-	return out
+	return s.storedWhere(func(key string) bool { return strings.HasSuffix(key, heartbeatKey) })
 }
 
 // The source hash the newest version under a key was stored with: what a real plane's HEAD reads
 // back, and the only thing that tells "already holds these bytes" from "holds older ones".
 func (s *fakeStore) sourceHash(key string) (string, bool) {
-	hash, held := "", false
-	for _, p := range s.stored() {
-		if p.Key == key {
-			hash, held = p.Headers["x-amz-meta-source-hash"], true
-		}
+	puts := s.storedWhere(func(k string) bool { return k == key })
+	if len(puts) == 0 {
+		return "", false
 	}
-	return hash, held
+	return puts[len(puts)-1].Headers["x-amz-meta-source-hash"], true
 }
 
 // The write count under one key, which is the only thing making "the same file shipped twice"
 // observable: the newest version alone cannot tell the two cases apart.
 func (s *fakeStore) versions(key string) int {
-	n := 0
-	for _, p := range s.stored() {
-		if p.Key == key {
-			n++
-		}
-	}
-	return n
+	return len(s.storedWhere(func(k string) bool { return k == key }))
 }
 
 // --- the fake control plane ---------------------------------------------------
 
 type authorizeRequest struct {
-	WriterID string    `json:"writer_id"`
-	IssuedAt time.Time `json:"issued_at"`
+	WriterID string `json:"writer_id"`
 	Objects  []struct {
 		ObjectID   string            `json:"object_id"`
 		Key        string            `json:"key"`
@@ -261,10 +246,10 @@ func startFakePlane(t *testing.T, store *fakeStore, pub ed25519.PublicKey) *fake
 	return p
 }
 
-func (p *fakePlane) setStatus(status int) {
+func (p *fakePlane) set(change func(p *fakePlane)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.status = status
+	change(p)
 }
 
 func (p *fakePlane) serve(w http.ResponseWriter, r *http.Request) {
@@ -326,10 +311,15 @@ func (p *fakePlane) serve(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		// The server-derived tag: the client cannot request one, so it comes from the key's container.
+		tagging := "class=context"
+		if strings.Contains(obj.Key, "/mirror/") {
+			tagging = "class=trajectory"
+		}
 		headers := map[string]string{
 			"x-amz-meta-source-hash": obj.SourceHash,
 			"x-amz-meta-ticket-id":   ticketID,
-			"x-amz-tagging":          taggingFor(obj.Key),
+			"x-amz-tagging":          tagging,
 		}
 		for name, value := range obj.Metadata {
 			headers["x-amz-meta-"+name] = value
@@ -442,14 +432,6 @@ func (p *fakePlane) assertOneWriter(t *testing.T) {
 	}
 }
 
-// The server-derived tag: the client cannot request one, so it comes from the key's container.
-func taggingFor(key string) string {
-	if strings.Contains(key, "/mirror/") {
-		return "class=trajectory"
-	}
-	return "class=context"
-}
-
 // The server's escaped spelling of an object key, written out rather than imported: the exact-key
 // check is only meaningful when the two sides derive it independently.
 func canonicalKeyPath(key string) string {
@@ -474,7 +456,7 @@ func canonicalKeyPath(key string) string {
 
 // stageWorld points the client at the machine through the environment, not flags, because the
 // catalog resolves its roots through HOME. It is the enrolled shape, the only one that can upload.
-func stageWorld(t *testing.T, opts ...func(*world)) *world {
+func stageWorld(t *testing.T) *world {
 	t.Helper()
 	w := stageBareWorld(t)
 	seedIdentity(t, w)
@@ -488,9 +470,6 @@ func stageWorld(t *testing.T, opts ...func(*world)) *world {
 	seedEnrollment(t, w, w.plane.server.URL, priv)
 
 	writeConfig(t, w, "")
-	for _, opt := range opts {
-		opt(w)
-	}
 	return w
 }
 
@@ -542,17 +521,9 @@ func seedIdentity(t *testing.T, w *world) {
 		"name_key":        testNameKey,
 		"created_at":      fixtureMTime.Format(time.RFC3339),
 	}
-	raw, err := json.Marshal(unit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 0600: Load refuses a unit any wider, and that refusal is exercised here on purpose.
-	if err := os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeJSON(t, filepath.Join(dir, "identity.json"), unit)
 }
 
-// 0600, because LoadEnrollment refuses anything wider and the file holds a private signing key.
 func seedEnrollment(t *testing.T, w *world, endpoint string, deviceKey ed25519.PrivateKey) {
 	t.Helper()
 	record := map[string]any{
@@ -563,14 +534,15 @@ func seedEnrollment(t *testing.T, w *world, endpoint string, deviceKey ed25519.P
 		"device_key":        base64.StdEncoding.EncodeToString(deviceKey),
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
 	}
-	raw, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(w.State, "trajectory-shipper", "enrollment.json")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeJSON(t, filepath.Join(w.State, "trajectory-shipper", "enrollment.json"), record)
+}
+
+// 0600: the client refuses identity and enrollment files any wider.
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(v, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
 }
 
 // writeConfig writes the client's own config; extra is appended verbatim, which is how a test says
@@ -602,27 +574,14 @@ func writeConfig(t *testing.T, w *world, extra string) {
 	}
 }
 
-// The install that enrolled and never configured upload_targets, running unpinned: tickets decide
-// the destination, https only.
-func writeConfigWithoutUploadTargets(t *testing.T, w *world) {
-	t.Helper()
-	dir := filepath.Join(w.Config, "trajectory-shipper")
-	body := "config_version: 1\nmax_files_per_run: 10000\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // run executes one command through the real command tree and returns its output.
 func run(t *testing.T, args ...string) string {
 	t.Helper()
-	var out bytes.Buffer
-	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
-	root.SetArgs(args)
-	if err := root.Execute(); err != nil {
-		t.Fatalf("shipper %s: %v\n%s", strings.Join(args, " "), err, out.String())
+	out, err := execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("shipper %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return out.String()
+	return out
 }
 
 func runOneShot(t *testing.T, flags ...string) string {
@@ -633,27 +592,22 @@ func runOneShot(t *testing.T, flags ...string) string {
 // runExpectingFailure is for the paths whose whole point is a non-zero exit.
 func runExpectingFailure(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	var out bytes.Buffer
-	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
-	root.SetArgs(args)
-	err := root.Execute()
-	return out.String(), err
+	return execute(context.Background(), args)
 }
 
 func runUntilCancelled(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	return execute(ctx, args)
+}
+
+func execute(ctx context.Context, args []string) (string, error) {
 	var out bytes.Buffer
 	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
 	root.SetArgs(args)
 	err := root.ExecuteContext(ctx)
 	return out.String(), err
-}
-
-func runOneShotExpectingFailure(t *testing.T, flags ...string) (string, error) {
-	t.Helper()
-	return runExpectingFailure(t, append([]string{"run", "--once"}, flags...)...)
 }
 
 // summary parses the run's own counters ("shipped 4 unchanged 0 ..."). Never count objects in the
@@ -723,14 +677,10 @@ func shippedFromLog(t *testing.T, w *world) []string {
 	return shippedSources(strings.Join(runLogLines(t, w), "\n"))
 }
 
-func countOf(list []string, want string) int {
-	n := 0
-	for _, v := range list {
-		if v == want {
-			n++
-		}
-	}
-	return n
+// How many Claude transcripts the last run shipped, by its log.
+func shippedClaude(t *testing.T, w *world) int {
+	t.Helper()
+	return len(slices.DeleteFunc(shippedFromLog(t, w), func(id string) bool { return id != claudeSource }))
 }
 
 // collect opens the current version of every object, sorted by key; the write history behind it is
@@ -786,15 +736,10 @@ func stageFile(t *testing.T, w *world, rel, content string) string {
 	if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	touch(t, full)
-	return full
-}
-
-func touch(t *testing.T, path string) {
-	t.Helper()
-	if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
+	if err := os.Chtimes(full, fixtureMTime, fixtureMTime); err != nil {
 		t.Fatal(err)
 	}
+	return full
 }
 
 func appendLine(t *testing.T, path, line string) {
@@ -846,5 +791,3 @@ func cursorStatePath() string {
 	}
 	return ".config/" + cursorStateDB
 }
-
-func ensureDir(path string) error { return os.MkdirAll(path, 0o700) }
