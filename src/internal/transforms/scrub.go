@@ -31,8 +31,7 @@ type Result struct {
 	ScanMode      string
 }
 
-// Density is bytes redacted over bytes total, recorded per object so downstream can drop
-// shredded objects and a density jump names the rule that went haywire.
+// Density is recorded per object so downstream can drop shredded objects and spot a haywire rule.
 func (r Result) Density() float64 {
 	if r.BytesTotal == 0 {
 		return 0
@@ -118,8 +117,7 @@ type gatedPattern struct {
 	gate packs.Gate
 }
 
-// New compiles a Scrubber. A pack named in config but absent from the corpus is an error:
-// running with fewer rules than configured must not be reachable by omission.
+// New compiles a Scrubber. A configured pack with no corpus is an error, never fewer rules.
 func New(cfg Config) (*Scrubber, error) {
 	// Rejected rather than clamped: the scanner would read a negative floor as "every run".
 	if cfg.Entropy.MinLength < 0 {

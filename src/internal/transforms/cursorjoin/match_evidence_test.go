@@ -5,8 +5,7 @@ import "testing"
 // How a tool block's arguments pick its bubble when store and transcript order disagree.
 func TestArgumentEvidence(t *testing.T) {
 	runJoinCases(t, []joinCase{{
-		// Two agreeing values do not outvote a third that disagrees: under a two-of-three rule these
-		// searches, differing only in pattern, swapped ids, statuses and results with no alarm.
+		// Two agreeing values do not outvote a third: under two-of-three these searches swapped results.
 		name:       "calls sharing all but one argument do not swap",
 		query:      "check the goldens",
 		transcript: `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"ParseManifest|writeManifest","path":"/work/api/handlers","glob":"*.golden"}},{"type":"tool_use","name":"Grep","input":{"pattern":"VerifyPayload|checkPayload","path":"/work/api/handlers","glob":"*.golden"}}]}}`,
@@ -16,8 +15,7 @@ func TestArgumentEvidence(t *testing.T) {
 		},
 		want: map[int][]string{1: {"ga", "gb"}},
 	}, {
-		// A value too long to be a coincidence outranks a bubble with nothing recorded: first-neutral
-		// selection shipped an errored orphan's status on a successful call.
+		// A value too long to be a coincidence outranks a bubble with nothing recorded.
 		name:       "a partially agreeing own bubble outranks an evidence-free orphan",
 		query:      "check types",
 		transcript: `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Task","input":{"prompt":"Run npx tsc --noEmit in the repo and report every error.","subagent_type":"general-purpose"}}]}}`,
@@ -28,8 +26,7 @@ func TestArgumentEvidence(t *testing.T) {
 		},
 		want: map[int][]string{1: {"task"}},
 	}, {
-		// A value shorter than minArgLen cannot confirm identity but can deny it: with three-character
-		// patterns invisible, the shared path alone certified a swap.
+		// A value shorter than minArgLen cannot confirm identity but can deny it.
 		name:  "a short distinguishing argument separates two calls",
 		query: "sweep the api",
 		transcript: `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"err","path":"/work/api"}}]}}
@@ -60,8 +57,7 @@ func TestArgumentEvidence(t *testing.T) {
 		},
 		want: map[int][]string{1: {"e1", "e2"}},
 	}, {
-		// Of two fully agreeing bubbles the one agreeing on more is the call: first-positive-wins handed
-		// a search to a bare-string terminal record that merely quoted its path.
+		// Of two fully agreeing bubbles, the one agreeing on more is the call.
 		name:       "the stronger of two agreeing bubbles wins",
 		query:      "find the decompression bound",
 		transcript: `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"maxDecompressedBytes|decompressLimitCeiling","path":"/work/api/internal/backends/s3/multipart"}}]}}`,

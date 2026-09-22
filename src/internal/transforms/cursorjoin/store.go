@@ -1,6 +1,5 @@
-// store.go is the store side of the join: the vendor row shapes in the two generations a live
-// state.vscdb holds, and the indexing and ordering that turn rows into a conversation's event
-// list. Every struct decodes only what the join reads: rows reach megabytes, and no rows ship.
+// store.go decodes the vendor row shapes of both generations a live state.vscdb holds into each
+// conversation's event list. Structs decode only what the join reads: rows reach megabytes.
 
 package cursorjoin
 
@@ -79,8 +78,7 @@ func (b *bubble) reasoningText() string {
 	return ""
 }
 
-// flexString decodes any JSON value as a string, keeping a non-string's raw JSON text: the store
-// migrated several fields to numeric enums, and a strict field rejects the whole row.
+// flexString keeps a non-string's raw JSON text: the store migrated fields to numeric enums.
 type flexString string
 
 func (f *flexString) UnmarshalJSON(b []byte) error {
@@ -170,8 +168,8 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []*bubbl
 	return out
 }
 
-// isScaffolding reports whether a bubble has no transcript counterpart by design. A tool call or
-// reasoning bubble is an event whatever else it is flagged with; an unmentioned one goes unconsumed.
+// isScaffolding reports a bubble with no transcript counterpart by design; tool calls and reasoning
+// are always events.
 func isScaffolding(b *bubble) bool {
 	if b.ToolFormerData != nil || b.reasoningText() != "" {
 		return false

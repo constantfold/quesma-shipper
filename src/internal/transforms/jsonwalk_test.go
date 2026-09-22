@@ -28,8 +28,7 @@ func TestJSONTextAcceptanceMatchesEncodingJSON(t *testing.T) {
 	}
 }
 
-// Only a string that changed is requoted; every other byte of the line, escapes and
-// whitespace included, ships as it came. A changed string is re-encoded minimally.
+// Only a changed string is requoted, minimally; every other byte, escapes included, ships as it came.
 func TestSourcePatchingRequotesOnlyDirtyStrings(t *testing.T) {
 	s := newScrubber(t)
 	for _, tc := range []struct{ name, before, want string }{

@@ -11,8 +11,7 @@ import (
 
 const recipientsVectorPath = "../../conformance/v1/seal/recipients.json"
 
-// recipientsVector is the multi-recipient contract. age is nondeterministic by design, so there
-// are no fixed bytes and every field is asserted behaviorally against the real Seal/Open.
+// recipientsVector is the multi-recipient contract; age is nondeterministic, so it is asserted behaviorally.
 type recipientsVector struct {
 	VectorSet                 string `json:"vector_set"`
 	VectorVersion             int    `json:"vector_version"`
@@ -35,8 +34,7 @@ func TestConformanceRecipients(t *testing.T) {
 	obj, _, err := Seal(manifest(), payload, recipients)
 	require.NoError(t, err)
 
-	// key_id_order: the manifest records the set in seal argument order, so an auditor sees exactly
-	// what the seal was told.
+	// key_id_order: the manifest records the set in seal argument order.
 	m, _, err := Open(obj, install)
 	require.NoError(t, err)
 	if v.Scheme != "age" || m.Encryption == nil || m.Encryption.Scheme != v.Scheme {
@@ -45,8 +43,7 @@ func TestConformanceRecipients(t *testing.T) {
 	wantIDs := []string{install.Recipient().String(), org.Recipient().String(), escrow.Recipient().String()}
 	assert.Truef(t, slices.Equal(m.Encryption.RecipientKeyIDs, wantIDs), "recipient_key_ids:\n got %v\nwant %v (seal argument order)", m.Encryption.RecipientKeyIDs, wantIDs)
 
-	// any_single_identity_suffices: the org reader and the escrow key each open the object alone,
-	// which is what makes the ETL keyring work without any install's key.
+	// any_single_identity_suffices: the org reader and the escrow key each open the object alone.
 	require.True(t, v.AnySingleIdentitySuffices, "the vector must claim any-single-identity: age's envelope construction guarantees it")
 	for name, id := range map[string]*age.X25519Identity{"org": org, "escrow": escrow} {
 		if _, got, err := Open(obj, id); err != nil {

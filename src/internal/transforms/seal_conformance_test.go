@@ -18,10 +18,8 @@ import (
 
 const vectorPath = "../../conformance/v1/seal/container.json"
 
-// containerVectors fixes the tar layer, which is deterministic and holds the contract that
-// matters: entry order, entry names, normalised headers. zstd output moves with the encoder
-// version and age is nondeterministic by design, so whole-object bytes are covered by round-trip
-// and opacity tests instead.
+// containerVectors fix the tar layer: entry order, names, normalised headers. zstd output moves
+// with the encoder and age is nondeterministic, so round-trip tests cover the whole object.
 type containerVectors struct {
 	VectorSet     string          `json:"vector_set"`
 	VectorVersion int             `json:"vector_version"`
@@ -90,8 +88,7 @@ func tarBytesFor(t *testing.T, manifestJSON, payload []byte) []byte {
 	tarred, err := io.ReadAll(zr)
 	require.NoError(t, err)
 
-	// Recipient key IDs differ per run, so rebuild the tar with them blanked, which is what the
-	// vector records.
+	// Recipient key IDs differ per run; the vector records the tar with them removed.
 	return normalizeTar(t, tarred)
 }
 

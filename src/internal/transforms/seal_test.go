@@ -113,8 +113,7 @@ func TestSealValidatesTheManifestAgainstItsSchema(t *testing.T) {
 	}
 }
 
-// An object whose payload was altered after sealing must not open: the manifest describes
-// bytes, so it has to describe THESE bytes.
+// An object whose payload was altered after sealing must not open.
 func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	id := identity(t)
 	m := manifest()
@@ -128,8 +127,7 @@ func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "does not match manifest shipped_hash")
 }
 
-// Plaintext object metadata carries the hashes and versions a listing-side consumer dedupes
-// on, and never the path.
+// Plaintext object metadata carries what a HEAD-side consumer dedupes on, and never the path.
 func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 	m := manifest()
 	m.NativePath = "/Users/jane/.claude/projects/-Users-jane-work-secret-project/s.jsonl"
@@ -148,8 +146,7 @@ func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 	}
 }
 
-// A derived object's explained shortfalls reach the manifest and survive a round trip; a
-// complete object's manifest bytes do not change because the counters exist.
+// Explained enrich shortfalls survive a round trip, and a complete object's manifest omits them.
 func TestTheManifestCarriesExplainedEnrichShortfalls(t *testing.T) {
 	m := manifest()
 	m.ShippedHash = strings.Repeat("b", 64)

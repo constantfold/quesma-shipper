@@ -28,8 +28,8 @@ func scrubJSONL(t *testing.T, s *Scrubber, family, payload string) Result {
 	return res
 }
 
-// Each secret travels in tool output, the way it reaches a transcript, and none of its leaks
-// may survive. rule is the rule that must claim a hit, empty where overlapping rules make it ambiguous.
+// Each secret travels in tool output, the way it reaches a transcript; rule must claim a hit unless
+// overlapping rules make it ambiguous.
 func TestLeaksAreRedacted(t *testing.T) {
 	s := newScrubber(t)
 	type leak struct {
@@ -72,8 +72,7 @@ func TestLeaksAreRedacted(t *testing.T) {
 		key("stripe webhook secret", "whsec_abcdefghijklmnopqrstuvwxyzABCDEF", "stripe-webhook-secret"),
 		key("atlassian api token", "ATATT3"+strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 3), "atlassian-api-token"),
 		key("azure ad client secret", "abc8Q~dEfGhIjKlMnOpQrStUvWxYz0123456789~", "azure-ad-client-secret"),
-		// The aws CLI labels the secret "SecretAccessKey" with no "aws" near it, inside JSON-in-string
-		// where key-name scrubbing cannot see the field. No fragment may survive around a "/".
+		// The aws CLI labels it "SecretAccessKey" inside JSON-in-string, where key-name cannot see it.
 		{"aws cli create-access-key output", `{\"AccessKey\": {\"UserName\": \"ingest\", \"AccessKeyId\": \"` + awsKeyID + `\", \"SecretAccessKey\": \"` + awsSecret + `\", \"Status\": \"Active\"}}`, []string{awsSecret, "wJalrXUtnFEMI", awsKeyID}, "secret-access-key", ""},
 		{"aws yaml-style label", "SecretAccessKey: " + awsSecret, []string{awsSecret, "wJalrXUtnFEMI"}, "secret-access-key", ""},
 		{"aws env-style label", "aws_secret_access_key = " + awsSecret, []string{awsSecret, "wJalrXUtnFEMI"}, "aws-secret-key", ""},
@@ -82,8 +81,7 @@ func TestLeaksAreRedacted(t *testing.T) {
 		{"bearer token with slashes", "curl -H 'Authorization: Bearer x7Jq/2mVp+Rw9sTk/EXAMPLE='", []string{"x7Jq/2mVp+Rw9sTk/EXAMPLE="}, "", ""},
 		// A PEM block spans lines inside one JSON string, the shape a regex over raw bytes mangles.
 		{"private key block", "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA3x2n\\n-----END RSA PRIVATE KEY-----", []string{"MIIEowIBAAKCAQEA3x2n"}, "private-key-block", ""},
-		// A recorded over-redaction, left alone deliberately: url-userinfo and email overlap and the
-		// wider span wins, taking the hostname too. Preferring the narrower risks a secret's tail.
+		// A deliberate over-redaction: url-userinfo and email overlap, and the wider span takes the host.
 		{"postgres url", "psql postgres://app:hunter2@db.internal:5432/prod", []string{"hunter2", "db.internal"}, "", ""},
 		env("AWS_SECRET_ACCESS_KEY", "=", "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"),
 		env("DATABASE_URL", "=", "postgres://app:hunter2@db.internal:5432/prod"),
@@ -106,8 +104,7 @@ func TestLeaksAreRedacted(t *testing.T) {
 	}
 }
 
-// A planted secret in EVERY structurally exempt field is still caught: exemptions are
-// detector-scoped, and the pattern packs scan every field regardless.
+// A planted secret in EVERY exempt field is still caught: exemptions scope only the heuristics.
 func TestPlantedSecretInEveryExemptFieldIsStillCaught(t *testing.T) {
 	s := newScrubber(t)
 	const planted = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
@@ -166,9 +163,8 @@ func TestDeclaredOpaqueBinaryPayloadSurvivesTheEntropyBackstop(t *testing.T) {
 	assert.NotContains(t, string(res2.Out), imageHex, "a high-entropy blob in an undeclared field should hit the backstop")
 }
 
-// path_user is a rewriter, not a detector, so it runs on exempt fields too. The mixed-case slug
-// is one long entropy candidate at 4.35 bits/char that heuristics see BEFORE path-user rewrites
-// it; it survives only because the matcher skips candidates carrying the username.
+// path_user runs on exempt fields too. The slug is an entropy candidate at 4.35 bits/char that
+// survives only because the matcher skips candidates carrying the username.
 func TestPathUserRewritesEverywhereIncludingExemptFields(t *testing.T) {
 	s := newScrubber(t)
 	line := `{"type":"user","uuid":"u1","cwd":"/Users/jane/work/api","timestamp":"/Users/jane/x","message":{"content":[` +
@@ -243,8 +239,7 @@ func TestUnknownPackIsAnError(t *testing.T) {
 	require.Error(t, newErr, "an unknown rule pack must be refused at compile time")
 }
 
-// buildRecordWithValueAt plants a value at a dotted path ("[]" meaning an array element),
-// so the fixture can hit exactly the path an exemption names.
+// buildRecordWithValueAt plants a value at exactly the path an exemption names.
 func buildRecordWithValueAt(t *testing.T, path, value string) string {
 	t.Helper()
 
@@ -263,8 +258,7 @@ func buildRecordWithValueAt(t *testing.T, path, value string) string {
 	return string(raw)
 }
 
-// The compiled default must protect the identifier spine on its own: exemptions once arrived
-// only through config resolution, so DefaultConfig() silently redacted the subagent join ids.
+// The compiled default protects the identifier spine on its own, not only through config resolution.
 func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
 	s, err := New(DefaultConfig())
 	require.NoError(t, err)
@@ -328,8 +322,7 @@ func TestConfiguredKeyNamesRedact(t *testing.T) {
 	}
 }
 
-// A negative floor is refused: `{-3,}` compiles as literal text ("never fires") while the
-// candidate scanner reads it as "every run fires", and neither is what someone typing it means.
+// A negative floor is refused: the candidate scanner would read it as "every run fires".
 func TestNegativeEntropyMinLengthFailsTheBuild(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Entropy.MinLength = -3
@@ -345,10 +338,8 @@ func TestNegativeEntropyMinLengthFailsTheBuild(t *testing.T) {
 	assert.NoErrorf(t, newErr, "min_length 0 must still compile, got %v", newErr)
 }
 
-// The accepted residual of the path-entropy fix: a bare, UNLABELED std-base64 secret containing "/"
-// splits at the slashes into segments under MinLength. Labeled arrivals of the same shape
-// are still caught (TestLeaksAreRedacted), as are slash-free bare
-// secrets over MinLength.
+// The accepted residual of the path-entropy fix: a bare, UNLABELED std-base64 secret splits at its
+// slashes into runs under MinLength. Labeled ones are still caught (TestLeaksAreRedacted).
 func TestBareBase64WithSlashIsAKnownEscape(t *testing.T) {
 	s := newScrubber(t)
 

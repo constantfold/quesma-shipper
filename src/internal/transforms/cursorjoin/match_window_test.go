@@ -40,8 +40,7 @@ func TestMatchWindows(t *testing.T) {
 			},
 			want: map[int][]string{1: {"a1", "task1"}},
 		}, {
-			// An argument-less call never grades positive, so behind the cursor the nearest
-			// name-compatible bubble is the last resort.
+			// An argument-less call never grades positive: the nearest name-compatible bubble is the last resort.
 			name:       "a terminal bubble left behind the cursor is still found",
 			query:      "what changed",
 			transcript: turn(use("Read", read), use("Shell", `{"command":"git status --short"}`)),

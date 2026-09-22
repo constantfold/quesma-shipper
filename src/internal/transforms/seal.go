@@ -14,8 +14,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Entry names inside the container are fixed: the payload's real name is a path, and a path
-// belongs in the manifest only.
+// Fixed entry names: the payload's real name is a path, which belongs in the manifest only.
 const (
 	ManifestEntry = "manifest.json"
 	PayloadEntry  = "payload"
@@ -24,8 +23,7 @@ const (
 // ZstdLevel stays at 3: changing it changes every object's bytes.
 const ZstdLevel = 3
 
-// Bounds on hostile input: a huge manifest is not one this code wrote, and a crafted object
-// must not exhaust memory through zstd expansion.
+// Bounds on hostile input, which must not exhaust memory through zstd expansion.
 const (
 	maxManifestBytes     = 4 << 20
 	maxDecompressedBytes = 8 << 30
@@ -63,8 +61,7 @@ func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manif
 	return obj, m, nil
 }
 
-// writeContainer streams all three layers into one pre-sized buffer, with no payload-sized
-// staging copy between them.
+// writeContainer streams all three layers into one pre-sized buffer, with no staging copy.
 func writeContainer(manifestJSON, payload []byte, payloadMTime *time.Time, recipients []age.Recipient) ([]byte, error) {
 	out := bytes.NewBuffer(make([]byte, 0, ciphertextHint(len(manifestJSON), len(payload), len(recipients))))
 	ageWriter, err := age.Encrypt(out, recipients...)

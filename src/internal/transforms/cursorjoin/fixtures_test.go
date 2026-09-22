@@ -161,8 +161,8 @@ func successfulObject(t *testing.T, res transforms.EnrichResult) transforms.Deri
 	return res.Objects[0]
 }
 
-// joinCase is one conversation through the enricher. A query prepends that user turn to the
-// transcript and its bubble b1 to the bubbles; rows, when set, replace conversation(bubbles).
+// joinCase is one conversation. A query prepends that user turn and its bubble b1; rows replace
+// conversation(bubbles) when set.
 type joinCase struct {
 	name       string
 	query      string

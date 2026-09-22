@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// Adversarial coverage for every quesma-extra rule: true tokens the rule must redact as
-// one exact span, and near-misses (length off by one, wrong charset or case, glued
-// prefix, missing delimiter) it must leave alone, so a widened or narrowed regex fails loud.
+// Every quesma-extra rule redacts its true tokens as one exact span and leaves near-misses alone
+// (length off by one, wrong charset or case, glued prefix), so a widened or narrowed regex fails.
 func TestQuesmaExtraAdversarial(t *testing.T) {
 	rep := func(alphabet string, n int) string {
 		return strings.Repeat(alphabet, n/len(alphabet)+1)[:n]
@@ -78,11 +77,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("fo1_" + alnum(42)),
 			not("fm3_" + alnum(100)),
 		},
-		"planetscale-token": {
-			tok("pscale_tkn_" + alnum(43)),
-			tok("pscale_pw_" + alnum(43)),
-			not("pscale_tkn_" + alnum(31)),
-		},
+		"planetscale-token":  {tok("pscale_tkn_" + alnum(43)), tok("pscale_pw_" + alnum(43)), not("pscale_tkn_" + alnum(31))},
 		"pulumi-api-token":   {tok("pul-" + hexs(40)), not("pul-" + strings.ToUpper(hexs(40)))},
 		"rubygems-api-token": {tok("rubygems_" + hexs(48)), not("rubygems_" + hexs(47))},
 		"hashicorp-tf-api-token": {
@@ -90,12 +85,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not(alnum(13) + ".atlasv1." + alnum(64)),
 			not(alnum(14) + ".atlasv2." + alnum(64)),
 		},
-		"vault-token": {
-			tok("hvs." + alnum(95)),
-			tok("hvb." + alnum(150)),
-			not("hvs." + alnum(23)),
-			not("hvx." + alnum(95)),
-		},
+		"vault-token": {tok("hvs." + alnum(95)), tok("hvb." + alnum(150)), not("hvs." + alnum(23)), not("hvx." + alnum(95))},
 		"azure-ad-client-secret": {
 			{in: "password: abc8Q~" + azTail + " end", want: "abc8Q~" + azTail},
 			{in: "PWD=abc8Q~" + azTail + ";Encrypt=yes", want: "abc8Q~" + azTail},
@@ -109,11 +99,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			not("AGE-SECRET-KEY-1" + bech(57)),
 			not("age-secret-key-1" + strings.ToLower(bech(58))),
 		},
-		"sentry-token": {
-			tok("sntryu_" + hexs(64)),
-			tok("sntrys_" + alnum(120)),
-			not("sntryz_" + hexs(64)),
-		},
+		"sentry-token":                    {tok("sntryu_" + hexs(64)), tok("sntrys_" + alnum(120)), not("sntryz_" + hexs(64))},
 		"1password-service-account-token": {tok("ops_eyJ" + alnum(220) + "="), not("ops_eyJ" + alnum(150))},
 		"langsmith-api-key": {
 			tok("lsv2_pt_" + hexs(32) + "_" + hexs(10)),
@@ -157,11 +143,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 		"groq-api-key":        {tok("gsk_" + alnum(52)), not("gsk_" + alnum(51))},
 		"xai-api-key":         {tok("xai-" + alnum(80)), not("xai-" + alnum(79))},
 		"replicate-api-token": {tok("r8_" + alnum(37)), tok("r8_" + alnum(36) + "-"), not("r8_" + alnum(36))},
-		"dockerhub-token": {
-			tok("dckr_pat_" + alnum(27)),
-			tok("dckr_oat_" + alnum(32)),
-			not("dckr_pat_" + alnum(26)),
-		},
+		"dockerhub-token":     {tok("dckr_pat_" + alnum(27)), tok("dckr_oat_" + alnum(32)), not("dckr_pat_" + alnum(26))},
 		"tailscale-key": {
 			tok("tskey-auth-kFGiAS7CNTRL-" + alnum(22)),
 			not("tskey-auth-kFGiAS7CNTRL"),

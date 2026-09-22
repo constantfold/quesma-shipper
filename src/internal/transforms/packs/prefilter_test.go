@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// containsAny is the independent spec: does any keyword occur in the
-// value, folding ASCII letter bytes and nothing else.
+// containsAny is the independent spec, folding ASCII letter bytes and nothing else.
 func containsAny(value string, keywords []string) bool {
 	folded := asciiLowered(value)
 	for _, k := range keywords {
@@ -83,8 +82,7 @@ func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 	}
 }
 
-// The contract in both directions: ASCII case flips fire the gate, and the runes Go relates
-// to ASCII do not. containsAny must agree on every fixture.
+// ASCII case flips fire the gate, and the runes Go relates to ASCII do not.
 func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 	keywords := []string{"apikey", "kubectl"}
 	b := NewPrefilterBuilder()

@@ -11,17 +11,15 @@ import (
 )
 
 // TestRealDataRescrub replays the scrubber over a decrypted archive mirror (SCRUB_REALDATA_DIR,
-// payload files plus <payload>.manifest.json sidecars), skipping without the variable so CI
-// never depends on private data. The mirror is POST-scrub, so what it measures is idempotency
-// at scale: re-scrubbed output must be byte-identical, and any new hit on it wants eyeballs.
+// payloads plus <payload>.manifest.json sidecars). The mirror is POST-scrub, so this measures
+// idempotency at scale: any new hit wants eyeballs.
 func TestRealDataRescrub(t *testing.T) {
 	root := os.Getenv("SCRUB_REALDATA_DIR")
 	if root == "" {
 		t.Skip("set SCRUB_REALDATA_DIR to a decrypted mirror to run the real-data replay")
 	}
 
-	// Username stays empty on purpose: the mirror's content already carries __USER__, and naming one
-	// here would make byte-diffs mean two things.
+	// No username: the mirror already carries __USER__, and one here would give byte-diffs two meanings.
 	s, err := New(DefaultConfig())
 	require.NoError(t, err)
 
