@@ -1,10 +1,10 @@
-// args.go weighs a transcript tool_use against a store tool call's recorded arguments. The
-// join's most drift-exposed surface: every store generation so far has changed how arguments are
-// recorded, so each rule names the observed behaviour that forced it.
+// args.go weighs a transcript tool_use against a store tool call's recorded arguments. Every store
+// generation so far changed how arguments are recorded, so each rule names the behaviour that forced it.
 
 package cursorjoin
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"maps"
@@ -13,59 +13,47 @@ import (
 	"strings"
 )
 
-// evidence is what a tool bubble's recorded arguments say about a transcript tool_use. The
-// order is the candidate ranking: when no bubble's arguments agree in full, matchBlock takes
-// the highest grade in reach before falling back to position.
+// evidence grades a bubble's recorded arguments against a tool_use; the order is the candidate ranking.
 type evidence int
 
 const (
-	// The two sides recorded comparable values and none of them agree.
-	evidenceNegative evidence = iota
-	// Some values agree, none long enough to rule out coincidence — two searches of the same
-	// tree share their path and nothing else. Ranks below an empty record: a bubble whose
-	// values half-belong to another call has identified itself as probably that call's.
-	evidenceWeak
-	// One side recorded nothing able to confirm or deny — current stores write rawArgs "{}"
-	// for most terminal commands. Usable only as a positional fallback.
-	evidenceNeutral
-	// A whole value too long to be an accident agrees while another goes unaccounted: the
-	// store recording variants of what the transcript holds. Not identity, but not silence.
-	evidencePartial
-	// Every comparable value agrees, at least one of them substantial.
-	evidencePositive
+	evidenceNegative evidence = iota // comparable values recorded, none agree
+	evidenceWeak                     // only coincidence-length agreement: probably another call's bubble
+	evidenceNeutral                  // one side recorded nothing (most current terminal commands): position only
+	evidencePartial                  // a value too long to be an accident agrees, another is unaccounted
+	evidencePositive                 // every comparable value agrees, at least one substantial
 )
 
-// argsEvidence weighs a transcript tool_use against a store tool call's recorded arguments.
-// Alongside the grade it returns the strength — how many values agreed — because two bubbles can
-// both grade positive and the one agreeing on more of the call is the call.
+// argsEvidence also returns how many values agreed: of two positive bubbles, the one agreeing on more wins.
 func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 	if len(input) == 0 {
 		return evidenceNeutral, 0
 	}
+	empty := func(s string) bool { return s == "" || s == "{}" || s == "null" }
 	stored := strings.TrimSpace(t.RawArgs)
-	if stored == "" || stored == "{}" || stored == "null" {
+	if empty(stored) {
 		stored = strings.TrimSpace(t.Params)
 	}
-	if stored == "" || stored == "{}" || stored == "null" {
-		// Current stores write rawArgs "{}" with empty params for most terminal commands.
+	if empty(stored) {
 		return evidenceNeutral, 0
 	}
 
-	// Whole value against whole value, both sides taken apart first, rather than value against
-	// the stored JSON text: the two sides name the same argument differently
-	// (glob_pattern/globPattern), so the keys cannot be paired up, and substring evidence
-	// matches unrelated calls — a glob of `**/*` sits inside `**/*.{md,go}`, a directory inside
-	// every path under it.
-	storedVals, parsed := argValues(stored)
+	// Whole values, not substrings: a glob of `**/*` sits inside `**/*.{md,go}`, a directory inside its files.
+	var storedAny any
+	parsed := json.Unmarshal([]byte(stored), &storedAny) == nil
+	storedVals := collectArgValues(storedAny, storedNoiseKeys, nil)
 	if parsed && !slices.ContainsFunc(storedVals, func(sv argValue) bool { return !sv.weak }) {
-		// Nothing that could confirm a call, as errored calls are recorded. Position may
-		// still speak for the bubble.
+		// Nothing that could confirm a call, as errored calls are recorded; position may speak.
 		return evidenceNeutral, 0
+	}
+	// The store holds what actually ran: its executed form must not score as contradicting the intent.
+	strippedStored := ""
+	if !parsed {
+		strippedStored = stripCursorAttribution(stored)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(input, &m); err != nil {
-		// The input is not an object; containment is all that is left.
-		if !parsed && strings.Contains(stripCursorAttribution(stored), string(input)) {
+		if !parsed && strings.Contains(strippedStored, string(input)) {
 			return evidencePositive, 1
 		}
 		return evidenceNegative, 0
@@ -75,90 +63,55 @@ func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 	for _, sv := range storedVals {
 		storedSet[sv.v] = true
 	}
-	// Attribution stripped up front: the transcript holds the model's intent, the store what
-	// actually ran, and an executed form scoring as contradiction bars the call's own bubble.
-	strippedStored := ""
-	if !parsed {
-		strippedStored = stripCursorAttribution(stored)
-	}
-
 	strongComparable, strongMatched := 0, 0
-	long := false
-	weakUnaccounted := false
+	long, weakUnaccounted := false, false
 	for _, av := range collectArgValues(m, genericArgKeys, nil) {
 		if av.weak {
-			// Too short to confirm anything, but still separates two calls when it
-			// DISAGREES. Only against a parsed record: an unparsed one cannot be
-			// searched for a three-character token safely.
+			// Cannot confirm, but can deny; an unparsed record cannot be searched for a short token.
 			if parsed && !storedSet[av.v] {
 				weakUnaccounted = true
 			}
 			continue
 		}
 		strongComparable++
-		if storedSet[av.v] {
-			strongMatched++
-			long = long || len(av.v) >= longArgLen
-			continue
-		}
-		if slices.ContainsFunc(storedVals, func(sv argValue) bool {
+		matches := storedSet[av.v] || slices.ContainsFunc(storedVals, func(sv argValue) bool {
 			return !sv.weak && stripCursorAttribution(sv.v) == av.v
-		}) {
+		})
+		// Unparsed legacy records support only long-value containment, including JSON escapes.
+		if !matches && !parsed && len(av.v) >= longArgLen {
+			matches = strings.Contains(strippedStored, av.v) || strings.Contains(strippedStored, jsonEscaped(av.v))
+		}
+		if matches {
 			strongMatched++
 			long = long || len(av.v) >= longArgLen
-			continue
-		}
-		if !parsed && len(av.v) >= longArgLen {
-			// Older generations wrote a bare string, leaving only containment, gated to a
-			// length that cannot collide — and against the escaped form too, since a value
-			// with quotes or newlines appears escaped inside a string field holding JSON.
-			if strings.Contains(strippedStored, av.v) {
-				strongMatched++
-				long = true
-				continue
-			}
-			if e := jsonEscaped(av.v); e != av.v && strings.Contains(strippedStored, e) {
-				strongMatched++
-				long = true
-				continue
-			}
 		}
 	}
 	switch {
 	case strongComparable == 0:
-		// Nothing on the transcript side substantial enough to compare either way.
 		return evidenceNeutral, 0
 	case strongMatched == strongComparable && !weakUnaccounted:
-		// Identity is agreement on everything comparable, not a majority: two greps sharing
-		// path and glob but not pattern swapped each other's results with no alarm. One
-		// disagreeing value, however short, vetoes.
+		// Not a majority: two greps sharing path and glob swapped results. One disagreement vetoes.
 		return evidencePositive, strongMatched
 	case !parsed && strongMatched > 0:
-		// Containment already gates to values too long to collide.
+		// Containment already requires values too long to collide.
 		return evidencePositive, strongMatched
 	case strongMatched > 0 && long:
 		return evidencePartial, strongMatched
 	case strongMatched > 0:
-		// Not contradiction, measured against the live store: a true bubble routinely
-		// matches a strict subset of its block's values, because the store records variants
-		// the transcript does not — edit_file_v2 records the path and never the strings.
-		// Scoring these negative barred nine real conversations' own bubbles.
+		// Not contradiction: edit_file_v2 records only the path; as negative, nine conversations lost bubbles.
 		return evidenceWeak, strongMatched
 	default:
 		return evidenceNegative, 0
 	}
 }
 
-// The fragments Cursor splices into a command between the transcript's record and the store's,
-// observed live 2026-08-19. The literals are the vendor's, so their drift lands as a mismatch
-// alarm. The trailer carries its leading space so it strips wherever the flag sits.
+// What Cursor splices into a command between transcript and store (2026-08-19); the space strips with the flag.
 var cursorAttributions = []string{
 	` --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>"`,
 	"\n\nMade with [Cursor](https://cursor.com)",
 }
 
-// stripCursorAttribution removes the splices in both the plain and the JSON-escaped form: inside
-// a stored blob holding JSON as a string, the plain literal never occurs.
+// stripCursorAttribution also removes the JSON-escaped form, the one inside a stored JSON string.
 func stripCursorAttribution(s string) string {
 	for _, a := range cursorAttributions {
 		s = strings.ReplaceAll(s, a, "")
@@ -169,34 +122,19 @@ func stripCursorAttribution(s string) string {
 	return s
 }
 
-// minArgLen is the shortest value that can CONFIRM anything, longArgLen the shortest a
-// CONTAINMENT match may: `**/*`, `*.go` and `-la` are arguments of a hundred unrelated calls.
+// The shortest value that can CONFIRM, and that may match by CONTAINMENT: `*.go` recurs across calls.
 const (
 	minArgLen  = 4
 	longArgLen = 32
 )
 
-// argValue is one comparable argument value in canonical string form; weak marks the ones that
-// can contradict identity but never confirm it.
+// argValue is one argument in canonical string form; a weak one can contradict identity, never confirm it.
 type argValue struct {
 	v    string
 	weak bool
 }
 
-// argValues pulls the comparable values out of a stored argument blob, at any depth, and reports
-// whether it could be taken apart at all. False means the caller has nothing but the raw text.
-func argValues(stored string) ([]argValue, bool) {
-	var v any
-	if err := json.Unmarshal([]byte(stored), &v); err != nil {
-		return nil, false
-	}
-	return collectArgValues(v, storedNoiseKeys, nil), true
-}
-
-// collectArgValues walks one side's decoded arguments and appends every comparable value, in a
-// deterministic order. Both sides go through this one walk, to the same depth. Numbers are weak
-// like short strings — offsets and limits recur across unrelated calls — and booleans are no
-// evidence at all: a flag the store never records demoted the true bubble on most terminal calls.
+// collectArgValues walks arguments deterministically; numbers are weak and booleans ignored (flags go unstored).
 func collectArgValues(v any, skip map[string]bool, out []argValue) []argValue {
 	switch t := v.(type) {
 	case string:
@@ -220,42 +158,19 @@ func collectArgValues(v any, skip map[string]bool, out []argValue) []argValue {
 	return out
 }
 
-// Stored argument keys the transcript has no counterpart for, so a value under one can only match
-// by accident. parsingResult is a parse tree of the terminal command — every shell token its own
-// string, plus the workspace root — and any fragment of it let an unrelated block steal the
-// terminal bubble.
-var storedNoiseKeys = map[string]bool{
-	"toolCallId":             true,
-	"parsingResult":          true,
-	"requestedSandboxPolicy": true,
-	"commandDescription":     true,
-	"cwd":                    true,
-}
+// Stored keys without a transcript counterpart; a shell token of parsingResult let blocks steal bubbles.
+var storedNoiseKeys = map[string]bool{"toolCallId": true, "parsingResult": true, "requestedSandboxPolicy": true, "commandDescription": true, "cwd": true}
 
-// genericArgKeys are transcript input keys whose values recur across unrelated calls and so
-// cannot discriminate between bubbles.
-var genericArgKeys = map[string]bool{
-	"working_directory": true,
-	"cwd":               true,
-	"description":       true,
-	"explanation":       true,
-}
+// Transcript keys whose values recur across unrelated calls.
+var genericArgKeys = map[string]bool{"working_directory": true, "cwd": true, "description": true, "explanation": true}
 
-// namesCompatible reports whether a transcript display name and a store internal name plausibly
-// denote the same tool. Consulted only for the positional fallbacks: a mapping this coarse must
-// never override argument evidence.
+// namesCompatible is for the positional fallbacks only: a mapping this coarse never overrides arguments.
 func namesCompatible(display string, t *toolFormerData) bool {
-	internal := cmp.Or(t.Name, string(t.Tool))
-	if display == "" || internal == "" {
-		return true // nothing to compare; position stands
-	}
-	d := normaliseToolName(display)
-	in := normaliseToolName(internal)
+	d, in := normaliseToolName(display), normaliseToolName(cmp.Or(t.Name, string(t.Tool)))
 	if d == "" || in == "" || d == in || strings.Contains(in, d) || strings.Contains(d, in) {
 		return true
 	}
-	// MCP calls: the transcript names the generic dispatcher, the store the concrete tool it
-	// routed to, so the substring rule never relates the two. Observed live 2026-08-20.
+	// MCP: the transcript names the dispatcher, the store the concrete tool. Observed 2026-08-20.
 	if d == "callmcptool" && strings.HasPrefix(in, "mcp") {
 		return true
 	}
@@ -280,9 +195,9 @@ func normaliseToolName(s string) string {
 
 // jsonEscaped is the string as it appears inside a JSON document, without the quotes.
 func jsonEscaped(s string) string {
-	b, err := marshalCompact(s)
-	if err != nil || len(b) < 2 {
-		return s
-	}
-	return string(b[1 : len(b)-1])
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s) // Encoding a string into a bytes.Buffer cannot fail.
+	return buf.String()[1 : buf.Len()-2]
 }
