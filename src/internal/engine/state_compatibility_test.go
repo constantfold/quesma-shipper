@@ -74,22 +74,3 @@ func TestCommitOfAnUnserializableEntryFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(after), string(before), "the rejected commit reached the disk")
 }
-
-// A derived entry carries the enricher that produced it and its output hash.
-func TestDerivedEntryRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-
-	k := engine.Key{SourceID: "cursor-transcripts", NativePath: "/c/c8cbeb0b.jsonl.enriched.jsonl"}
-	fp := fingerprint()
-	fp.Enricher = &engine.EnricherRef{ID: "cursor-transcript-join", Version: 1}
-	fp.OutputHash = otherSha
-	require.NoError(t, commit(s, k, fp))
-	s.Close()
-
-	s2 := open(t, dir)
-	got, ok := s2.Get(k)
-	require.True(t, ok, "derived entry missing after reload")
-	assert.Truef(t, got.Enricher != nil && got.Enricher.ID == "cursor-transcript-join" && got.Enricher.Version == 1, "enricher ref: %+v", got.Enricher)
-	assert.Equalf(t, otherSha, got.OutputHash, "output hash: %q", got.OutputHash)
-}

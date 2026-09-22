@@ -38,81 +38,65 @@ func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
 	}
 }
 
-// slowRecipient counts how many objects are sealed at once and holds each open long enough for
-// overlap to be observable. It instruments the compute leg; the port would measure batching.
+// peak records the most callers inside at once.
+type peak struct {
+	mu        sync.Mutex
+	cur, most int
+}
+
+func (p *peak) enter() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cur++
+	p.most = max(p.most, p.cur)
+	return p.cur
+}
+
+func (p *peak) leave() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cur--
+}
+
+func (p *peak) max() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.most
+}
+
+// slowRecipient holds each seal open long enough for overlap to be observable in the compute leg.
 type slowRecipient struct {
 	inner age.Recipient
-	mu    sync.Mutex
-	cur   int
-	peak  int
+	peak
 }
 
 func (r *slowRecipient) Wrap(fileKey []byte) ([]*age.Stanza, error) {
-	r.mu.Lock()
-	r.cur++
-	if r.cur > r.peak {
-		r.peak = r.cur
-	}
-	r.mu.Unlock()
+	r.enter()
+	defer r.leave()
 	time.Sleep(20 * time.Millisecond)
-	st, err := r.inner.Wrap(fileKey)
-	r.mu.Lock()
-	r.cur--
-	r.mu.Unlock()
-	return st, err
+	return r.inner.Wrap(fileKey)
 }
 
-func (r *slowRecipient) Peak() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.peak
-}
-
-// slowPort counts authorization groups in flight, the first blocking on a barrier until a second
-// arrives: only a network leg folded back into a compute slot trips the timeout.
+// slowPort holds the first authorization group until a second arrives: only a network leg folded
+// back into a compute slot runs into the timeout.
 type slowPort struct {
 	*fakePort
-	mu   sync.Mutex
-	cur  int
-	peak int
+	peak
 	gate chan struct{}
 	once sync.Once
 }
 
 func (p *slowPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
-	p.mu.Lock()
-	if p.gate == nil {
-		p.gate = make(chan struct{})
-	}
-	gate := p.gate
-	p.cur++
-	if p.cur > p.peak {
-		p.peak = p.cur
-	}
-	reached := p.cur >= 2
-	p.mu.Unlock()
-
-	if reached {
-		p.once.Do(func() { close(gate) })
+	if p.enter() >= 2 {
+		p.once.Do(func() { close(p.gate) })
 	} else {
-		// The timeout is the failure path: an overlapping port releases as the second group arrives.
 		select {
-		case <-gate:
+		case <-p.gate:
 		case <-time.After(2 * time.Second):
 		}
 	}
-
-	out := p.fakePort.AuthorizeAndUpload(ctx, batch)
-	p.mu.Lock()
-	p.cur--
-	p.mu.Unlock()
-	return out
-}
-
-func (p *slowPort) Peak() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.peak
+	defer p.leave()
+	return p.fakePort.AuthorizeAndUpload(ctx, batch)
 }
 
 // The one test that would notice the pool silently reduced to a sequential loop.
@@ -127,7 +111,7 @@ func TestFilesAreProcessedConcurrently(t *testing.T) {
 	})
 
 	require.Equalf(t, 8, rep.Shipped, "want 8 shipped, got %+v", rep)
-	assert.Truef(t, slow.Peak() >= 2, "peak concurrent seals %d; the pass ran sequentially", slow.Peak())
+	assert.Truef(t, slow.max() >= 2, "peak concurrent seals %d; the pass ran sequentially", slow.max())
 }
 
 // Authorization groups are not bound by the compute pool: a sealed object leaves its compute slot
@@ -136,16 +120,15 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	f := newFixture(t)
 	const files = 70
 	f.writeTranscripts("p/u%02d.jsonl", files)
-	f.eff.MaxFilesPerRun = files
-	port := &slowPort{fakePort: f.port}
+	f.plan.MaxFilesPerRun = files
+	port := &slowPort{fakePort: f.port, gate: make(chan struct{})}
 
 	rep := f.run(func(o *engine.Options) {
-		o.Plan = planOf(f.eff)
 		o.Workers = 2
 		o.UploadWorkers = 64
 		o.Upload = port
 	})
 
 	require.Equalf(t, files, rep.Shipped, "want %d shipped, got %+v", files, rep)
-	assert.Truef(t, port.Peak() >= 2, "peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.Peak())
+	assert.Truef(t, port.max() >= 2, "peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.max())
 }

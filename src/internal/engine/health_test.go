@@ -14,9 +14,12 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-func report() formats.Report {
-	return formats.Report{
-		StartedAt: time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC),
+// The heartbeat answers "is this source still findable", never "what did you send": it carries
+// per-source state and counts, and no transcript bytes, object keys or paths.
+func TestHeartbeat(t *testing.T) {
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	rep := formats.Report{
+		StartedAt: now,
 		Sources: []formats.SourceOutcome{
 			{
 				SourceID: "claude-code-transcripts", Family: "claude-code",
@@ -28,67 +31,39 @@ func report() formats.Report {
 					{Decision: auditlog.DecisionUnchanged},
 				},
 			},
-			{
-				SourceID: "cursor-transcripts", Family: "cursor",
-				Health: sources.RootPresentNoMatch,
-				Reason: "root exists but no file matched",
-			},
+			{SourceID: "cursor-transcripts", Family: "cursor", Health: sources.RootPresentNoMatch, Reason: "root exists but no file matched"},
 			{SourceID: "codex-rollouts", Family: "codex", Health: sources.AgentAbsent, Reason: "not installed"},
 		},
 	}
-}
-
-// The heartbeat carries no transcript bytes: it answers "is this source still findable", never
-// "what did you send".
-func TestHeartbeatCarriesNoContentOrUploadState(t *testing.T) {
 	hb := (engine.Heartbeat{
 		OrganizationID: "default", InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		ClientVersion: "0.1.0", ConfigVersion: 1,
-	}).WithReport(report(), time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC))
+	}).WithReport(rep, now)
 	body, err := hb.Encode()
 	require.NoError(t, err)
 
-	// No object keys, cursor offsets or paths, which would make it upload tracking. Matched against
-	// field NAMES: "cursor" alone also matches the legitimate source id "cursor-transcripts".
+	// Matched against field names: "cursor" alone also matches the source id "cursor-transcripts".
 	for _, forbidden := range []string{
 		"abc.age", `"object_key"`, `"cursor_before"`, `"cursor_after"`, `"offset"`,
 		`"native_path"`, ".jsonl", "/Users/", "projects/",
 	} {
 		assert.NotContainsf(t, string(body), forbidden, "heartbeat contains %q — it must not be upload tracking:\n%s", forbidden, body)
 	}
-
-	// What it MUST carry.
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(body, &parsed))
 	for _, want := range []string{"install_id", "client_version", "config_version", "sources"} {
-		if _, ok := parsed[want]; !ok {
-			t.Errorf("heartbeat missing %q", want)
-		}
+		assert.Contains(t, parsed, want)
 	}
-}
 
-// The two states that look identical from a distance must stay distinct in the heartbeat.
-func TestHeartbeatKeepsAbsentAndNoMatchDistinct(t *testing.T) {
-	hb := (engine.Heartbeat{}).WithReport(report(), time.Now())
-
-	states := map[string]string{}
+	byID := map[string]engine.SourceHealth{}
 	for _, s := range hb.Sources {
-		states[s.SourceID] = s.State
+		byID[s.SourceID] = s
 	}
-	assert.Equalf(t, string(sources.AgentAbsent), states["codex-rollouts"], "codex state %q", states["codex-rollouts"])
-	assert.Equalf(t, string(sources.RootPresentNoMatch), states["cursor-transcripts"], "cursor state %q", states["cursor-transcripts"])
-}
-
-func TestHeartbeatRecordsPerSourceCounts(t *testing.T) {
-	hb := (engine.Heartbeat{}).WithReport(report(), time.Now())
-	for _, s := range hb.Sources {
-		if s.SourceID != "claude-code-transcripts" {
-			continue
-		}
-		assert.Truef(t, s.Shipped == 1 && s.Unchanged == 1, "counts: shipped %d unchanged %d", s.Shipped, s.Unchanged)
-		assert.True(t, s.RedactionDensity > 0, "redaction density should be recorded: it is the rule-drift alarm")
-		assert.Equalf(t, "2.1.220", s.AgentVersion, "agent version %q", s.AgentVersion)
-		return
-	}
-	t.Error("source not found in heartbeat")
+	// Expected silence and drift look alike from a distance and must stay distinct.
+	assert.Equal(t, string(sources.AgentAbsent), byID["codex-rollouts"].State)
+	assert.Equal(t, string(sources.RootPresentNoMatch), byID["cursor-transcripts"].State)
+	cc := byID["claude-code-transcripts"]
+	assert.Truef(t, cc.Shipped == 1 && cc.Unchanged == 1, "counts: shipped %d unchanged %d", cc.Shipped, cc.Unchanged)
+	assert.Positive(t, cc.RedactionDensity, "redaction density is the rule-drift alarm")
+	assert.Equal(t, "2.1.220", cc.AgentVersion)
 }

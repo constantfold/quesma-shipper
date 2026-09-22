@@ -36,38 +36,8 @@ func TestAppendTwoLinesOverwritesTheSameKey(t *testing.T) {
 	assert.Truef(t, strings.Contains(string(payload), `"uuid":"u1"`) && strings.Contains(string(payload), `"uuid":"a1"`), "the re-shipped object is not the whole file: %s", payload)
 }
 
-// The pre-filter must NOT read a file whose stat has not moved: "size and mtime unchanged" means
-// never opened. The mtime carries nanoseconds: a whole-second fixture cannot see the precision bug.
-func TestAnUnchangedFileIsNotReadTwice(t *testing.T) {
-	f := newFixture(t)
-	full := f.writeTranscript("p/a.jsonl", line1)
-	stamp := time.Now().Add(-time.Hour).Truncate(time.Second).Add(123456789 * time.Nanosecond)
-	require.NoError(t, os.Chtimes(full, stamp, stamp))
-	if info, err := os.Stat(full); err != nil || info.ModTime().Nanosecond() == 0 {
-		t.Skipf("this filesystem stores whole-second mtimes; the pre-filter cannot be distinguished from the hash path here")
-	}
-
-	require.Equal(t, 1, f.run().Shipped)
-
-	// Reopened, because that is what the next tick is: in one process the bug is invisible.
-	f.reopen()
-
-	second := f.run()
-	require.Equalf(t, 1, second.Unchanged, "expected 1 unchanged, got %+v", second)
-
-	// Read off the run's own outcome: per-file unchanged entries are elided from the audit log.
-	var reason string
-	for _, s := range second.Sources {
-		for _, fo := range s.Files {
-			if fo.Decision == auditlog.DecisionUnchanged {
-				reason = fo.Reason
-			}
-		}
-	}
-	assert.Equal(t, "size and mtime unchanged", reason)
-}
-
-// Stat-only skips coalesce; files read to verify their hash retain a per-file audit entry.
+// Stat-only skips coalesce; files read to verify their hash retain a per-file audit entry. The
+// reopen is the next tick: a pre-filter that loses mtime precision reads every file again.
 func TestUnchangedFileAudit(t *testing.T) {
 	for _, read := range []bool{false, true} {
 		t.Run(fmt.Sprintf("read=%t", read), func(t *testing.T) {
@@ -122,7 +92,7 @@ func TestSpecChangeLifecycle(t *testing.T) {
 	keysBefore := f.port.keys()
 	require.Len(t, keysBefore, 1)
 
-	f.eff.Sources[0].SpecFingerprint = strings.Repeat("b", 64)
+	f.plan.Sources[0].SpecFingerprint = strings.Repeat("b", 64)
 	rep := f.run(dryRun)
 
 	assert.Equalf(t, 1, rep.Shipped, "preview after a spec change should report would-ship, not unchanged: %+v", rep)

@@ -31,7 +31,7 @@ func TestUploadBatchContract(t *testing.T) {
 		t.Run(fmt.Sprintf("files=%d,workers=%d", tc.files, tc.workers), func(t *testing.T) {
 			f := newFixture(t)
 			f.writeTranscripts("p/v%03d.jsonl", tc.files)
-			f.eff.MaxFilesPerRun = max(64, tc.files)
+			f.plan.MaxFilesPerRun = max(64, tc.files)
 			rep := f.run(workers(tc.workers, tc.uploadWorkers))
 			require.Equal(t, tc.files, rep.Shipped)
 			require.Zero(t, rep.Failed)

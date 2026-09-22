@@ -35,7 +35,7 @@ func TestPreviewAuthorizesNothingAndCommitsNothing(t *testing.T) {
 func TestMaxFilesPerRunAndTheDrain(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscripts("p/s%d.jsonl", 7)
-	f.eff.MaxFilesPerRun = 2
+	f.plan.MaxFilesPerRun = 2
 
 	for tick := 1; tick <= 2; tick++ {
 		rep := f.run(workers(8, 0))
@@ -54,7 +54,7 @@ func TestMaxFilesPerRunAndTheDrain(t *testing.T) {
 func TestDisabledSourceIsNotCollected(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/s1.jsonl", line1)
-	f.eff.Sources[0].Enabled = false
+	f.plan.Sources[0].Enabled = false
 
 	rep := f.run()
 	assert.Truef(t, rep.Shipped == 0 && len(f.port.keys()) == 0, "a disabled source must not be collected: %+v", rep)
@@ -73,7 +73,7 @@ func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
 	for _, expired := range []bool{false, true} {
 		t.Run(fmt.Sprintf("expired=%t", expired), func(t *testing.T) {
 			f := newFixture(t)
-			f.eff.ConfigExpired = expired
+			f.plan.ConfigExpired = expired
 			f.writeTranscript("p/s1.jsonl", line1)
 			f.writeTranscript("p/s2.jsonl", line2)
 			require.Equal(t, 2, f.run().Shipped)

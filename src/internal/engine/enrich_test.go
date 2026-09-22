@@ -213,62 +213,47 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 	}
 }
 
-// THE DISABLED-ENRICHER GATE: byte-identical to a raw-only run.
-func TestDisablingTheEnricherLeavesAByteIdenticalRawRun(t *testing.T) {
-	withEnricher := newFixture(t)
-	dbA := cursorFixture(t, withEnricher)
-	withEnricher.runWith(enrichOpts(t, withEnricher, dbA, true))
+// Raw collection is the same whatever the enricher does: disabled, drifted or without a database,
+// exactly the raw object ships, so a drifted join is never a collection outage. A mismatch raises
+// the alarm at run and source level; a missing database has nothing to derive from, and counting
+// it would bury the real alarm.
+func TestRawShipsAloneWhenThereIsNoJoin(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enricherOn bool
+		mismatch   bool
+	}{
+		{"disabled", false, false},
+		{"mismatch", true, true},
+		{"no database", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			db := cursorFixture(t, f)
+			if tc.mismatch {
+				// Divergence mid-stream, as vendor drift would; after the last matched event it is a tail.
+				updateBubble(t, db, "bubbleId:"+enrichConv+":b2",
+					`{"bubbleId":"b2","type":2,"text":"a completely different sentence about nothing"}`)
+			} else if tc.enricherOn {
+				db = filepath.Join(f.home, "nope", "state.vscdb")
+			}
+			rep := f.runWith(enrichOpts(t, f, db, tc.enricherOn))
+			require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only: %+v", rep.Shipped, rep.Sources)
+			keys := f.port.keys()
+			require.Len(t, keys, 1)
+			_, m, _ := f.openObject(t, keys[0])
+			assert.False(t, m.Derived, "no join still shipped a derived object")
+			assert.Equal(t, transforms.Hash([]byte(cursorTranscript)), m.SourceHash, "the raw object's bytes changed")
+			assert.Equal(t, enrichConv+".jsonl", filepath.Base(m.NativePath))
 
-	without := newFixture(t)
-	dbB := cursorFixture(t, without)
-	without.runWith(enrichOpts(t, without, dbB, false))
-
-	// Disabling must change exactly one thing, the derived object, and leave raw collection alone.
-	rawWith := rawManifests(t, withEnricher)
-	rawWithout := rawManifests(t, without)
-
-	require.Lenf(t, rawWithout, 1, "the disabled run shipped %d raw objects, want 1", len(rawWithout))
-	require.Lenf(t, rawWith, 1, "the enriched run shipped %d raw objects, want 1", len(rawWith))
-	assert.Equal(t, rawWithout[0].SourceHash, rawWith[0].SourceHash, "enabling the enricher changed the raw object's source hash")
-	// Compared without the temp directory: the two runs have different homes.
-	assert.Equal(t, filepath.Base(rawWithout[0].NativePath), filepath.Base(rawWith[0].NativePath), "enabling the enricher changed the raw object's path")
-
-	// And no derived object at all when disabled.
-	for _, k := range without.port.keys() {
-		_, m, _ := without.openObject(t, k)
-		assert.Truef(t, !m.Derived, "a disabled enricher still produced %s", k)
+			src := rep.Sources[0]
+			assert.Equal(t, tc.mismatch, rep.EnrichMismatch != 0, "run-level mismatch counter %d", rep.EnrichMismatch)
+			assert.Equal(t, tc.mismatch, src.EnrichMismatch != 0, "per-source mismatch counter %d", src.EnrichMismatch)
+			if tc.mismatch {
+				assert.NotEmpty(t, src.EnrichNotes, "no note explains the mismatch")
+			}
+		})
 	}
-}
-
-// A mismatch: raw ships, no derived object, and the alarm reaches the report.
-func TestAMismatchShipsRawOnlyAndRaisesTheAlarm(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-
-	// Break the join the way vendor drift would, MID-stream: divergence after the last matched
-	// event is tolerated as a tail rather than counted as drift.
-	updateBubble(t, db, "bubbleId:"+enrichConv+":b2",
-		`{"bubbleId":"b2","type":2,"text":"a completely different sentence about nothing"}`)
-
-	rep := f.runWith(enrichOpts(t, f, db, true))
-
-	// Raw ships regardless, which keeps a drifted join from becoming a collection outage.
-	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only: %+v", rep.Shipped, rep.Sources)
-	for _, k := range f.port.keys() {
-		_, m, _ := f.openObject(t, k)
-		assert.Truef(t, !m.Derived, "a mismatched join still shipped a derived object: %s", k)
-	}
-
-	// The alarm must reach the report at both levels: a mismatch means data goes uncollected.
-	assert.NotEqual(t, 0, rep.EnrichMismatch, "the run-level mismatch counter is zero")
-	var src engine.SourceOutcome
-	for _, s := range rep.Sources {
-		if s.SourceID == "cursor-transcripts" {
-			src = s
-		}
-	}
-	assert.NotEqual(t, 0, src.EnrichMismatch, "the per-source mismatch counter is zero")
-	assert.NotEqual(t, 0, len(src.EnrichNotes), "no note explains the mismatch")
 }
 
 // preview computes the derived object and uploads nothing.
@@ -293,17 +278,6 @@ func TestPreviewComputesTheDerivedObjectWithoutUploading(t *testing.T) {
 	assert.True(t, derived, "preview did not report the derived object it would have shipped")
 }
 
-// A missing database is not an alarm.
-func TestNoDatabaseShipsRawOnlyWithoutAnAlarm(t *testing.T) {
-	f := newFixture(t)
-	cursorFixture(t, f)
-
-	rep := f.runWith(enrichOpts(t, f, filepath.Join(f.home, "nope", "state.vscdb"), true))
-	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only", rep.Shipped)
-	// An install with no store has nothing to derive from; counting it would bury the real alarm.
-	assert.Equalf(t, 0, rep.EnrichMismatch, "a missing database raised %d mismatches", rep.EnrichMismatch)
-}
-
 func toolResult(result string) string {
 	return fmt.Sprintf(`{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
 		"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
@@ -319,16 +293,4 @@ func updateBubble(t *testing.T, dbPath, key, value string) {
 	require.NoError(t, execErr)
 	// Touch the file so a coldness check cannot mistake it for stale.
 	require.NoError(t, os.Chtimes(dbPath, time.Now(), time.Now()))
-}
-
-func rawManifests(t *testing.T, f *fixture) []transforms.Manifest {
-	t.Helper()
-	var out []transforms.Manifest
-	for _, k := range f.port.keys() {
-		_, m, _ := f.openObject(t, k)
-		if !m.Derived {
-			out = append(out, m)
-		}
-	}
-	return out
 }

@@ -74,7 +74,9 @@ func TestStoreLifecycle(t *testing.T) {
 
 	// A previous process with this PID may have died before replacing the document.
 	require.NoError(t, os.WriteFile(path+fmt.Sprintf(".tmp-%d", os.Getpid()), []byte(`{"half":"written`), 0o600))
+	// A derived entry's enricher and output hash round-trip too.
 	want := fingerprint()
+	want.Enricher, want.OutputHash = &engine.EnricherRef{ID: "cursor-transcript-join", Version: 1}, otherSha
 	require.NotZero(t, want.SourceMTime.Nanosecond(), "whole seconds would hide lost timestamp precision")
 	require.NoError(t, commit(s, key("/x/a.jsonl"), want))
 
@@ -156,22 +158,4 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 	if _, ok := s.Get(entries[2]); !ok {
 		t.Error("an unrelated source must not be touched")
 	}
-}
-
-func TestCommitAllPersistsEveryEntry(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-
-	updates := map[engine.Key]engine.Fingerprint{
-		key("/x/a.jsonl"): fingerprint(),
-		key("/x/b.jsonl"): fingerprint(),
-		key("/x/c.jsonl"): fingerprint(),
-	}
-	require.NoError(t, s.CommitAll(updates))
-	assert.Equalf(t, 3, s.Len(), "expected 3 entries, got %d", s.Len())
-	s.Close()
-
-	doc, err := engine.Peek(dir)
-	require.NoError(t, err)
-	assert.Equal(t, updates, doc.Entries)
 }

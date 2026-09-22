@@ -25,16 +25,11 @@ func TestARunReportsItsFinishTimeAndItsBytes(t *testing.T) {
 	assert.NotEqual(t, int64(0), rep.BytesSealed, "two transcripts shipped and BytesSealed is zero")
 	assert.NotEqual(t, int64(0), rep.MedianFileBytes, "two files shipped and there is no median")
 	assert.Truef(t, rep.BytesRead >= rep.MedianFileBytes, "the median file (%d B) is larger than everything read (%d B)", rep.MedianFileBytes, rep.BytesRead)
-}
 
-// A run that stopped early still says how long it ran: a zero clock drops the CLI's line.
-func TestACancelledRunStillCarriesItsClock(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/a.jsonl", line1)
-
+	// A run that stopped early still says how long it ran: a zero clock drops the CLI's line.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	rep, err := engine.Run(ctx, f.store, f.opts())
 	require.Error(t, err, "a cancelled run returned no error")
-	assert.True(t, !rep.FinishedAt.IsZero(), "a cancelled run left no finish time")
+	assert.False(t, rep.FinishedAt.IsZero(), "a cancelled run left no finish time")
 }

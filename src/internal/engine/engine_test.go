@@ -31,7 +31,7 @@ func TestCollectionContract(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
-			f.eff.OrganizationID = tc.organization
+			f.plan.OrganizationID = tc.organization
 			f.writeTranscript("p/s1.jsonl", tc.body)
 			require.Equal(t, 1, f.run().Shipped)
 			keys := f.port.keys()
