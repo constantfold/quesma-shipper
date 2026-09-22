@@ -1,8 +1,6 @@
 package transforms_test
 
 import (
-	"encoding/json"
-	"os"
 	"slices"
 	"testing"
 
@@ -29,10 +27,8 @@ type recipientsVector struct {
 }
 
 func TestConformanceRecipients(t *testing.T) {
-	raw, err := os.ReadFile(recipientsVectorPath)
-	require.NoErrorf(t, err, "read vector: %v", err)
 	var v recipientsVector
-	require.NoError(t, json.Unmarshal(raw, &v))
+	readVectors(t, recipientsVectorPath, &v)
 
 	install, org, escrow := identity(t), identity(t), identity(t)
 	recipients := []age.Recipient{install.Recipient(), org.Recipient(), escrow.Recipient()}

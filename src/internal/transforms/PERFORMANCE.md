@@ -89,6 +89,10 @@ Do not re-propose these without new evidence.
   using `strings.Contains` instead of the automaton made the four synthetic scrub
   benchmarks 3–5x slower. Keeping the automaton with typed nodes retained comparable
   scan throughput, at the cost of more construction memory.
+- **Regex search for each rule’s entry literals.** Replacing the literal cursor
+  with a compiled keyword alternation preserved every span, but made the ordinary
+  and email-heavy 8 MiB benchmarks 2.5–3x slower. Keep literal search; only the
+  Unicode prefix comparison delegates to `strings.EqualFold`.
 - **One merged alternation regex.** Measured 1.38 MB/s against 2.24 for
   separate regexes and 7.78 for the prefiltered ladder. The Pike VM pays per
   live NFA state per byte; a 28-way union keeps most branches alive at every

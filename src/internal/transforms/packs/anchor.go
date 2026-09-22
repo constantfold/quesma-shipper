@@ -185,26 +185,13 @@ func indexEitherByte(s string, a, b byte) int {
 // hasFoldPrefix reports whether s starts with lit under Go's (?i) folding. lit is ASCII,
 // checked at build time; s is arbitrary, so a wide rune is compared through its fold orbit.
 func hasFoldPrefix(s, lit string) bool {
-	i := 0
-	for k := 0; k < len(lit); k++ {
-		if i >= len(s) {
+	end := 0
+	for range len(lit) {
+		if end == len(s) {
 			return false
 		}
-		want := lit[k]
-		c := s[i]
-		if c < utf8.RuneSelf {
-			lo, hi := foldCases(want)
-			if c != lo && c != hi {
-				return false
-			}
-			i++
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if !strings.EqualFold(string(r), string(want)) {
-			return false
-		}
-		i += size
+		_, width := utf8.DecodeRuneInString(s[end:])
+		end += width
 	}
-	return true
+	return strings.EqualFold(s[:end], lit)
 }
