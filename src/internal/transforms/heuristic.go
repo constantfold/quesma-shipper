@@ -9,22 +9,17 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// EntropyConfig tunes the generic-entropy backstop, the rule most likely to start eating
-// content rather than secrets. The thresholds are calibration inputs.
+// EntropyConfig tunes the generic-entropy backstop, the rule most likely to eat content, not secrets.
 type EntropyConfig struct {
 	MinLength int
 
-	// Applies to base64 and base64url candidates, whose 64-symbol alphabet tops out
-	// at 6 bits per character.
 	MinBitsPerChar float64
 
-	// Separate threshold for pure-hex candidates: 16 symbols cap per-character
-	// entropy at 4.0 bits, so a shared 4.2 threshold never fires on hex at all.
+	// Pure hex tops out at 4.0 bits per character, so the base64 threshold would never fire on it.
 	MinBitsPerCharHex float64
 }
 
-// DefaultEntropyConfig is the calibrated baseline; calibration_test.go's seeded corpus
-// holds these numbers to account.
+// DefaultEntropyConfig is the baseline that calibration_test.go's seeded corpus checks.
 func DefaultEntropyConfig() EntropyConfig {
 	return EntropyConfig{
 		MinLength:         24,
@@ -33,29 +28,24 @@ func DefaultEntropyConfig() EntropyConfig {
 	}
 }
 
-// entropyMatcher is the backstop for high-entropy strings no pattern rule claimed. The
-// engine must check the exemption set before calling it: redacting a uuid or a tool_use_id
-// kills the causal DAG and the subagent join.
+// entropyMatcher is the backstop for high-entropy strings no pattern claimed. Callers must check
+// exemptions first: redacting a uuid or tool_use_id breaks the causal DAG and the subagent join.
 type entropyMatcher struct {
 	cfg EntropyConfig
 
-	// Candidate length floor, at least 1: a zero-length candidate scores no entropy.
+	// At least 1: a zero-length candidate scores no entropy.
 	minRun int
 
-	// Distinct-symbol floors from entropyFloor: below them a candidate is rejected
-	// without entering the logarithm loop.
 	minDistinct, minDistinctHex int
 
-	// Substrings whose delimited presence marks a candidate as the scrubber's own
-	// output rather than a secret; see Match.
+	// Delimited substrings that mark a candidate as the scrubber's own output; see Match.
 	skip []string
 }
 
 func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
 	skip := []string{formats.UserPlaceholder, sentinelPrefix}
 	if len(username) >= 2 {
-		// Same floor as pathUserReplacementSpans: a one-letter name would mark half
-		// the alphabet path-shaped.
+		// Same floor as pathUserReplacementSpans: a one-letter name would skip half the alphabet.
 		skip = append(skip, username)
 	}
 	minRun := cfg.MinLength
@@ -67,34 +57,27 @@ func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
 		minRun:         minRun,
 		minDistinct:    entropyFloor(cfg.MinBitsPerChar),
 		minDistinctHex: entropyFloor(cfg.MinBitsPerCharHex),
-		// "/" is deliberately NOT in the candidate class: with it a candidate is a
-		// whole path prefix, 55% of all redaction hits on a real archive. The accepted residual, a std-base64 secret whose slashes split it
-		// under MinLength, is pinned in TestBareBase64WithSlashIsAKnownEscape.
+		// "/" is NOT a candidate byte: whole path prefixes made 55% of hits on a real archive. The
+		// known escape, a base64 secret split by slashes, is TestBareBase64WithSlashIsAKnownEscape.
 		skip: skip,
 	}
 }
 
-// isCandidateByte is the entropy candidate alphabet: base64url and hex, plus the "+"
-// and "=" of standard base64. See newEntropyMatcher for why "/" is not in it.
+// isCandidateByte is base64url and hex plus "+" and "="; see newEntropyMatcher for why not "/".
 func isCandidateByte(c byte) bool {
 	return isAlnumByte(c) || c == '+' || c == '=' || c == '_' || c == '-'
 }
 
-// entropySymbols is the candidate alphabet size, and so the ceiling on distinct
-// symbols.
 const entropySymbols = 66
 
-// entropyHexBit marks a class-table entry whose byte is also a hex digit; the low bits
-// carry 1 + the byte's rank in the alphabet, 0 meaning out of class.
+// entropyHexBit marks a hex-digit byte; the low bits carry 1 + its rank, 0 meaning out of class.
 const entropyHexBit = 0x80
 
-// entropyHistSlots is the histogram width: 128 rather than the 67 the ranks reach, so the
-// compiler can prove a uint8 slot with the hex bit cleared is in range.
+// 128 rather than 67 so the compiler can prove a slot with the hex bit cleared is in range.
 const entropyHistSlots = 128
 
-// entropyClass tabulates isCandidateByte, which stays the definition. Ranks are handed
-// out in ascending byte order so the histogram's partial sums are bit-for-bit stable;
-// float addition does not associate, so that ordering is a correctness property.
+// entropyClass tabulates isCandidateByte in ascending byte order: float addition does not
+// associate, so rank order keeps the histogram sums bit-for-bit stable.
 var entropyClass = buildEntropyClass()
 
 func buildEntropyClass() [256]uint8 {
@@ -115,14 +98,12 @@ func buildEntropyClass() [256]uint8 {
 	return t
 }
 
-// isHexByte marks the runs that earn MinBitsPerCharHex rather than MinBitsPerChar.
 func isHexByte(c byte) bool {
 	return isDigit(c) || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
-// entropyFloor is the smallest distinct-symbol count that could reach threshold: d
-// symbols cannot score above log2(d). The 1e-9 slack sits three orders above the sum's
-// rounding, so nothing the exact loop would accept is dropped.
+// entropyFloor is the fewest distinct symbols that could reach threshold, since d symbols score at
+// most log2(d). The 1e-9 slack exceeds rounding, so nothing the exact loop accepts is dropped.
 func entropyFloor(threshold float64) int {
 	for d := 1; d <= entropySymbols; d++ {
 		if math.Log2(float64(d)) >= threshold-1e-9 {
@@ -139,8 +120,7 @@ func (m *entropyMatcher) Match(value string) []Span {
 		return nil
 	}
 	var out []Span
-	// Probing every minRun'th byte, since a candidate run must cover a grid point. Must find
-	// exactly the same runs, in the same left-to-right order, as a byte-at-a-time scan.
+	// A run must cover a grid point, so probing every minRun'th byte finds the same runs in order.
 	scanned := 0
 	for p := m.minRun - 1; p < len(value); p += m.minRun {
 		if p < scanned || entropyClass[value[p]] == 0 {
@@ -159,14 +139,11 @@ func (m *entropyMatcher) Match(value string) []Span {
 			continue
 		}
 		candidate := value[start:i]
-		// Entropy first, skip list second: independent predicates, and one histogram
-		// pass rejects nearly everything a substring search per skip string would.
+		// Entropy first: one histogram pass rejects nearly everything the skip search would.
 		if !m.clears(candidate) {
 			continue
 		}
-		// Required for idempotency: __USER__ and __REDACTED are built from in-class
-		// characters and ADD entropy, so without this skip a second pass eats the first
-		// pass's output. The username is that output one pass earlier.
+		// Idempotency: __USER__ and __REDACTED ADD entropy, so a second pass would eat the first's output.
 		if m.skipsCandidate(candidate) {
 			continue
 		}
@@ -184,9 +161,7 @@ func (m *entropyMatcher) skipsCandidate(candidate string) bool {
 	return false
 }
 
-// containsDelimited requires non-alphanumeric neighbours, the same boundary rule as
-// formats.ApplyUserPlaceholder, so a token that merely embeds the username mid-run never
-// earns the skip.
+// containsDelimited uses formats.ApplyUserPlaceholder's boundary rule: a username mid-run earns no skip.
 func containsDelimited(s, sub string) bool {
 	if sub == "" {
 		return false
@@ -208,14 +183,12 @@ func containsDelimited(s, sub string) bool {
 	return false
 }
 
-// clears scores a candidate against the threshold its alphabet earns, hex or base64.
-// exactEntropyBits, which the thresholds were fitted against, decides inside the slack
-// band. The histogram is a local, so a shared *Scrubber stays safe across goroutines.
+// clears lets exactEntropyBits decide inside the slack band. The histogram is local, so a shared
+// *Scrubber stays safe across goroutines.
 func (m *entropyMatcher) clears(candidate string) bool {
 	var counts [entropyHistSlots]int32
 	distinct := 0
-	// Accumulating class bytes makes the hex verdict one AND per byte instead of a
-	// branch mixed-alphabet candidates mispredict.
+	// One AND per byte instead of a branch that mixed-alphabet candidates mispredict.
 	hexAll := uint8(0xff)
 	for i := 0; i < len(candidate); i++ {
 		class := entropyClass[candidate[i]]
@@ -244,13 +217,11 @@ func (m *entropyMatcher) clears(candidate string) bool {
 	if est < threshold-entropyEstSlack {
 		return false
 	}
-	// The estimate cannot name the side, so pay for the arithmetic that defines it.
 	return exactEntropyBits(&counts, total) >= threshold
 }
 
-// estimateEntropyBits rearranges the sum to H = log2(T) - (1/T)*sum(c*log2(c)), whose
-// only logarithms are of small integers a table can answer. Exact in the reals but not
-// in float64, so its answer is trusted only away from the threshold (entropyEstSlack).
+// estimateEntropyBits uses H = log2(T) - (1/T)*sum(c*log2(c)) so a table answers the logarithms.
+// Not exact in float64, so it is trusted only outside entropyEstSlack.
 func estimateEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	weighted := 0.0
 	for _, c := range counts[:entropySymbols+1] {
@@ -264,9 +235,7 @@ func estimateEntropyBits(counts *[entropyHistSlots]int32, total float64) float64
 	return math.Log2(total) - weighted/total
 }
 
-// exactEntropyBits is the Shannon sum as the calibrated thresholds were fitted against:
-// ascending symbol-rank order, accumulated left to right. Float addition does not
-// associate, so that order is a correctness property.
+// exactEntropyBits is the Shannon sum the thresholds were fitted against; its rank order matters.
 func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	h := 0.0
 	for _, c := range counts {
@@ -279,16 +248,13 @@ func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	return h
 }
 
-// entropyEstSlack is how far from the threshold the estimate may decide alone: the two
-// computations differ by ~5e-13 at worst, and the band falls through to exactEntropyBits.
+// The estimate and the exact sum differ by ~5e-13 at worst.
 const entropyEstSlack = 1e-9
 
-// log2SmallMax bounds the table; above it math.Log2 runs for that one slot.
 const log2SmallMax = 1024
 
 var nLog2Table = buildNLog2Table()
 
-// nLog2Table holds n*log2(n), the rearranged sum's per-slot term, with slot 0 zero.
 func buildNLog2Table() (nLog2 [log2SmallMax]float64) {
 	for i := 1; i < log2SmallMax; i++ {
 		nLog2[i] = float64(i) * math.Log2(float64(i))
@@ -296,25 +262,20 @@ func buildNLog2Table() (nLog2 [log2SmallMax]float64) {
 	return nLog2
 }
 
-// keyNameMatcher redacts a value because of the name attached to it, not its shape
-// (`printenv` output has no recognisable value shape). It scans exempt fields too, since a
-// secret named AWS_SECRET_ACCESS_KEY is one wherever it appears; the key name survives.
+// keyNameMatcher redacts a value by its name, not its shape (`printenv` output). It scans exempt
+// fields too, since AWS_SECRET_ACCESS_KEY is a secret wherever it appears; the key name survives.
 type keyNameMatcher struct {
 	re *regexp.Regexp
 
-	// Each configured name uppercased once, so MatchesKeyName folds only the key it is
-	// given; suffix marks a name configured with a leading "*", matched by suffix.
+	// Uppercased once, so MatchesKeyName folds only the key it is given.
 	names []configuredName
 
-	// Lower-cased literal cores of the alternation ("_token" for *_TOKEN). Gating re behind the
-	// shared automaton narrows the rule: re is (?i), which also folds non-ASCII runes (long s,
-	// Kelvin sign) the byte automaton can never fire on. Accepted; nil stems mean no sound
-	// literal, so the regex runs ungated.
+	// Lower-cased literals ("_token" for *_TOKEN) the automaton checks before re. Accepted loss: re's
+	// (?i) also folds non-ASCII runes (Kelvin sign) the automaton misses; nil means re always runs.
 	stems []string
 }
 
-// DefaultSecretKeyNames is the starting set; config additions only make scrubbing
-// stricter.
+// DefaultSecretKeyNames is the starting set; config additions only make scrubbing stricter.
 func DefaultSecretKeyNames() []string {
 	return []string{
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID",
@@ -355,16 +316,14 @@ func newKeyNameMatcher(names []string) *keyNameMatcher {
 	if unfiltered || len(stems) == 0 {
 		stems = nil
 	}
-	// NAME=value, NAME: value, NAME = "value"; the value run stops at whitespace,
-	// quotes and separators so one redaction cannot swallow a whole line.
+	// NAME=value, NAME: value, NAME = "value"; the value stops at separators so it never swallows a line.
 	pattern := `(?i)\b(?:` + strings.Join(alts, "|") + `)\b\s*[:=]\s*"?([^\s"',;)]+)"?`
 	return &keyNameMatcher{re: regexp.MustCompile(pattern), names: configured, stems: stems}
 }
 
 func (m *keyNameMatcher) RuleID() string { return "key-name" }
 
-// MatchScannedIn ignores the shared PII walk: this matcher has no candidate shape in it
-// to collect.
+// MatchScannedIn ignores the shared PII walk, which has no candidate shape for this matcher.
 func (m *keyNameMatcher) MatchScannedIn(value string, _ *packs.ValueScan) []Span {
 	var out []Span
 	for _, loc := range m.re.FindAllStringSubmatchIndex(value, -1) {
@@ -376,9 +335,8 @@ func (m *keyNameMatcher) MatchScannedIn(value string, _ *packs.ValueScan) []Span
 	return out
 }
 
-// MatchesKeyName reports whether a JSON key itself names a secret, in which case the
-// whole value goes. Two vocabularies: configured names match as the environment spells
-// them, author-spelled field names match as words (matchesSecretKeyName in keyname.go).
+// MatchesKeyName reports whether a JSON key names a secret, redacting the whole value. Configured
+// names match as the environment spells them, field names as words (see keyname.go).
 func (m *keyNameMatcher) MatchesKeyName(key string) bool {
 	if key == "" {
 		return false
@@ -386,7 +344,6 @@ func (m *keyNameMatcher) MatchesKeyName(key string) bool {
 	if matchesSecretKeyName(key) {
 		return true
 	}
-	// Configured environment names apply as written to field names too.
 	upper := strings.ToUpper(key)
 	for _, n := range m.names {
 		if n.suffix && strings.HasSuffix(upper, n.upper) || !n.suffix && upper == n.upper {

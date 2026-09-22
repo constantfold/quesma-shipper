@@ -1,10 +1,6 @@
-// Package seal builds and reads the object container:
-//
-//	tar( manifest.json, <payload> )  ->  zstd level 3  ->  age
-//
-// manifest.json must stay the FIRST tar entry: every layer decodes sequentially from
-// byte 0, so a ranged GET of the head yields the whole manifest without the payload,
-// which is why no manifest sidecar exists. The payload itself is never transformed.
+// The object container is tar(manifest.json, payload) -> zstd level 3 -> age. manifest.json must
+// stay the FIRST tar entry: every layer decodes from byte 0, so a ranged GET of the head yields the
+// manifest with no sidecar. The payload itself is never transformed.
 package transforms
 
 import (
@@ -19,38 +15,32 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Entry names inside the container, fixed rather than derived from the source file: the
-// payload's real name is a path, and a path belongs in the manifest only.
+// Fixed entry names: the payload's real name is a path, and a path belongs in the manifest only.
 const (
 	ManifestEntry = "manifest.json"
 	PayloadEntry  = "payload"
 )
 
-// ZstdLevel is pinned at 3: changing it changes every object's bytes.
+// ZstdLevel is fixed: changing it changes every object's bytes.
 const ZstdLevel = 3
 
-// SuggestedPrefixBytes is where a ranged head-fetch should start. It must cover the age
-// header, the first zstd block and the first tar entry; age's STREAM chunks decrypt only
-// whole, so anything under one 64 KiB chunk plus the header yields nothing at all.
+// SuggestedPrefixBytes covers the age header, first zstd block and manifest; age decrypts only
+// whole 64 KiB chunks.
 const SuggestedPrefixBytes = 256 * 1024
 
-// maxManifestBytes bounds the manifest read out of an object: a huge one is hostile
-// input, not data this code wrote.
+// A huge manifest is hostile input, not data this code wrote.
 const maxManifestBytes = 4 << 20
 
-// maxDecompressedBytes bounds zstd expansion so a crafted object cannot exhaust memory.
+// Bounds zstd expansion so a crafted object cannot exhaust memory.
 const maxDecompressedBytes = 8 << 30
 
-// ErrPrefixTooShort means the fetched prefix did not contain the whole manifest; the
-// caller should double its range rather than treat the object as corrupt.
+// ErrPrefixTooShort means the prefix lacked the whole manifest; double the range, it is not corrupt.
 var ErrPrefixTooShort = errors.New("seal: object prefix too short to contain the manifest")
 
-// Seal builds one mirror object and returns the manifest as sealed: ShippedHash, PayloadSize
-// and, unless the caller set it, Encryption are filled here, so what a caller needs for object
-// metadata is the returned copy and never its own.
+// Seal builds one mirror object and returns the manifest as sealed, which callers must use for
+// object metadata: ShippedHash, PayloadSize and, unless set, Encryption are filled here.
 func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manifest, error) {
 	if len(recipients) == 0 {
-		// An object with no recipient is either unreadable or unencrypted.
 		return nil, Manifest{}, errors.New("seal: no age recipients: encryption is not optional")
 	}
 
@@ -80,8 +70,7 @@ func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manif
 	return obj, m, nil
 }
 
-// writeContainer streams all three layers into one pre-sized result buffer, so no
-// payload-sized staging copy exists between them.
+// writeContainer streams all three layers into one pre-sized buffer, with no staging copies.
 func writeContainer(
 	manifestJSON, payload []byte,
 	payloadMTime *time.Time,
@@ -129,9 +118,8 @@ func ciphertextHint(manifestLen, payloadLen, recipients int) int {
 	return zstdLen + 256 + 256*recipients + 16*(zstdLen/ageChunk+1)
 }
 
-// writeTar writes the two entries, manifest first. Headers are normalised so the tar layer
-// contributes no machine-specific bytes; USTAR rather than PAX, whose extended headers
-// would sit ahead of the manifest and push it deeper into the object.
+// writeTar normalises headers so tar adds no machine-specific bytes; USTAR, since PAX extended
+// headers would push the manifest deeper into the object.
 func writeTar(w io.Writer, manifestJSON, payload []byte, payloadMTime *time.Time) error {
 	tw := tar.NewWriter(w)
 
@@ -194,7 +182,6 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 		return Manifest{}, nil, fmt.Errorf("seal: read payload: %w", err)
 	}
 
-	// The manifest describes bytes; verify it describes these bytes.
 	if got := Hash(payload); got != m.ShippedHash {
 		return Manifest{}, nil, fmt.Errorf("seal: payload hash %s does not match manifest shipped_hash %s",
 			got, m.ShippedHash)
@@ -202,13 +189,11 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 	return m, payload, nil
 }
 
-// ReadManifestPrefix decodes the manifest from a ranged-GET prefix. Reading a prefix
-// ALWAYS ends in a truncation error from age or zstd, which must be swallowed once the
-// first tar entry is whole; a failure before that is ErrPrefixTooShort instead.
+// ReadManifestPrefix decodes the manifest from a ranged-GET prefix. A prefix ALWAYS ends in a
+// truncation error, ignored once the first tar entry is whole; earlier ones are ErrPrefixTooShort.
 func ReadManifestPrefix(prefix []byte, identities ...age.Identity) (Manifest, error) {
 	tr, closeFn, err := tarReader(bytes.NewReader(prefix), identities...)
 	if err != nil {
-		// A prefix too short to hold even the age header fails here.
 		return Manifest{}, fmt.Errorf("%w: %v", ErrPrefixTooShort, err)
 	}
 	defer closeFn()
@@ -220,8 +205,7 @@ func ReadManifestPrefix(prefix []byte, identities ...age.Identity) (Manifest, er
 	return m, nil
 }
 
-// readManifestEntry validates that the first tar entry is the manifest; if it is not, the
-// container was not built by this code and its layout cannot be trusted.
+// readManifestEntry requires the manifest first; otherwise this code did not build the container.
 func readManifestEntry(tr *tar.Reader) (Manifest, error) {
 	hdr, err := tr.Next()
 	if err != nil {
@@ -245,7 +229,6 @@ func readManifestEntry(tr *tar.Reader) (Manifest, error) {
 	return DecodeManifest(raw)
 }
 
-// tarReader stacks the three decode layers over r.
 func tarReader(r io.Reader, identities ...age.Identity) (*tar.Reader, func(), error) {
 	if len(identities) == 0 {
 		return nil, nil, errors.New("seal: no age identity supplied")

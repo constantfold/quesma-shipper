@@ -8,36 +8,30 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// Span is a byte range inside one decoded string value, attributed to the rule that
-// matched it; the packs type, so rule matchers and the engine share one span.
+// Span is a byte range in one decoded string value, attributed to the rule that matched it.
 type Span = packs.Span
 
-// FieldPath is a dotted path to a value inside a record, with "[]" standing for array
-// elements: content[].image.hex, message.content[].text, toolUseResult.stdout.
+// FieldPath is a dotted path inside a record, "[]" for array elements: message.content[].text.
 type FieldPath string
 
-// Sentinel is the placeholder for a redacted value. Its width depends only on the rule id,
-// never on the secret, and nothing in it may ever derive from the secret's value: a hash
-// prefix is reversible redaction. The rule id is what makes the ledger queryable.
+// Sentinel is the redaction placeholder. Nothing in it may derive from the secret (a hash prefix
+// is reversible redaction); the rule id makes the ledger queryable.
 func Sentinel(ruleID string) string {
 	return sentinelPrefix + ":" + ruleID + "__"
 }
 
-// sentinelPrefix is the run-visible head of every sentinel: the ":" after it is outside the
-// entropy candidate alphabet, so only this part fuses with adjacent text. The entropy matcher
-// must keep skipping candidates carrying it, or a re-scrub eats the previous pass's ledger.
+// The ":" after it is not an entropy candidate byte, so only the prefix fuses with adjacent text;
+// the entropy matcher must skip it, or a re-scrub eats the previous pass's ledger.
 const sentinelPrefix = "__REDACTED"
 
-// ExemptionSet holds the structural exemptions in force: identifier fields whose redaction
-// would destroy the causal graph, and declared opaque binary payloads. Heuristics only, and
-// paths match exactly rather than by key name, since additions here weaken scrubbing.
+// ExemptionSet holds identifier fields and opaque payloads the heuristics skip. Paths match exactly,
+// not by key name, since additions here weaken scrubbing.
 type ExemptionSet struct {
 	byFamily map[string]map[FieldPath]bool
 	global   map[FieldPath]bool
 }
 
-// NewExemptionSet builds the set from the resolved config's structural_exempt map, keyed
-// by source family or "*" for all.
+// NewExemptionSet builds the set from structural_exempt, keyed by source family or "*" for all.
 func NewExemptionSet(spec map[string][]string) *ExemptionSet {
 	e := &ExemptionSet{
 		byFamily: map[string]map[FieldPath]bool{},
@@ -60,9 +54,7 @@ func NewExemptionSet(spec map[string][]string) *ExemptionSet {
 	return e
 }
 
-// Exempt reports whether a field is exempt from heuristic detectors for a family. No
-// nil-receiver tolerance: New always builds the set, and answering from a nil one would
-// fail open.
+// Exempt reports whether heuristics skip a field. No nil-receiver tolerance: that would fail open.
 func (e *ExemptionSet) Exempt(family string, field FieldPath) bool {
 	if e.global[field] {
 		return true
@@ -70,18 +62,14 @@ func (e *ExemptionSet) Exempt(family string, field FieldPath) bool {
 	return e.byFamily[family][field]
 }
 
-// prioritizedSpan carries the matcher class alongside the span, so overlapping
-// matches resolve by confidence rather than alphabetically.
 type prioritizedSpan struct {
 	Span
-	// priority 0 is a high-confidence pattern rule, 1 is a heuristic. Lower wins.
+	// 0 is a pattern rule, 1 a heuristic; lower wins.
 	priority int
 }
 
-// resolveSpans merges overlapping spans into one placeholder rather than nesting them.
-// The surviving attribution must be the HIGHEST-CONFIDENCE rule covering the region: the
-// entropy backstop fires on nearly every provider key too, so any other tie-break turns
-// the ledger into "something high-entropy happened".
+// resolveSpans merges overlaps into one placeholder attributed to the HIGHEST-CONFIDENCE rule: the
+// entropy backstop fires on nearly every provider key, so any other tie-break empties the ledger.
 func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, int, map[string]int) {
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 {
 		return nil, 0, nil
@@ -108,7 +96,6 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 		return strings.Compare(a.RuleID, b.RuleID)
 	})
 
-	// Keeping both would nest placeholders or split one secret across two.
 	spans = dropOverlappedHeuristics(spans)
 
 	resolved := make([]Span, 0, len(spans))
@@ -121,7 +108,6 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 			continue
 		}
 		if s.Start < cursor {
-			// Already inside a replaced region.
 			continue
 		}
 		resolved = append(resolved, s.Span)
@@ -132,9 +118,8 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 	return resolved, redacted, hits
 }
 
-// dropOverlappedHeuristics removes heuristic spans intersecting a pattern span and widens
-// that span over any reach past it, so one secret yields one confidently attributed
-// placeholder.
+// dropOverlappedHeuristics widens a pattern span over any heuristic reaching past it, so one secret
+// yields one placeholder.
 func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
 	var patterns []prioritizedSpan
 	for _, s := range spans {
@@ -152,7 +137,6 @@ func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
 		overlapped := false
 		for i, p := range patterns {
 			if s.Start < p.End && p.Start < s.End {
-				// Extend the confident span so no tail of the secret escapes.
 				if s.End > patterns[i].End {
 					patterns[i].End = s.End
 					for j := range out {

@@ -1,8 +1,6 @@
-// Package enrich is the enricher contract and registry: a compiled per-source hook running
-// after a flush's raw units are staged and BEFORE redaction, joining a store of higher fidelity
-// (Cursor's SQLite holds the tool results, tool-call ids and timestamps its JSONL lacks). It is
-// the ONLY capture path for those fields, since no rows ship; raw files ship regardless, so it
-// fails open, and its output is deterministic and versioned so the output hash is a change signal.
+// Enrichers are compiled per-source hooks that join staged raw units with a higher-fidelity store
+// (Cursor's SQLite) BEFORE redaction; they are the only capture path for those fields. Raw files ship
+// regardless, so enrichment fails open; output is deterministic so its hash is a change signal.
 package transforms
 
 import (
@@ -11,44 +9,34 @@ import (
 	"fmt"
 )
 
-// Status is the outcome of one enrichment. Anything but StatusOK means that window's DB-side
-// fields are lost until a release fixes the join, so these are health alarms.
+// Status is one enrichment's outcome; anything but StatusOK means DB-side fields are missing.
 type Status string
 
 const (
-	// StatusOK means the derived object is complete.
-	StatusOK Status = "ok"
+	StatusOK Status = "ok" // the derived object is complete
 
-	// StatusSkipped means there was legitimately nothing to derive. Not an alarm.
+	// StatusSkipped means there was nothing to derive; not an alarm.
 	StatusSkipped Status = "skipped"
 
-	// StatusMismatch means the join did not line up. THE alarm: the alignment rules are
-	// undocumented vendor behaviour, and a drifted join silently loses the fields it carries.
+	// StatusMismatch is THE alarm: the join rules are undocumented vendor behaviour that drifts.
 	StatusMismatch Status = "mismatch"
 
-	// StatusError means the read or the computation failed.
-	StatusError Status = "error"
+	StatusError Status = "error" // the read or the computation failed
 )
 
-// RawUnit is one staged raw file an enricher may read: staged CONTENT, not a path to re-open,
-// so derived_from attests to the bytes that shipped and enrichers get no filesystem access.
+// RawUnit is staged CONTENT, not a path, so derived_from attests to the shipped bytes and
+// enrichers get no filesystem access.
 type RawUnit struct {
-	// NativePath is the file's path, for naming the derived object and for the join key.
 	NativePath string
-
-	// Content is the raw pre-redaction bytes, as staged.
-	Content []byte
-
-	// SourceHash becomes an entry in derived_from.
+	Content    []byte
 	SourceHash string
 }
 
 // Input is what an enricher gets.
 type Input struct {
-	// Units are the staged raw units of this source in this flush.
 	Units []RawUnit
 
-	// DBPath is the declared agent database; empty means absent, which is not an error.
+	// DBPath is empty when the database is absent, which is not an error.
 	DBPath string
 
 	// ScratchDir is where the read ladder may put a snapshot: never beside the source.
@@ -57,39 +45,29 @@ type Input struct {
 
 // Derived is one derived object.
 type Derived struct {
-	// The derived object's own path, which becomes its mirror key. By convention
-	// <input path>.enriched.jsonl, so it sits beside its input in any listing.
+	// The mirror key, by convention <input path>.enriched.jsonl so it lists beside its input.
 	NativePath string
 
-	// Payload is the derived bytes, pre-redaction, taking the same path as a raw file.
-	Payload []byte
-
-	// DerivedFrom is the source hash of every raw input this was computed from.
+	// Payload is pre-redaction and takes the same path as a raw file.
+	Payload     []byte
 	DerivedFrom []string
 
-	// OutputHash is the change signal: the object re-ships only when it changes, which is
-	// what determinism buys.
+	// OutputHash is the change signal: the object re-ships only when it changes.
 	OutputHash string
 
 	Status Status
 
-	// Counts events that did not align. Non-zero with StatusOK is impossible by contract:
-	// a mismatch aborts the derived entry.
+	// Non-zero with StatusOK is impossible by contract: a mismatch aborts the derived entry.
 	Mismatches int
 
-	// Store shortfalls the join explains, shipped native-only inside a StatusOK object.
-	// One counter per class, so a conversation with holes is not byte-identical downstream
-	// to a complete one.
+	// Explained store shortfalls shipped native-only, so an object with holes differs from a complete one.
 	Repeats int
 	Tail    int
 
-	// Events the evidence could not decide, where the join attached nothing rather than
-	// guess. An undecided hole, not an explained one.
+	// Events the join left bare rather than guess: undecided holes, not explained ones.
 	Ambiguous int
 
-	// Transcript lines before the tail that did not decode. An alarm, unlike the three
-	// above: those lines' blocks never reached the join, so their enrichment is lost while
-	// the object still ships.
+	// Undecodable lines before the tail: an alarm, since their enrichment is lost while the object ships.
 	LineDecodeErrors int
 
 	// Read provenance: the rows never ship, so this is the only account of their origin.
@@ -103,7 +81,7 @@ type EnrichResult struct {
 	EnricherID string
 	Version    int
 
-	// Objects are the derived objects to ship. Empty is a normal outcome.
+	// Empty is a normal outcome.
 	Objects []Derived
 
 	// Inputs that produced nothing, split because only Mismatched is an alarm.
@@ -111,13 +89,10 @@ type EnrichResult struct {
 	Mismatched int
 	Errors     int
 
-	// Human-readable reasons for the audit log and `doctor`. Never payload bytes or redacted
-	// values: diagnostics must not become a side channel for the content being read.
-	// Alarms only — each note explains data that did not ship.
+	// Alarms explaining data that did not ship; never payload bytes, so diagnostics are no side channel.
 	Notes []string
 
-	// Informational notes about objects that DID ship. Kept apart from Notes so no reporting
-	// path has to re-parse note text to decide whether it is looking at loss.
+	// Notes about objects that DID ship, kept apart so reporting never parses text to detect loss.
 	Infos []string
 }
 
@@ -127,28 +102,21 @@ type Enricher interface {
 	ID() string
 	Version() int
 
-	// The DECLARED read scope, fixed at registration: a hook that could widen its own scope
-	// at runtime would make the compiled ceiling meaningless.
+	// The DECLARED read scope, fixed at registration so a hook cannot widen it at runtime.
 	Table() string
 	Keyspaces() []string
 
-	// Per-platform locations of the agent database in preference order, same ~ and $VAR
-	// syntax as catalog roots. Compiled in, never configured: an arbitrary SQLite path is
-	// one the catalog never approved. nil when the enricher has no database.
+	// Compiled-in DB locations in preference order (catalog ~ and $VAR syntax), never configured; nil if none.
 	DBCandidates() []string
 
-	// Whether the enricher derives from staged raw units. A unit-free enricher runs on EVERY
-	// flush, because its input is the agent's store, which moves on its own schedule:
-	// otherwise an idle but logged-in install never reports its account at all.
+	// A unit-free enricher runs on EVERY flush, or an idle logged-in install never reports its account.
 	NeedsUnits() bool
 
-	// Enrich derives objects, returning a result rather than an error for anything short of a
-	// programming fault: no enricher failure should stop a flush.
+	// Enrich returns a result, not an error: no enricher failure should stop a flush.
 	Enrich(Input) EnrichResult
 }
 
-// Registry is the compiled set. Config enables or disables entries but can never add one,
-// which would mean config installing transformation code.
+// Registry is the compiled set; config can enable or disable entries but never add one.
 type Registry struct {
 	byID map[string]Enricher
 }
@@ -166,8 +134,7 @@ func NewRegistry(es ...Enricher) *Registry {
 func (r *Registry) For(id string) (Enricher, error) {
 	e, ok := r.byID[id]
 	if !ok {
-		// Refused, never ignored: an unknown enricher would otherwise silently collect
-		// raw-only and lose the DB-side fields with no signal.
+		// Refused, never ignored: otherwise the DB-side fields are lost with no signal.
 		return nil, fmt.Errorf("enrich: no enricher %q in this build", id)
 	}
 	return e, nil
