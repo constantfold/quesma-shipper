@@ -20,7 +20,7 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	username := realUsername(t)
 	stageClaudeSession(t, w, username, claudeSessionID)
 	grown := stageClaudeSession(t, w, username, numericSessionID)
-	writeConfig(t, w, "sources:\n  - id: project-map\n    enabled: false\n  - id: claude-account\n    enabled: false\n")
+	writeConfig(t, w, withoutGeneratedSources)
 
 	runOneShot(t)
 	if got := len(mirrorObjects(collect(t, w))); got != 2 {
@@ -32,11 +32,10 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	runOneShot(t)
-	w.plane.assertClean(t)
 
 	// Both commit: the plane answered for the unchanged one and the grown one was PUT, so
 	// the unchanged key keeps its single version.
-	if got := countOf(shippedFromLog(t, w), claudeSource); got != 2 {
+	if got := shippedClaude(t, w); got != 2 {
 		t.Errorf("the run over the lost document shipped %d transcripts, want both", got)
 	}
 	present := w.plane.answeredPresent()
@@ -54,15 +53,24 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		}
 	}
 
-	// The replacement document loads, and the next run trusts it: nothing to send.
+	// The replacement document loads, and the next run trusts it: nothing to send but the
+	// heartbeat, which is current state and rewritten every run.
 	if _, err := engine.Peek(statePath(w)); err != nil {
 		t.Fatalf("the replacement document does not load: %v", err)
 	}
+	puts, beats := len(w.store.mirrorPuts()), len(w.store.heartbeats())
 	out := runOneShot(t)
-	if got := countOf(shippedFromLog(t, w), claudeSource); got != 0 {
-		t.Errorf("the run after recovery shipped %d transcripts again:\n%s", got, out)
+	if shipped := shippedFromLog(t, w); len(shipped) != 0 {
+		t.Errorf("the run after recovery shipped %v again:\n%s", shipped, out)
 	}
 	if counts := summary(t, out); counts["unchanged"] == 0 {
 		t.Errorf("the run after recovery reported nothing unchanged:\n%s", out)
 	}
+	if got := len(w.store.mirrorPuts()); got != puts {
+		t.Errorf("the run after recovery stored %d trajectory objects in total, want %d", got, puts)
+	}
+	if got := len(w.store.heartbeats()); got != beats+1 {
+		t.Errorf("the run after recovery wrote %d heartbeats, want one", got-beats)
+	}
+	w.plane.assertClean(t)
 }
