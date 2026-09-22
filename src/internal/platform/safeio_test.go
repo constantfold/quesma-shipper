@@ -1,7 +1,6 @@
 package platform_test
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,9 +82,8 @@ func TestFileOperationsRefuseSymlinks(t *testing.T) {
 }
 
 func TestOpenRefusesDirectory(t *testing.T) {
-	if _, _, err := platform.Open(t.TempDir()); !errors.Is(err, platform.ErrNotRegular) {
-		t.Fatalf("a directory must be refused with ErrNotRegular, got %v", err)
-	}
+	_, _, err := platform.Open(t.TempDir())
+	require.ErrorIs(t, err, platform.ErrNotRegular, "a directory must be refused")
 }
 
 func TestWriteAtomicCreatesAndReplaces(t *testing.T) {
@@ -122,8 +120,8 @@ func TestOpenTruncatingEmptiesWhatItOpens(t *testing.T) {
 
 	f, err := platform.OpenTruncating(p, 0o600)
 	require.NoError(t, err)
-	_, writeStringErr := f.WriteString("this run\n")
-	require.NoError(t, writeStringErr)
+	_, err = f.WriteString("this run\n")
+	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
 	got, err := os.ReadFile(p)
@@ -141,7 +139,6 @@ func TestWriteAtomicIsNotWedgedByAStrandedTemp(t *testing.T) {
 	require.NoError(t, platform.WriteAtomic(p, []byte("fresh"), 0o600))
 	got, err := os.ReadFile(p)
 	require.NoError(t, err)
-	assert.Equalf(t, "fresh", string(got), "content: got %q want %q", got, "fresh")
-	_, statErr := os.Stat(stale)
-	assert.NoErrorf(t, statErr, "the stranded temp should be left alone (no cleanup, by decision): %v", statErr)
+	assert.Equal(t, "fresh", string(got))
+	assert.FileExists(t, stale, "the stranded temp should be left alone (no cleanup, by decision)")
 }

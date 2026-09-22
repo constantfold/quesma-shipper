@@ -61,8 +61,6 @@ func humanSigned(b int64) string {
 	return human(uint64(b))
 }
 
-// --- the soft ceiling ---------------------------------------------------------
-
 // DefaultSoftLimit: 512 MiB in flight, held a few times over through the pipeline, is about 2 GiB; the rest is headroom.
 const DefaultSoftLimit = 3072 << 20
 

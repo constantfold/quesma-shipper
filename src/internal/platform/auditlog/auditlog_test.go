@@ -23,11 +23,7 @@ func open(t *testing.T) (*auditlog.Log, string) {
 func TestAppendAndTail(t *testing.T) {
 	l, path := open(t)
 
-	for _, d := range []auditlog.Decision{
-		auditlog.DecisionShipped,
-		auditlog.DecisionUnchanged,
-		auditlog.DecisionParked,
-	} {
+	for _, d := range []auditlog.Decision{auditlog.DecisionShipped, auditlog.DecisionUnchanged, auditlog.DecisionParked} {
 		require.NoError(t, l.Append(auditlog.Entry{
 			Decision: d,
 			SourceID: "claude-code-transcripts",
@@ -40,10 +36,10 @@ func TestAppendAndTail(t *testing.T) {
 
 	entries, err := auditlog.Tail(path, 0)
 	require.NoError(t, err)
-	require.Lenf(t, entries, 3, "expected 3 entries, got %d", len(entries))
-	assert.Equalf(t, auditlog.DecisionShipped, entries[0].Decision, "order: first entry is %q", entries[0].Decision)
-	assert.Equalf(t, auditlog.DecisionParked, entries[2].Decision, "order: last entry is %q", entries[2].Decision)
-	assert.True(t, !entries[0].At.IsZero(), "entries must be timestamped")
+	require.Len(t, entries, 3)
+	assert.Equal(t, auditlog.DecisionShipped, entries[0].Decision, "order: first entry")
+	assert.Equal(t, auditlog.DecisionParked, entries[2].Decision, "order: last entry")
+	assert.False(t, entries[0].At.IsZero(), "entries must be timestamped")
 
 	entries, err = auditlog.Tail(path, 2)
 	require.NoError(t, err)
@@ -95,19 +91,19 @@ func TestTornLastLineDoesNotBreakTheRead(t *testing.T) {
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	require.NoError(t, err)
-	_, writeStringErr := f.WriteString(`{"decision":"shipped","fi`)
-	require.NoError(t, writeStringErr)
+	_, err = f.WriteString(`{"decision":"shipped","fi`)
+	require.NoError(t, err)
 	f.Close()
 
 	entries, err := auditlog.Tail(path, 0)
-	require.NoErrorf(t, err, "a torn line must not fail the read: %v", err)
+	require.NoError(t, err, "a torn line must not fail the read")
 	assert.Truef(t, len(entries) == 1 && entries[0].File == "good", "the complete entry should survive: %v", entries)
 }
 
 func TestTailOnMissingLogIsEmptyNotAnError(t *testing.T) {
 	entries, err := auditlog.Tail(filepath.Join(t.TempDir(), "nope.log"), 0)
-	require.NoErrorf(t, err, "a missing log is not an error: %v", err)
-	assert.Lenf(t, entries, 0, "expected no entries, got %d", len(entries))
+	require.NoError(t, err, "a missing log is not an error")
+	assert.Empty(t, entries)
 }
 
 // Entry has no field for a redacted value or for payload content: the discipline is structural.

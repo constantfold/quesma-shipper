@@ -72,8 +72,7 @@ func ReadWhole(path string, maxBytes int64) ([]byte, os.FileInfo, error) {
 	if size := info.Size(); size > 0 && size <= int64(math.MaxInt-bytes.MinRead) {
 		buf.Grow(int(size) + bytes.MinRead)
 	}
-	_, err = buf.ReadFrom(r)
-	if err != nil {
+	if _, err := buf.ReadFrom(r); err != nil {
 		return nil, info, fmt.Errorf("safeio: read %s: %w", path, err)
 	}
 	body := buf.Bytes()
