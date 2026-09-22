@@ -32,32 +32,40 @@ func TestAnInPlaceCorruptionIsCaughtByTheChecksum(t *testing.T) {
 	}
 }
 
-// A document from before the field existed has no checksum and must still load; it earns one on
-// the next rewrite rather than being treated as corrupt.
-func TestADocumentWithoutAChecksumStillLoads(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": []}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600))
-	if _, err := engine.Peek(dir); err != nil {
-		t.Fatalf("a pre-checksum document must load: %v", err)
+// Historical and partially populated documents load safely, then rewrite into the current shape.
+func TestCompatibleDocumentsLoadAndRewrite(t *testing.T) {
+	k := key("/x/a.jsonl")
+	for _, tc := range []struct {
+		name, document string
+		entries        map[engine.Key]engine.Fingerprint
+	}{
+		{"pre-checksum", `{"state_schema": 1, "entries": []}`, map[engine.Key]engine.Fingerprint{}},
+		{"unknown field", `{"state_schema": 1, "entries": [], "pending_uploads": []}`, map[engine.Key]engine.Fingerprint{}},
+		{"missing fields", `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl"}]}`,
+			map[engine.Key]engine.Fingerprint{k: {}}},
+		{"legacy sink etag", `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", ` +
+			`"native_path": "/x/a.jsonl", "source_hash": "` + sha + `", "sink_etag": "abc123"}]}`,
+			map[engine.Key]engine.Fingerprint{k: {SourceHash: sha}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, engine.FileName)
+			require.NoError(t, os.WriteFile(path, []byte(tc.document), 0o600))
+			doc, err := engine.Peek(dir)
+			require.NoError(t, err)
+			assert.Equal(t, tc.entries, doc.Entries)
+
+			s := open(t, dir)
+			assert.False(t, s.Corrupt(), "compatibility must not depend on discarding the document")
+			require.NoError(t, commit(s, k, fingerprint()))
+			require.NoError(t, s.Close())
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(raw), `"checksum"`)
+			assert.NotContains(t, string(raw), "pending_uploads")
+			assert.NotContains(t, string(raw), "sink_etag")
+		})
 	}
-
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-	raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"checksum"`, "the rewrite should have stamped a checksum")
-}
-
-// An unknown field is ignored and dropped on the next rewrite; absence fails toward re-shipping.
-func TestUnknownFieldIsIgnored(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [], "pending_uploads": []}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600))
-	s, err := engine.Open(dir, installID)
-	require.NoErrorf(t, err, "a document with an unknown field must still load: %v", err)
-	s.Close()
 }
 
 // The one exception to load's interpret-don't-audit stance: a negative attempts count reaches the
@@ -69,48 +77,6 @@ func TestNegativeAttemptsIsRejectedOnLoad(t *testing.T) {
 	_, err := engine.Peek(dir)
 	require.Error(t, err, "a negative attempts count must be rejected")
 	assert.Truef(t, strings.Contains(err.Error(), "attempts") && strings.Contains(err.Error(), "/x/a.jsonl"), "the error must name the value and the entry, got: %v", err)
-}
-
-// Load interprets, it does not audit. A missing field comes back zero, which matches no file, so
-// the engine re-reads and re-ships onto the same key: the safe direction to fail in.
-func TestMissingFieldsLoadAsZeroValues(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl"}]}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600))
-
-	loaded, err := engine.Peek(dir)
-	require.NoErrorf(t, err, "a well-formed document must load: %v", err)
-	k := engine.Key{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"}
-	fp, ok := loaded.Entries[k]
-	if !ok {
-		t.Fatalf("entry missing; document loaded as %+v", loaded.Entries)
-	}
-	assert.Truef(t, fp.SourceHash == "" && fp.SourceSize == 0 && fp.SourceMTime.IsZero(), "absent fields must read back zero, got %+v", fp)
-}
-
-// A document carrying the retired sink_etag must load and simply drop the field: the schema is
-// not bumped for a removal, and refusing would re-ship the install's whole history.
-func TestALegacySinkETagLoadsAndIsDropped(t *testing.T) {
-	dir := t.TempDir()
-	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", ` +
-		`"native_path": "/x/a.jsonl", "source_hash": "` + sha + `", "sink_etag": "abc123"}]}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600))
-
-	loaded, err := engine.Peek(dir)
-	require.NoErrorf(t, err, "a document carrying sink_etag must still load: %v", err)
-	k := engine.Key{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"}
-	fp, ok := loaded.Entries[k]
-	if !ok {
-		t.Fatalf("entry missing; document loaded as %+v", loaded.Entries)
-	}
-	assert.Equalf(t, sha, fp.SourceHash, "the entry beside the dropped field was lost: %+v", fp)
-
-	// The rewrite drops it: the schema refuses unknown properties on the way out.
-	s := open(t, dir)
-	require.NoError(t, commit(s, k, fingerprint()))
-	raw, err := os.ReadFile(filepath.Join(dir, engine.FileName))
-	require.NoError(t, err)
-	assert.NotContainsf(t, string(raw), "sink_etag", "sink_etag survived a rewrite:\n%s", raw)
 }
 
 // The schema is enforced on the way out, so a bad commit fails and the old document stays.

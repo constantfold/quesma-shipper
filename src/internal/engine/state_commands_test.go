@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,55 +11,41 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// Reset is the one-command full re-ship onto existing keys; its dry run must not write.
-func TestResetForgetsEverythingButOnlyWithApply(t *testing.T) {
+// Reset respects the writer lock and dry-run mode, and preserves identity when clearing progress.
+func TestResetLifecycle(t *testing.T) {
 	dir := t.TempDir()
-
 	s := open(t, dir)
+	_, err := engine.Reset(dir, installID, false)
+	require.ErrorIs(t, err, engine.ErrLocked)
+	require.NoError(t, s.Close())
+	removed, err := engine.Reset(dir, installID, false)
+	require.NoError(t, err)
+	assert.Zero(t, removed, "an empty store has nothing to forget")
+
+	s = open(t, dir)
 	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 	require.NoError(t, commit(s, key("/x/b.jsonl"), fingerprint()))
-	s.Close()
-
-	removed, err := engine.Reset(dir, installID, true)
+	require.NoError(t, s.Close())
+	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
 	require.NoError(t, err)
-	assert.Equalf(t, 2, removed, "dry run should count both entries, counted %d", removed)
-	s2 := open(t, dir)
-	require.Equalf(t, 2, s2.Len(), "a dry run wrote: %d entries remain, want 2", s2.Len())
-	s2.Close()
+
+	removed, err = engine.Reset(dir, installID, true)
+	require.NoError(t, err)
+	assert.Equal(t, 2, removed)
+	s = open(t, dir)
+	require.Equal(t, 2, s.Len(), "a dry run must retain both entries")
+	require.NoError(t, s.Close())
+	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a dry run must not rewrite the document")
 
 	removed, err = engine.Reset(dir, installID, false)
 	require.NoError(t, err)
-	assert.Equalf(t, 2, removed, "apply should count what it forgot, counted %d", removed)
-	s3 := open(t, dir)
-	defer s3.Close()
-	assert.Equalf(t, 0, s3.Len(), "apply left %d entries", s3.Len())
-}
-
-// A reset store keeps its install id, so a later open under another identity still discards it.
-func TestResetKeepsTheInstallID(t *testing.T) {
-	dir := t.TempDir()
-
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-
-	if _, err := engine.Reset(dir, installID, false); err != nil {
-		t.Fatal(err)
-	}
+	assert.Equal(t, 2, removed)
+	assert.Zero(t, open(t, dir).Len())
 	doc, err := engine.Peek(dir)
 	require.NoError(t, err)
-	assert.Equalf(t, installID, doc.InstallID, "a reset document lost its install id: %q", doc.InstallID)
-}
-
-// Resetting an empty store is a no-op, not an error: it must be safe to run fleet-wide.
-func TestResetOnAnEmptyStoreIsANoOp(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	s.Close()
-
-	removed, err := engine.Reset(dir, installID, false)
-	require.NoError(t, err)
-	assert.Equalf(t, 0, removed, "an empty store forgot %d entries", removed)
+	assert.Equal(t, installID, doc.InstallID)
 }
 
 // An unloadable document is what an operator runs reset against, so --apply must replace it even
@@ -142,16 +127,5 @@ func TestADryRunLeavesAnUnloadableDocumentOnDisk(t *testing.T) {
 		got, err := os.ReadFile(path)
 		require.NoError(t, err)
 		assert.Equal(t, string(got), string(original))
-	}
-}
-
-// Reset contends like every verb: told the store is busy, never queued behind it.
-func TestResetIsRefusedWhileLocked(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	defer s.Close()
-
-	if _, err := engine.Reset(dir, installID, false); !errors.Is(err, engine.ErrLocked) {
-		t.Errorf("reset under a held lock: err = %v, want ErrLocked", err)
 	}
 }

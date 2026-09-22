@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,103 +61,45 @@ func open(t *testing.T, dir string) *engine.Store {
 	return s
 }
 
-func TestFirstRunIsEmptyNotAnError(t *testing.T) {
-	s := open(t, t.TempDir())
-	assert.Equalf(t, 0, s.Len(), "a fresh store should be empty, has %d entries", s.Len())
-	assert.True(t, !s.Corrupt(), "a missing document is a first run, not a discarded one")
-	if _, ok := s.Get(key("/x/a.jsonl")); ok {
-		t.Error("a fresh store should know nothing")
-	}
-}
-
-func TestCommitThenReload(t *testing.T) {
+// A store locks writers, exposes durable reads, and preserves exact fingerprints across reopen.
+func TestStoreLifecycle(t *testing.T) {
 	dir := t.TempDir()
-
+	path := filepath.Join(dir, engine.FileName)
 	s := open(t, dir)
+	assert.Zero(t, s.Len())
+	assert.False(t, s.Corrupt(), "a missing document is a first run")
+	_, known := s.Get(key("/x/a.jsonl"))
+	assert.False(t, known)
+	_, err := engine.Open(dir, installID)
+	require.ErrorIs(t, err, engine.ErrLocked, "a concurrent writer must be refused")
+
+	// A previous process with this PID may have died before replacing the document.
+	require.NoError(t, os.WriteFile(path+fmt.Sprintf(".tmp-%d", os.Getpid()), []byte(`{"half":"written`), 0o600))
 	want := fingerprint()
+	require.NotZero(t, want.SourceMTime.Nanosecond(), "whole seconds would hide lost timestamp precision")
 	require.NoError(t, commit(s, key("/x/a.jsonl"), want))
-	s.Close()
-
-	s2 := open(t, dir)
-	got, ok := s2.Get(key("/x/a.jsonl"))
-	require.True(t, ok, "entry did not survive a reload")
-	assert.Truef(t, got.SourceHash == want.SourceHash && got.SourceSize == want.SourceSize, "fingerprint changed across reload:\n got %+v\nwant %+v", got, want)
-	if !got.SourceMTime.Equal(want.SourceMTime) {
-		t.Errorf("mtime: got %s want %s", got.SourceMTime, want.SourceMTime)
-	}
-}
-
-// The pre-filter compares stored mtimes for exact equality, so the precision matters: dropping
-// sub-second digits makes that branch unreachable and re-reads every file forever.
-func TestAStoredMTimeKeepsTheNanosecondsThePreFilterComparesOn(t *testing.T) {
-	dir := t.TempDir()
-	fp := fingerprint()
-	require.NotEqual(t, 0, fp.SourceMTime.Nanosecond(), "the fixture has a whole-second mtime; this test would pass vacuously")
-
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fp))
-	s.Close()
-
-	got, ok := open(t, dir).Get(key("/x/a.jsonl"))
-	require.True(t, ok, "entry did not survive a reload")
-	if !got.SourceMTime.Equal(fp.SourceMTime) {
-		t.Errorf("mtime lost precision across the round trip:\n got %s\nwant %s",
-			got.SourceMTime.Format(time.RFC3339Nano), fp.SourceMTime.Format(time.RFC3339Nano))
-	}
-}
-
-// The flock stops two flushes interleaving, non-blocking: a second flush is told the store is busy.
-func TestSecondOpenIsRefusedNotQueued(t *testing.T) {
-	dir := t.TempDir()
-	first := open(t, dir)
-	defer first.Close()
-
-	if _, err := engine.Open(dir, installID); !errors.Is(err, engine.ErrLocked) {
-		t.Fatalf("a second open must return ErrLocked, got %v", err)
-	}
-}
-
-func TestLockIsReleasedOnClose(t *testing.T) {
-	dir := t.TempDir()
-	s, err := engine.Open(dir, installID)
-	require.NoError(t, err)
-	require.NoError(t, s.Close())
-	s2, err := engine.Open(dir, installID)
-	require.NoErrorf(t, err, "the lock was not released: %v", err)
-	s2.Close()
-}
-
-// status and doctor must not contend with a flush, so Peek takes no lock.
-func TestPeekWorksWhileLocked(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
 
 	doc, err := engine.Peek(dir)
-	require.NoErrorf(t, err, "Peek must work while the store is locked: %v", err)
-	assert.Lenf(t, doc.Entries, 1, "Peek saw %d entries, want 1", len(doc.Entries))
-	assert.Equalf(t, installID, doc.InstallID, "Peek install_id: %q", doc.InstallID)
-}
-
-// A crash before the atomic replace leaves the previous document intact: retry is re-run.
-func TestCrashBeforeCommitLeavesThePreviousDocument(t *testing.T) {
-	dir := t.TempDir()
-
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-
-	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
+	require.NoError(t, err, "Peek must work while the writer holds the lock")
+	assert.Equal(t, installID, doc.InstallID)
+	assert.Equal(t, map[engine.Key]engine.Fingerprint{key("/x/a.jsonl"): want}, doc.Entries)
+	before, err := os.ReadFile(path)
 	require.NoError(t, err)
+	require.NoError(t, s.Close())
 
-	// A second store mutates in memory and is abandoned without committing.
-	s2 := open(t, dir)
-	s2.Get(key("/x/a.jsonl"))
-	s2.Close()
-
-	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
+	s = open(t, dir)
+	got, known := s.Get(key("/x/a.jsonl"))
+	require.True(t, known, "the entry must survive reopen")
+	assert.Equal(t, want, got)
+	require.NoError(t, s.Close())
+	after, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, string(after), string(before), "the document changed without a commit")
+	assert.Equal(t, before, after, "open, read and close must not rewrite committed state")
+
+	require.NoError(t, os.Remove(path))
+	s = open(t, dir)
+	assert.Zero(t, s.Len(), "losing the document forgets progress")
+	assert.False(t, s.Corrupt(), "a removed document is a fresh start")
 }
 
 // The document is deterministic, so a diff shows real change rather than map ordering.
@@ -219,7 +160,7 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 	}
 }
 
-func TestCommitAllReplacesOnce(t *testing.T) {
+func TestCommitAllPersistsEveryEntry(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
 
@@ -234,37 +175,5 @@ func TestCommitAllReplacesOnce(t *testing.T) {
 
 	doc, err := engine.Peek(dir)
 	require.NoError(t, err)
-	assert.Lenf(t, doc.Entries, 3, "expected 3 entries on disk, got %d", len(doc.Entries))
-}
-
-// A wiped document is cheap: the store comes back empty and re-uploads onto existing keys.
-func TestWipedDocumentComesBackEmpty(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-
-	require.NoError(t, os.Remove(filepath.Join(dir, engine.FileName)))
-	s2, err := engine.Open(dir, installID)
-	require.NoErrorf(t, err, "a wiped document must not be an error: %v", err)
-	defer s2.Close()
-	assert.Equalf(t, 0, s2.Len(), "expected an empty store, got %d entries", s2.Len())
-}
-
-// A kill -9 mid-flush strands a fingerprints temp. The old fixed name, fingerprints.json.tmp-<pid>,
-// wedged every commit once a pid recurred: O_EXCL refused the name until a human deleted the file,
-// and every run re-shipped everything. Temp names are random now; this pins the wedge closed.
-func TestAStrandedOwnPidTempDoesNotWedgeTheCommit(t *testing.T) {
-	dir := t.TempDir()
-	tmp := filepath.Join(dir, engine.FileName+fmt.Sprintf(".tmp-%d", os.Getpid()))
-	require.NoError(t, os.WriteFile(tmp, []byte(`{"half":"written`), 0o600))
-
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-
-	s2 := open(t, dir)
-	if _, ok := s2.Get(key("/x/a.jsonl")); !ok {
-		t.Fatal("the committed entry did not survive a reload")
-	}
+	assert.Equal(t, updates, doc.Entries)
 }
