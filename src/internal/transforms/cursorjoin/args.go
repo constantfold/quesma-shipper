@@ -5,6 +5,7 @@
 package cursorjoin
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"maps"
@@ -268,9 +269,9 @@ func normaliseToolName(s string) string {
 
 // jsonEscaped is the string as it appears inside a JSON document, without the quotes.
 func jsonEscaped(s string) string {
-	b, err := marshalCompact(s)
-	if err != nil || len(b) < 2 {
-		return s
-	}
-	return string(b[1 : len(b)-1])
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s) // Encoding a string into a bytes.Buffer cannot fail.
+	return buf.String()[1 : buf.Len()-2]
 }

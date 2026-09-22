@@ -83,7 +83,7 @@ func forEachModuleGoFile(t *testing.T, fn func(rel string, file *ast.File, fset 
 //
 // sqliteread weakens this lint, so it carries a compensating control rather than an exemption:
 // it may write only under the scratch directory it is given, asserted by
-// TestAReadNeverWritesBesideTheSource. The enricher packages that USE it stay off this list.
+// TestDeclaredReadContract. The enricher packages that USE it stay off this list.
 var writeCapablePackages = []string{
 	"internal/platform/auditlog",
 	"internal/platform/crashjournal",

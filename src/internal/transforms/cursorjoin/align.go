@@ -70,38 +70,29 @@ type blockEnrich struct {
 // (one bubble for a call the agent ran twice) and ambiguous (see matchAmbiguous).
 func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false) // Punctuation must not change the derived output hash.
 	cursor := 0
 
-	// Unmatched blocks are classified once the pass completes, by where the last CONSUMING
-	// match landed. Repeats and ambiguous events move no watermark, and a hole before one is
-	// still caught by any real match after it.
-	seq := 0
-	lastMatchedSeq := -1
-	var unmatched []int
-	repeats := 0
-	ambiguous := 0
-
+	// A consuming match turns all preceding unmatched blocks into gaps; only the remainder can be tail.
+	unmatched := 0
+	a := alignment{}
 	state := make([]bubbleState, len(events))
-
-	// Decode failures are positioned, not just counted: only the final line's can be the
-	// expected torn tail, and a mid-file one loses its blocks' enrichment with mismatches at zero.
-	lineNo := 0
-	invalidLines := 0
-	lastInvalidLine := -1
+	lastLineInvalid := false
 
 	for raw := range bytes.SplitSeq(content, []byte{'\n'}) {
 		trimmed := bytes.TrimSpace(raw)
 		if len(trimmed) == 0 {
 			continue
 		}
-		lineNo++
+		lastLineInvalid = false
 
 		var l line
 		if err := json.Unmarshal(trimmed, &l); err != nil {
 			// A truncated tail is expected: Cursor's transcript writes are not atomic.
-			invalidLines++
-			lastInvalidLine = lineNo
-			if err := writeLine(&out, outLine{NativeInvalid: string(trimmed)}); err != nil {
+			a.lineDecodeErrors++
+			lastLineInvalid = true
+			if err := encoder.Encode(outLine{NativeInvalid: string(trimmed)}); err != nil {
 				return alignment{}, err
 			}
 			continue
@@ -110,68 +101,61 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 		// turn_ended is a terminator, not an event. It has no bubble and must not consume
 		// the cursor.
 		if l.Role == "" || l.Message == nil || len(l.Message.Content) == 0 {
-			if err := writeLine(&out, outLine{Native: append(json.RawMessage{}, trimmed...)}); err != nil {
+			if err := encoder.Encode(outLine{Native: trimmed}); err != nil {
 				return alignment{}, err
 			}
 			continue
 		}
 
-		enriched := make([]*blockEnrich, len(l.Message.Content))
-		matchedAny := false
+		var enriched []*blockEnrich
 		for i, blk := range l.Message.Content {
 			// Reasoning arrives as a literal [REDACTED] with nothing to align to.
 			if blk.Type == "text" && isRedactedReasoning(string(blk.Text)) {
 				continue
 			}
 			idx, outcome, ev, n := matchBlock(blk, string(l.Role), events, cursor, state)
-			seq++
 			switch outcome {
 			case matchNone:
-				unmatched = append(unmatched, seq)
+				unmatched++
 				continue
 			case matchRepeat:
 				// Explained, but nothing to attach: the consumed bubble's result
 				// belongs to the run that consumed it.
-				repeats++
+				a.repeats++
 				continue
 			case matchAmbiguous:
-				ambiguous++
+				a.ambiguous++
 				state[idx].declined = true
 				continue
 			}
-			lastMatchedSeq = seq
+			a.mismatches += unmatched
+			unmatched = 0
 			state[idx].used = true
 			state[idx].ev, state[idx].n = ev, n
-			if idx+1 > cursor {
-				cursor = idx + 1
+			cursor = max(cursor, idx+1)
+			if enriched == nil {
+				enriched = make([]*blockEnrich, len(l.Message.Content))
 			}
-			matchedAny = true
 			enriched[i] = fromBubble(events[idx])
 		}
-		if !matchedAny {
-			enriched = nil
-		}
-		if err := writeLine(&out, outLine{
-			Native: append(json.RawMessage{}, trimmed...),
+		if err := encoder.Encode(outLine{
+			Native: trimmed,
 			Enrich: enriched,
 		}); err != nil {
 			return alignment{}, err
 		}
 	}
 
-	a := alignment{out: out.Bytes(), repeats: repeats, ambiguous: ambiguous}
-	// Exempt by position, not by kind: a torn tail is by definition terminal.
-	a.lineDecodeErrors = invalidLines
-	if invalidLines > 0 && lastInvalidLine == lineNo {
+	a.out = out.Bytes()
+	// A decode failure is an expected torn tail only when it is the final nonempty line.
+	if lastLineInvalid {
 		a.lineDecodeErrors--
 	}
-	for _, s := range unmatched {
+	if cursor > 0 {
+		a.tail = unmatched
+	} else {
 		// A transcript that matched nothing is all mismatch, not all tail.
-		if lastMatchedSeq >= 0 && s > lastMatchedSeq {
-			a.tail++
-		} else {
-			a.mismatches++
-		}
+		a.mismatches = unmatched
 	}
 	return a, nil
 }
@@ -212,27 +196,4 @@ func fromBubble(b *bubble) *blockEnrich {
 		e.Result = t.Result
 	}
 	return e
-}
-
-// writeLine emits one output record. No HTML escaping: the output hash is the change signal, and
-// json.Encoder's default < > & escaping would make it depend on the transcript's punctuation.
-func writeLine(w *bytes.Buffer, l outLine) error {
-	body, err := marshalCompact(l)
-	if err != nil {
-		return err
-	}
-	w.Write(body)
-	w.WriteByte('\n')
-	return nil
-}
-
-func marshalCompact(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	// Encode appends a newline; writeLine adds its own, so trim this one.
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }

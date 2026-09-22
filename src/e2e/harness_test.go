@@ -245,10 +245,9 @@ func touchEverything(t *testing.T, w *world) {
 	require.NoError(t, err)
 }
 
-// Must stay in step with cursorjoin.DBCandidates: if that moves, the Cursor fixtures stop being
+// Match cursorjoin.DBCandidates; TestCursorPairYieldsADerivedObjectAndKeepsTheRaw checks the derived path.
 const cursorStateDB = "Cursor/User/globalStorage/state.vscdb"
 
-// found and TestCursorPairYieldsOneDerivedObject fails rather than passing on the raw path.
 func cursorStatePath() string {
 	if runtime.GOOS == "darwin" {
 		return "Library/Application Support/" + cursorStateDB
