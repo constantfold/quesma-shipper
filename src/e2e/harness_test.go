@@ -1,3 +1,6 @@
+// Synthetic machines for the end-to-end tier: a HOME the catalog finds sources under, the client's
+// config and state, and the fake plane and store its uploads go through. Commands run through the
+// real command tree in process.
 package e2e
 
 import (
@@ -33,8 +36,6 @@ var fixtureMTime = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 
 const heartbeatKey = "state/heartbeat.json.age"
 
-// world is one synthetic machine: a HOME the catalog finds sources under, the client's config and
-// state, the plane that authorizes its uploads and the store they land in.
 type world struct {
 	Home     string
 	Config   string // XDG_CONFIG_HOME
@@ -46,28 +47,51 @@ type world struct {
 	store *fakeStore
 }
 
-// stageWorld points the client at the machine through the environment, not flags, because the
-// catalog resolves its roots through HOME. It is the enrolled shape, the only one that can upload.
-func stageWorld(t *testing.T, opts ...func(*world)) *world {
+// The enrolled shape, the only one that can upload. The environment rather than flags points the
+// client at it, because the catalog resolves its roots through HOME.
+func stageWorld(t *testing.T) *world {
 	t.Helper()
 	w := stageBareWorld(t)
-	seedIdentity(t, w)
+	id, err := age.ParseX25519Identity(testAgeIdentity)
+	require.NoError(t, err, "the test identity does not parse")
+	w.Identity = id
+	require.NoError(t, os.MkdirAll(statePath(w), 0o700))
+	writeJSON(t, filepath.Join(statePath(w), "identity.json"), map[string]any{
+		"identity_schema": 1,
+		"install_id":      testInstallID,
+		"age_identity":    testAgeIdentity,
+		"age_recipient":   id.Recipient().String(),
+		"name_key":        testNameKey,
+		"created_at":      fixtureMTime.Format(time.RFC3339),
+	})
 
 	pub, priv, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
 	w.store = startFakeStore(t)
 	w.plane = startFakePlane(t, w.store, pub)
-	seedEnrollment(t, w, w.plane.server.URL, priv)
+	writeJSON(t, filepath.Join(statePath(w), "enrollment.json"), map[string]any{
+		"enrollment_schema": 2,
+		"install_id":        testInstallID,
+		"organization":      "default",
+		"endpoint":          w.plane.server.URL,
+		"device_key":        base64.StdEncoding.EncodeToString(priv),
+		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
+	})
 
 	writeConfig(t, w, "")
-	for _, opt := range opts {
-		opt(w)
-	}
 	return w
 }
 
-// Directories and environment only: no identity, no enrollment, no config. The world `enroll`
-// meets, and with no enrollment record there is no route to any destination at all.
+// 0600: the client refuses identity and enrollment files any wider, and that refusal is exercised
+// here on purpose.
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(v, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+}
+
+// Directories and environment only: the world `enroll` meets, with no route to any destination.
 func stageBareWorld(t *testing.T) *world {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -90,52 +114,18 @@ func stageBareWorld(t *testing.T) *world {
 	return w
 }
 
-func seedIdentity(t *testing.T, w *world) {
-	t.Helper()
-	id, err := age.ParseX25519Identity(testAgeIdentity)
-	require.NoErrorf(t, err, "the test identity does not parse: %v", err)
-	w.Identity = id
-
-	dir := filepath.Join(w.State, "trajectory-shipper")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	unit := map[string]any{
-		"identity_schema": 1,
-		"install_id":      testInstallID,
-		"age_identity":    testAgeIdentity,
-		"age_recipient":   id.Recipient().String(),
-		"name_key":        testNameKey,
-		"created_at":      fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.Marshal(unit)
-	require.NoError(t, err)
-	// 0600: Load refuses a unit any wider, and that refusal is exercised here on purpose.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600))
+func statePath(w *world) string {
+	return filepath.Join(w.State, "trajectory-shipper")
 }
 
-// 0600, because LoadEnrollment refuses anything wider and the file holds a private signing key.
-func seedEnrollment(t *testing.T, w *world, endpoint string, deviceKey ed25519.PrivateKey) {
-	t.Helper()
-	record := map[string]any{
-		"enrollment_schema": 2,
-		"install_id":        testInstallID,
-		"organization":      "default",
-		"endpoint":          endpoint,
-		"device_key":        base64.StdEncoding.EncodeToString(deviceKey),
-		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.MarshalIndent(record, "", "  ")
-	require.NoError(t, err)
-	path := filepath.Join(w.State, "trajectory-shipper", "enrollment.json")
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
+func userConfigPath(w *world) string {
+	return filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
 }
 
-// writeConfig writes the client's own config; extra is appended verbatim, which is how a test says
-// "and this source is disabled" without a second helper.
+// The client's own config; extra is appended verbatim, which is how a test says "and this source is
+// disabled" without a second helper.
 func writeConfig(t *testing.T, w *world, extra string) {
 	t.Helper()
-	require.True(t, w.store != nil, "writeConfig needs a staged object store; this world has none")
-	dir := filepath.Join(w.Config, "trajectory-shipper")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
 	body := "config_version: 1\n" +
 		// Deliberately a block an older build wrote: it selects nothing now, and every verb has to
 		// keep working over it rather than failing to parse after an update.
@@ -149,26 +139,28 @@ func writeConfig(t *testing.T, w *world, extra string) {
 		// The 64-file default would truncate a grown fixture, and read as a collection bug.
 		"max_files_per_run: 10000\n" +
 		extra
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(userConfigPath(w)), 0o700))
+	require.NoError(t, os.WriteFile(userConfigPath(w), []byte(body), 0o600))
 }
 
 // The install that enrolled and never configured upload_targets, running unpinned: tickets decide
 // the destination, https only.
 func writeConfigWithoutUploadTargets(t *testing.T, w *world) {
 	t.Helper()
-	dir := filepath.Join(w.Config, "trajectory-shipper")
-	body := "config_version: 1\nmax_files_per_run: 10000\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600))
+	require.NoError(t, os.WriteFile(userConfigPath(w), []byte("config_version: 1\nmax_files_per_run: 10000\n"), 0o600))
 }
 
-// run executes one command through the real command tree and returns its output.
+// One command through the real command tree, for the paths whose point is a non-zero exit.
+func runExpectingFailure(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	return execute(context.Background(), args)
+}
+
 func run(t *testing.T, args ...string) string {
 	t.Helper()
-	var out bytes.Buffer
-	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
-	root.SetArgs(args)
-	require.NoError(t, root.Execute())
-	return out.String()
+	out, err := execute(context.Background(), args)
+	require.NoErrorf(t, err, "%v:\n%s", args, out)
+	return out
 }
 
 func runOneShot(t *testing.T, flags ...string) string {
@@ -176,20 +168,15 @@ func runOneShot(t *testing.T, flags ...string) string {
 	return run(t, append([]string{"run", "--once"}, flags...)...)
 }
 
-// runExpectingFailure is for the paths whose whole point is a non-zero exit.
-func runExpectingFailure(t *testing.T, args ...string) (string, error) {
-	t.Helper()
-	var out bytes.Buffer
-	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
-	root.SetArgs(args)
-	err := root.Execute()
-	return out.String(), err
-}
-
+// For a command that would otherwise wait forever.
 func runUntilCancelled(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	return execute(ctx, args)
+}
+
+func execute(ctx context.Context, args []string) (string, error) {
 	var out bytes.Buffer
 	root := cli.Root(app.Build{Version: "e2e"}, &out, &out)
 	root.SetArgs(args)
@@ -197,35 +184,25 @@ func runUntilCancelled(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func runOneShotExpectingFailure(t *testing.T, flags ...string) (string, error) {
-	t.Helper()
-	return runExpectingFailure(t, append([]string{"run", "--once"}, flags...)...)
-}
-
-// stageFile writes one file into the synthetic HOME and stamps the fixed mtime on it.
+// One file in the synthetic HOME, stamped with the fixed mtime.
 func stageFile(t *testing.T, w *world, rel, content string) string {
 	t.Helper()
 	full := filepath.Join(w.Home, filepath.FromSlash(rel))
 	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o700))
 	require.NoError(t, os.WriteFile(full, []byte(content), 0o600))
-	touch(t, full)
+	require.NoError(t, os.Chtimes(full, fixtureMTime, fixtureMTime))
 	return full
 }
 
-func touch(t *testing.T, path string) {
-	t.Helper()
-	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
-}
-
+// Later than the fixture's on purpose: keeping the old timestamp would test the content hash alone,
+// and the mtime pre-filter is part of what runs.
 func appendLine(t *testing.T, path, line string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
-	_, writeStringErr := f.WriteString(line + "\n")
-	require.NoError(t, writeStringErr)
+	_, err = f.WriteString(line + "\n")
+	require.NoError(t, err)
 	require.NoError(t, f.Close())
-	// Later than the fixture's on purpose: keeping the old timestamp would test the content hash
-	// alone, and the mtime pre-filter is part of what runs.
 	later := fixtureMTime.Add(time.Hour)
 	require.NoError(t, os.Chtimes(path, later, later))
 }
@@ -245,16 +222,13 @@ func touchEverything(t *testing.T, w *world) {
 }
 
 // Match cursorjoin.DBCandidates; TestCursorPairYieldsADerivedObjectAndKeepsTheRaw checks the derived path.
-const cursorStateDB = "Cursor/User/globalStorage/state.vscdb"
-
 func cursorStatePath() string {
-	if runtime.GOOS == "darwin" {
-		return "Library/Application Support/" + cursorStateDB
+	const db = "Cursor/User/globalStorage/state.vscdb"
+	switch runtime.GOOS {
+	case "darwin":
+		return "Library/Application Support/" + db
+	case "windows":
+		return "AppData/Roaming/" + db
 	}
-	if runtime.GOOS == "windows" {
-		return "AppData/Roaming/" + cursorStateDB
-	}
-	return ".config/" + cursorStateDB
+	return ".config/" + db
 }
-
-func ensureDir(path string) error { return os.MkdirAll(path, 0o700) }

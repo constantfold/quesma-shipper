@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -99,52 +100,36 @@ func (s *fakeStore) serve(w http.ResponseWriter, r *http.Request) {
 func (s *fakeStore) stored() []storedPut {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]storedPut(nil), s.puts...)
+	return slices.Clone(s.puts)
+}
+
+func (s *fakeStore) storedWhere(keep func(key string) bool) []storedPut {
+	return slices.DeleteFunc(s.stored(), func(p storedPut) bool { return !keep(p.Key) })
 }
 
 // mirrorPuts are the trajectory objects, dropping the heartbeat every run writes.
 func (s *fakeStore) mirrorPuts() []storedPut {
-	var out []storedPut
-	for _, p := range s.stored() {
-		if strings.Contains(p.Key, "/mirror/") {
-			out = append(out, p)
-		}
-	}
-	return out
+	return s.storedWhere(func(key string) bool { return strings.Contains(key, "/mirror/") })
 }
 
 func (s *fakeStore) heartbeats() []storedPut {
-	var out []storedPut
-	for _, p := range s.stored() {
-		if strings.HasSuffix(p.Key, heartbeatKey) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// The source hash the newest version under a key was stored with: what a real plane's HEAD reads
-// back, and the only thing that tells "already holds these bytes" from "holds older ones".
-func (s *fakeStore) sourceHash(key string) (string, bool) {
-	hash, held := "", false
-	for _, p := range s.stored() {
-		if p.Key == key {
-			hash, held = p.Headers["x-amz-meta-source-hash"], true
-		}
-	}
-	return hash, held
+	return s.storedWhere(func(key string) bool { return strings.HasSuffix(key, heartbeatKey) })
 }
 
 // The write count under one key, which is the only thing making "the same file shipped twice"
 // observable: the newest version alone cannot tell the two cases apart.
 func (s *fakeStore) versions(key string) int {
-	n := 0
-	for _, p := range s.stored() {
-		if p.Key == key {
-			n++
-		}
+	return len(s.storedWhere(func(k string) bool { return k == key }))
+}
+
+// The source hash the newest version under a key was stored with: what a real plane's HEAD reads
+// back, and the only thing that tells "already holds these bytes" from "holds older ones".
+func (s *fakeStore) sourceHash(key string) (string, bool) {
+	puts := s.storedWhere(func(k string) bool { return k == key })
+	if len(puts) == 0 {
+		return "", false
 	}
-	return n
+	return puts[len(puts)-1].Headers["x-amz-meta-source-hash"], true
 }
 
 // The server's escaped spelling of an object key, written out rather than imported: the exact-key

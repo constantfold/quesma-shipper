@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 
@@ -21,112 +20,80 @@ echo "$@" >> "$SHIPPER_STUB_LOG"
 exit 0
 `
 
-type installWorld struct{ *world }
-
-func stageInstall(t *testing.T) installWorld {
-	t.Helper()
+func TestInstallScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is unix-only")
 	}
-	return installWorld{world: stageBareWorld(t)}
-}
-
-func (w installWorld) bin() string     { return filepath.Join(w.Home, "bin") }
-func (w installWorld) shipper() string { return filepath.Join(w.bin(), "quesma-shipper") }
-func (w installWorld) stubLog() string { return filepath.Join(w.Home, "stub.log") }
-
-func stageStub(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "shipper-local")
-	require.NoError(t, os.WriteFile(path, []byte(stubShipper), 0o600))
-	return path
-}
-
-func runInstall(t *testing.T, w installWorld, args ...string) (string, error) {
-	t.Helper()
 	script, err := filepath.Abs(filepath.Join("..", "packaging", "linux", "install.sh"))
 	require.NoError(t, err)
-	cmd := exec.Command("sh", append([]string{script, "--bin-dir", w.bin()}, args...)...)
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + w.Home,
-		"XDG_STATE_HOME=" + w.State,
-		"SHIPPER_STUB_LOG=" + w.stubLog(),
-	}
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
 
-func stubCalls(t *testing.T, w installWorld) []string {
-	t.Helper()
-	raw, err := os.ReadFile(w.stubLog())
-	if os.IsNotExist(err) {
-		return nil
-	}
-	require.NoError(t, err)
-	return strings.Split(strings.TrimSpace(string(raw)), "\n")
-}
+	for _, tc := range []struct {
+		name        string
+		enrolled    bool
+		missingFrom bool // --from names a file that does not exist
+		args        []string
+		wantErr     bool
+		wantOut     string
+		wantCalls   []string
+	}{
+		{
+			name:      "PlacesALocalBinaryAndLogsIn",
+			args:      []string{"inv-1", "--server", "http://cp.example"},
+			wantCalls: []string{"--version", "login --server http://cp.example inv-1", "postinstall"},
+		},
+		{
+			name:      "KeepsAnExistingLogin",
+			enrolled:  true,
+			args:      []string{"--no-service"},
+			wantOut:   "already logged in",
+			wantCalls: []string{"--version"},
+		},
+		{
+			name:      "DoesNotRequireEnrollment",
+			args:      []string{"--no-service"},
+			wantOut:   "not enrolled",
+			wantCalls: []string{"--version"},
+		},
+		{name: "RequiresServerBeforeChangingAnything", args: []string{"token", "--no-service"}, wantErr: true, wantOut: "pass --server URL"},
+		{name: "ChecksLocalInputBeforeChangingAnything", missingFrom: true, args: []string{"token", "--no-service"}, wantErr: true, wantOut: "no such file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := stageBareWorld(t)
+			bin := filepath.Join(w.Home, "bin")
+			shipper, stubLog := filepath.Join(bin, "quesma-shipper"), filepath.Join(w.Home, "stub.log")
+			if tc.enrolled {
+				require.NoError(t, os.MkdirAll(statePath(w), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(statePath(w), "enrollment.json"), []byte("{}"), 0o600))
+			}
+			from := shipper + ".missing"
+			if !tc.missingFrom {
+				from = filepath.Join(t.TempDir(), "shipper-local")
+				require.NoError(t, os.WriteFile(from, []byte(stubShipper), 0o600))
+			}
 
-func markEnrolled(t *testing.T, w installWorld) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(statePath(w.world), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(statePath(w.world), "enrollment.json"), []byte("{}"), 0o600))
-}
+			cmd := exec.Command("sh", append([]string{script, "--bin-dir", bin, "--from", from}, tc.args...)...)
+			cmd.Env = []string{
+				"PATH=" + os.Getenv("PATH"),
+				"HOME=" + w.Home,
+				"XDG_STATE_HOME=" + w.State,
+				"SHIPPER_STUB_LOG=" + stubLog,
+			}
+			raw, err := cmd.CombinedOutput()
+			out := string(raw)
+			require.Equalf(t, tc.wantErr, err != nil, "install.sh ended %v:\n%s", err, out)
+			assert.Contains(t, out, tc.wantOut)
 
-func TestInstallScriptPlacesALocalBinaryAndLogsIn(t *testing.T) {
-	w := stageInstall(t)
-	out, err := runInstall(t, w, "--from", stageStub(t), "inv-1", "--server", "http://cp.example")
-	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
-	if calls := stubCalls(t, w); !slices.Equal(calls, []string{
-		"--version",
-		"login --server http://cp.example inv-1",
-		"postinstall",
-	}) {
-		t.Errorf("stub calls = %v\n%s", calls, out)
-	}
-	if placed, err := os.ReadFile(w.shipper()); err != nil || string(placed) != stubShipper {
-		t.Fatalf("binary not placed: %v\n%s", err, out)
-	}
-}
+			var calls []string
+			if log, err := os.ReadFile(stubLog); err == nil {
+				calls = strings.Split(strings.TrimSpace(string(log)), "\n")
+			}
+			assert.Equal(t, tc.wantCalls, calls)
 
-func TestInstallScriptKeepsAnExistingLogin(t *testing.T) {
-	w := stageInstall(t)
-	markEnrolled(t, w)
-	out, err := runInstall(t, w, "--from", stageStub(t), "--no-service")
-	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
-	assert.Containsf(t, out, "already logged in", "missing existing-login message:\n%s", out)
-	if calls := stubCalls(t, w); !slices.Equal(calls, []string{"--version"}) {
-		t.Errorf("stub calls = %v", calls)
-	}
-}
-
-func TestInstallScriptDoesNotRequireEnrollment(t *testing.T) {
-	w := stageInstall(t)
-	out, err := runInstall(t, w, "--from", stageStub(t), "--no-service")
-	require.NoErrorf(t, err, "install.sh failed: %v\n%s", err, out)
-	assert.Containsf(t, out, "not enrolled", "missing enrollment instructions:\n%s", out)
-	if calls := stubCalls(t, w); !slices.Equal(calls, []string{"--version"}) {
-		t.Errorf("stub calls = %v", calls)
-	}
-}
-
-func TestInstallScriptRequiresServerBeforeChangingAnything(t *testing.T) {
-	w := stageInstall(t)
-	out, err := runInstall(t, w, "--from", stageStub(t), "token", "--no-service")
-	require.Truef(t, err != nil && strings.Contains(out, "pass --server URL"), "first install without --server was not refused: %v\n%s", err, out)
-	if _, err := os.Stat(w.shipper()); !os.IsNotExist(err) {
-		t.Errorf("destination changed: %v", err)
-	}
-	if calls := stubCalls(t, w); calls != nil {
-		t.Errorf("stub was called: %v", calls)
-	}
-}
-
-func TestInstallScriptChecksLocalInputBeforeChangingAnything(t *testing.T) {
-	w := stageInstall(t)
-	out, err := runInstall(t, w, "--from", w.shipper()+".missing", "token", "--no-service")
-	require.Truef(t, err != nil && strings.Contains(out, "no such file"), "missing --from file was not refused: %v\n%s", err, out)
-	if _, err := os.Stat(w.shipper()); !os.IsNotExist(err) {
-		t.Errorf("destination changed: %v", err)
+			if placed, err := os.ReadFile(shipper); tc.wantErr {
+				assert.NoFileExists(t, shipper, "destination changed")
+			} else {
+				assert.Equalf(t, stubShipper, string(placed), "binary not placed: %v\n%s", err, out)
+			}
+		})
 	}
 }
