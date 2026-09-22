@@ -10,8 +10,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// base64MinLength is the floor below which a speculative decode is not worth it. A
-// constant, not a setting: a setting that reads as tunable invites tuning it below the floor.
+// base64MinLength is the floor below which a speculative decode is not worth it.
 const base64MinLength = 32
 
 type replacementSpan struct {
@@ -41,23 +40,17 @@ func (p valuePlan) apply(value string) string {
 	return b.String()
 }
 
-// planValue applies the full ladder to one decoded JSON string without building the
-// rewritten value; the walker maps the decoded spans back to the original token.
+// planValue applies the full ladder to one decoded JSON string without building the rewritten
+// value. An exempt field stands down the heuristics and nothing else.
 func (s *Scrubber) planValue(value, key string, field FieldPath, family string, scan *packs.ValueScan) valuePlan {
 	entropy := s.entropy
 	if s.exempt.Exempt(family, field) {
-		// Detector-scoped: the field stands down the heuristics and nothing else.
 		entropy = nil
 	}
 	return s.planValueWith(value, entropy, key, scan)
 }
 
-func (s *Scrubber) planValueWith(
-	value string,
-	entropy *entropyMatcher,
-	key string,
-	scan *packs.ValueScan,
-) valuePlan {
+func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key string, scan *packs.ValueScan) valuePlan {
 	// A key that names a secret takes the whole value, whatever shape the value has.
 	if key != "" && s.keyNames.MatchesKeyName(key) && value != "" {
 		return valuePlan{
@@ -67,9 +60,8 @@ func (s *Scrubber) planValueWith(
 		}
 	}
 
-	// A gate that did not fire means the matcher behind it cannot match.
+	// A keyword set that did not fire means the matcher behind it cannot match.
 	seen := s.prefilter.Scan(value)
-	// The shared pass for rules with no keyword to gate on; lazy until one asks.
 	scan.Reset(value)
 
 	var patternSpans, heuristicSpans []Span
@@ -83,9 +75,8 @@ func (s *Scrubber) planValueWith(
 		heuristicSpans = entropy.Match(value)
 	}
 
-	// One level of base64, never recursion: work stays bounded per byte. The whole
-	// encoded value goes rather than a patched re-encoding, which would rewrite bytes
-	// the shipper is supposed to preserve.
+	// One level of base64, never recursion, so work stays bounded per byte. The whole encoded
+	// value goes: a patched re-encoding would rewrite bytes the shipper preserves.
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 && len(value) >= base64MinLength {
 		if id, hit := s.base64Hit(value, scan); hit {
 			return valuePlan{
@@ -122,9 +113,9 @@ func (s *Scrubber) planValueWith(
 	return plan
 }
 
-// pathUserReplacementSpans finds username occurrences in the detector-rewritten value
-// without constructing it: a detector touching a neighbour contributes the sentinel's
-// boundary byte, and an occurrence a detector swallowed no longer exists.
+// pathUserReplacementSpans finds username occurrences in the detector-rewritten value without
+// building it: a neighbouring sentinel contributes its boundary byte, and a swallowed occurrence
+// no longer exists.
 func pathUserReplacementSpans(value, username string, blocked []replacementSpan) ([]replacementSpan, int) {
 	if len(username) < 2 || value == "" || !strings.Contains(value, username) {
 		return nil, 0
@@ -170,8 +161,7 @@ func pathUserReplacementSpans(value, username string, blocked []replacementSpan)
 // base64Hit decodes one level and reports the first pattern rule that fires inside.
 func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool) {
 	trimmed := strings.TrimSpace(value)
-	// A byte outside every base64 alphabet means all four decoders would fail, so this
-	// is the same answer without their buffers.
+	// The same answer as four failing decoders, without their buffers.
 	if !base64Shaped(trimmed) {
 		return "", false
 	}
@@ -185,8 +175,7 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 		}
 		text := string(decoded)
 		seen := s.prefilter.Scan(text)
-		// Safe to reuse the caller's scratch: this answer short-circuits the rest of
-		// the ladder for the value.
+		// Reusing the caller's scratch is safe: this answer ends the ladder for the value.
 		scan.Reset(text)
 		for _, p := range s.patterns {
 			if !seen.Has(p.gate) {
@@ -201,9 +190,8 @@ func (s *Scrubber) base64Hit(value string, scan *packs.ValueScan) (string, bool)
 	return "", false
 }
 
-// base64Shaped covers the standard and URL alphabets, padding, and the carriage return
-// the decoders skip. Deliberately permissive: only the rejection has to be sound, since
-// what passes still goes through the real decoder.
+// base64Shaped covers both alphabets, padding, and the carriage return the decoders skip. Only
+// the rejection has to be sound, since what passes still goes through the real decoder.
 func base64Shaped(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]

@@ -14,46 +14,42 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Entry names inside the container, fixed rather than derived from the source file: the
-// payload's real name is a path, and a path belongs in the manifest only.
+// Entry names inside the container are fixed: the payload's real name is a path, and a path
+// belongs in the manifest only.
 const (
 	ManifestEntry = "manifest.json"
 	PayloadEntry  = "payload"
 )
 
-// ZstdLevel is pinned at 3: changing it changes every object's bytes.
+// ZstdLevel stays at 3: changing it changes every object's bytes.
 const ZstdLevel = 3
 
-// SuggestedPrefixBytes is where a ranged head-fetch should start. It must cover the age
-// header, the first zstd block and the first tar entry; age's STREAM chunks decrypt only
-// whole, so anything under one 64 KiB chunk plus the header yields nothing at all.
+// SuggestedPrefixBytes is where a ranged head-fetch should start: it covers the age header, the
+// first zstd block and the first tar entry. age's STREAM chunks decrypt only whole.
 const SuggestedPrefixBytes = 256 * 1024
 
-// maxManifestBytes bounds the manifest read out of an object: a huge one is hostile
-// input, not data this code wrote.
-const maxManifestBytes = 4 << 20
+// Bounds on hostile input: a huge manifest is not one this code wrote, and a crafted object
+// must not exhaust memory through zstd expansion.
+const (
+	maxManifestBytes     = 4 << 20
+	maxDecompressedBytes = 8 << 30
+)
 
-// maxDecompressedBytes bounds zstd expansion so a crafted object cannot exhaust memory.
-const maxDecompressedBytes = 8 << 30
-
-// ErrPrefixTooShort means the fetched prefix did not contain the whole manifest; the
-// caller should double its range rather than treat the object as corrupt.
+// ErrPrefixTooShort means the fetched prefix did not contain the whole manifest; the caller
+// should double its range rather than treat the object as corrupt.
 var ErrPrefixTooShort = errors.New("seal: object prefix too short to contain the manifest")
 
-// Seal builds one mirror object and returns the manifest as sealed: ShippedHash, PayloadSize
-// and, unless the caller set it, Encryption are filled here, so what a caller needs for object
-// metadata is the returned copy and never its own.
+// Seal builds one mirror object and returns the manifest as sealed, with ShippedHash, PayloadSize
+// and (unless the caller set it) Encryption filled: object metadata comes from the returned copy.
 func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manifest, error) {
 	if len(recipients) == 0 {
-		// An object with no recipient is either unreadable or unencrypted.
 		return nil, Manifest{}, errors.New("seal: no age recipients: encryption is not optional")
 	}
-
-	m.ShippedHash = Hash(payload)
-	m.PayloadSize = int64(len(payload))
 	if m.SealedAt == "" {
 		return nil, Manifest{}, errors.New("seal: sealed_at must be set by the caller")
 	}
+	m.ShippedHash = Hash(payload)
+	m.PayloadSize = int64(len(payload))
 	if m.Encryption == nil {
 		m.Encryption = &Encryption{Scheme: "age"}
 	}
@@ -75,13 +71,9 @@ func Seal(m Manifest, payload []byte, recipients []age.Recipient) ([]byte, Manif
 	return obj, m, nil
 }
 
-// writeContainer streams all three layers into one pre-sized result buffer, so no
-// payload-sized staging copy exists between them.
-func writeContainer(
-	manifestJSON, payload []byte,
-	payloadMTime *time.Time,
-	recipients []age.Recipient,
-) ([]byte, error) {
+// writeContainer streams all three layers into one pre-sized buffer, with no payload-sized
+// staging copy between them.
+func writeContainer(manifestJSON, payload []byte, payloadMTime *time.Time, recipients []age.Recipient) ([]byte, error) {
 	out := bytes.NewBuffer(make([]byte, 0, ciphertextHint(len(manifestJSON), len(payload), len(recipients))))
 	ageWriter, err := age.Encrypt(out, recipients...)
 	if err != nil {
@@ -124,9 +116,8 @@ func ciphertextHint(manifestLen, payloadLen, recipients int) int {
 	return zstdLen + 256 + 256*recipients + 16*(zstdLen/ageChunk+1)
 }
 
-// writeTar writes the two entries, manifest first. Headers are normalised so the tar layer
-// contributes no machine-specific bytes; USTAR rather than PAX, whose extended headers
-// would sit ahead of the manifest and push it deeper into the object.
+// writeTar writes the two entries, manifest first, with headers normalised so the tar layer adds
+// no machine-specific bytes. USTAR, since PAX headers would push the manifest deeper.
 func writeTar(w io.Writer, manifestJSON, payload []byte, payloadMTime *time.Time) error {
 	tw := tar.NewWriter(w)
 
@@ -197,13 +188,12 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 	return m, payload, nil
 }
 
-// ReadManifestPrefix decodes the manifest from a ranged-GET prefix. Reading a prefix
-// ALWAYS ends in a truncation error from age or zstd, which must be swallowed once the
-// first tar entry is whole; a failure before that is ErrPrefixTooShort instead.
+// ReadManifestPrefix decodes the manifest from a ranged-GET prefix. Reading a prefix ALWAYS ends
+// in a truncation error from age or zstd, swallowed once the first tar entry is whole; a failure
+// before that, including a prefix too short for the age header, is ErrPrefixTooShort.
 func ReadManifestPrefix(prefix []byte, identities ...age.Identity) (Manifest, error) {
 	tr, closeFn, err := tarReader(bytes.NewReader(prefix), identities...)
 	if err != nil {
-		// A prefix too short to hold even the age header fails here.
 		return Manifest{}, fmt.Errorf("%w: %v", ErrPrefixTooShort, err)
 	}
 	defer closeFn()
@@ -215,8 +205,8 @@ func ReadManifestPrefix(prefix []byte, identities ...age.Identity) (Manifest, er
 	return m, nil
 }
 
-// readManifestEntry validates that the first tar entry is the manifest; if it is not, the
-// container was not built by this code and its layout cannot be trusted.
+// readManifestEntry validates that the first tar entry is the manifest; otherwise the container
+// was not built by this code and its layout cannot be trusted.
 func readManifestEntry(tr *tar.Reader) (Manifest, error) {
 	hdr, err := tr.Next()
 	if err != nil {

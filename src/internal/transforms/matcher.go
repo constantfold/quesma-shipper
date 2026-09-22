@@ -19,9 +19,8 @@ func Sentinel(ruleID string) string {
 	return sentinelPrefix + ":" + ruleID + "__"
 }
 
-// sentinelPrefix is the run-visible head of every sentinel: the ":" after it is outside the
-// entropy candidate alphabet, so only this part fuses with adjacent text. The entropy matcher
-// must keep skipping candidates carrying it, or a re-scrub eats the previous pass's ledger.
+// sentinelPrefix is the part of every sentinel inside the entropy candidate alphabet, so the
+// entropy matcher skips candidates carrying it, or a re-scrub eats the previous pass's ledger.
 const sentinelPrefix = "__REDACTED"
 
 // ExemptionSet protects identifier and opaque fields from heuristics; paths match exactly.
@@ -46,11 +45,9 @@ func (e *ExemptionSet) Exempt(family string, field FieldPath) bool {
 	return e.byFamily["*"][field] || e.byFamily[family][field]
 }
 
-// prioritizedSpan carries the matcher class alongside the span, so overlapping
-// matches resolve by confidence rather than alphabetically.
+// prioritizedSpan resolves overlaps by confidence: 0 is a pattern rule, 1 a heuristic.
 type prioritizedSpan struct {
 	Span
-	// priority 0 is a high-confidence pattern rule, 1 is a heuristic. Lower wins.
 	priority int
 }
 
@@ -88,11 +85,7 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 	cursor := 0
 
 	for _, s := range spans {
-		if s.Start < 0 || s.End > len(value) || s.Start >= s.End {
-			continue
-		}
-		if s.Start < cursor {
-			// Already inside a replaced region.
+		if s.Start < cursor || s.Start < 0 || s.End > len(value) || s.Start >= s.End {
 			continue
 		}
 		resolved = append(resolved, s.Span)
@@ -103,9 +96,8 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 	return resolved, redacted, hits
 }
 
-// dropOverlappedHeuristics removes heuristic spans intersecting a pattern span and widens
-// that span over any reach past it, so one secret yields one confidently attributed
-// placeholder.
+// dropOverlappedHeuristics removes heuristic spans intersecting a pattern span and widens that
+// span over any reach past it, so one secret yields one confidently attributed placeholder.
 func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
 	var patterns []prioritizedSpan
 	for _, s := range spans {
@@ -123,7 +115,6 @@ func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
 		overlapped := false
 		for i, p := range patterns {
 			if s.Start < p.End && p.Start < s.End {
-				// Extend the confident span so no tail of the secret escapes.
 				if s.End > patterns[i].End {
 					patterns[i].End = s.End
 					for j := range out {
