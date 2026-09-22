@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
@@ -109,13 +110,7 @@ func mainWorktreeDir(commonDir string) string {
 
 // remoteURLs pulls url values out of a git config, ignoring everything else.
 func remoteURLs(body string, take []string) []string {
-	wantURL := len(take) == 0
-	for _, t := range take {
-		if strings.Contains(t, "url") {
-			wantURL = true
-		}
-	}
-	if !wantURL {
+	if len(take) > 0 && !slices.ContainsFunc(take, func(t string) bool { return strings.Contains(t, "url") }) {
 		return nil
 	}
 
@@ -123,10 +118,7 @@ func remoteURLs(body string, take []string) []string {
 	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		key, value, found := strings.Cut(trimmed, "=")
-		if !found {
-			continue
-		}
-		if strings.TrimSpace(key) != "url" {
+		if !found || strings.TrimSpace(key) != "url" {
 			continue
 		}
 		out = append(out, strings.TrimSpace(value))
@@ -180,9 +172,6 @@ func finishRemote(host, path string) (string, string, error) {
 	if path == "" {
 		return "", "", fmt.Errorf("remote has no path")
 	}
-	project := path
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		project = path[idx+1:]
-	}
+	project := path[strings.LastIndex(path, "/")+1:]
 	return host + "/" + path, project, nil
 }

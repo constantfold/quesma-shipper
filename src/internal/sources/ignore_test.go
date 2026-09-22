@@ -246,38 +246,40 @@ func TestWorktreeMarkerScope(t *testing.T) {
 	}
 }
 
-// Discovery itself drops a marked repository's worktree sessions: the view is not the
-// only place the fold happens.
-func TestDiscoveryDropsAMarkedRepositorysWorktree(t *testing.T) {
-	home := t.TempDir()
-	repo := gitRepo(t, home, "work/acme")
-	writeFile(t, filepath.Join(repo, notrajectories), "")
-	wt := writeWorktree(t, repo, filepath.Join(home, "wt"), "stray")
-
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "projects/p-wt/s.jsonl"), wt)
-	d, err := discoverByGlob(Request{
-		Source: Resolved{Source: Source{ID: "claude-code-transcripts", Include: []string{"projects/**/*.jsonl"}}, Root: root, Enabled: true},
-		Deny:   New(t.TempDir()),
-		Ignore: newRepoFilter(testProbe(), testGitRead(), home),
-	})
-	require.NoError(t, err)
-	assert.Truef(t, len(d.Candidates) == 0 && d.Ignored, "want the worktree session dropped as ignored; got %d candidates, ignored=%v", len(d.Candidates), d.Ignored)
-}
-
-// The catalog wires the probe source's git_read into the filter; without it a worktree
-// session would be attributed to its disposable directory name.
-func TestCatalogRepoFilterReadsGit(t *testing.T) {
+// Worktrees inherit repository attribution and markers through both configured and catalog filters.
+func TestWorktreeAttributionAndTracking(t *testing.T) {
 	catalog, err := Load()
 	require.NoError(t, err)
-	home := t.TempDir()
-	repo := gitRepo(t, home, "work/acme")
-	wt := writeWorktree(t, repo, filepath.Join(repo, ".claude", "worktrees"), "stray")
+	for _, parent := range []string{"work/acme/.claude/worktrees", "wt"} {
+		t.Run(parent, func(t *testing.T) {
+			home := t.TempDir()
+			repo := gitRepo(t, home, "work/acme")
+			wt := writeWorktree(t, repo, filepath.Join(home, parent), "stray")
+			root := t.TempDir()
+			c := candidateFor(root, "projects/p-wt/s.jsonl")
+			writeSession(t, c.Path, wt)
+			src := Resolved{Source: Source{ID: "claude-code-transcripts", Include: []string{"projects/**/*.jsonl"}}, Root: root, Enabled: true}
+			f := newRepoFilter(testProbe(), testGitRead(), home)
+			assert.Equal(t, repo, catalog.RepoFilter().RepoDir(src, c))
+			marker, marked := f.Marker(wt)
+			assert.Empty(t, marker)
+			assert.False(t, marked)
 
-	root := t.TempDir()
-	writeSession(t, filepath.Join(root, "projects/p-wt/s.jsonl"), wt)
-	f := catalog.RepoFilter()
-	assert.Equal(t, f.RepoDir(Resolved{Source: Source{ID: "claude-code-transcripts"}, Root: root}, candidateFor(root, "projects/p-wt/s.jsonl")), repo)
+			markerPath := filepath.Join(repo, notrajectories)
+			writeFile(t, markerPath, "")
+			marker, marked = f.Marker(wt)
+			assert.Equal(t, markerPath, marker)
+			assert.True(t, marked)
+			for _, filter := range []*RepoFilter{f, newRepoFilter(testProbe(), testGitRead(), home)} {
+				d, err := discoverByGlob(Request{Source: src, Deny: New(t.TempDir()), Ignore: filter})
+				require.NoError(t, err)
+				assert.Empty(t, d.Candidates)
+				assert.True(t, d.Ignored)
+			}
+			require.NoError(t, f.Track(repo))
+			assert.False(t, f.Match(src, c), "removing the repository marker resumes its worktrees")
+		})
+	}
 }
 
 // A source emptied by the markers says so, and is not the drift state; an oversized file
@@ -317,19 +319,5 @@ func TestACheckoutAtHomeDoesNotClaimEverything(t *testing.T) {
 	}
 	if _, ok := f.Marker(acme); ok {
 		t.Error("a marker at home must not reach into a checkout")
-	}
-}
-
-func TestMarkerOnAWorktreeIsTheRepositorys(t *testing.T) {
-	home := t.TempDir()
-	repo := gitRepo(t, home, "work/acme")
-	wt := writeWorktree(t, repo, filepath.Join(home, "wt"), "stray")
-	f := newRepoFilter(testProbe(), testGitRead(), home)
-	if got, ok := f.Marker(wt); ok || got != "" {
-		t.Fatalf("no marker yet, got %q", got)
-	}
-	writeFile(t, filepath.Join(repo, notrajectories), "")
-	if got, ok := f.Marker(wt); !ok || got != filepath.Join(repo, notrajectories) {
-		t.Errorf("Marker(worktree) = %q, %v", got, ok)
 	}
 }
