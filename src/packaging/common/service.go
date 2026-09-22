@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -55,6 +56,12 @@ func ServiceSpecFor(exe, stateDir string, stopTimeout, tick time.Duration) (Spec
 
 // EntryMode keeps the per-user service entry private.
 const EntryMode = 0o600
+
+// The Windows runner sets SupervisedEnv, and restarts the child when it exits with SupervisorRestartExitCode.
+const (
+	SupervisedEnv             = "SHIPPER_SUPERVISED"
+	SupervisorRestartExitCode = 75
+)
 
 // ExitTimeout is the kill window shared by service renderers and shutdown logic.
 func ExitTimeout(spec Spec) time.Duration {
@@ -170,4 +177,26 @@ func CurrentExecutable() (string, error) {
 		exe = resolved
 	}
 	return exe, nil
+}
+
+const BrewUninstall = "brew uninstall --cask quesmaorg/tap/quesma-shipper"
+
+// HomebrewCaskRoot recognizes the installed payload, including custom Homebrew prefixes.
+func HomebrewCaskRoot(executable string) string {
+	if !filepath.IsAbs(executable) || filepath.Base(executable) != "quesma-shipper" {
+		return ""
+	}
+	root := filepath.Dir(filepath.Dir(executable))
+	if filepath.Base(root) != "quesma-shipper" || filepath.Base(filepath.Dir(root)) != "Caskroom" {
+		return ""
+	}
+	return root
+}
+
+func HomebrewManaged() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	exe, err := CurrentExecutable()
+	return err == nil && HomebrewCaskRoot(exe) != ""
 }

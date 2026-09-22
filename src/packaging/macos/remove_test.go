@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,19 +22,15 @@ func TestRemoveProgramRemovesAppAndItsCLILink(t *testing.T) {
 
 	removed, err := RemoveProgram(executable)
 	require.NoError(t, err)
-	require.Equalf(t, app, removed, "removed path = %q, want %q", removed, app)
-	for _, path := range []string{app, link} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Errorf("%s still exists: %v", path, err)
-		}
-	}
+	require.Equal(t, app, removed)
+	assert.NoDirExists(t, app)
+	assert.NoFileExists(t, link)
 }
 
 func TestRemoveProgramRefusesAnUnrelatedApp(t *testing.T) {
 	app := filepath.Join(t.TempDir(), "Other.app")
 	executable := writeTestApp(t, app, "com.example.other", executableName)
-	_, removeProgramErr := RemoveProgram(executable)
-	require.Error(t, removeProgramErr, "uninstall accepted an unrelated app")
-	_, statErr := os.Stat(app)
-	require.NoErrorf(t, statErr, "uninstall damaged the unrelated app: %v", statErr)
+	_, err := RemoveProgram(executable)
+	require.Error(t, err, "uninstall accepted an unrelated app")
+	require.DirExists(t, app, "uninstall damaged the unrelated app")
 }
