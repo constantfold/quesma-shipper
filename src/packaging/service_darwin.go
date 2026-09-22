@@ -13,3 +13,5 @@ func RestartService(ctx context.Context) error        { return macos.RestartServ
 func RestartCommand() string                          { return macos.RestartCommand() }
 func RemoveProgram(executable string) (string, error) { return macos.RemoveProgram(executable) }
 func PostInstall() error                              { return macos.PostInstall() }
+func updateTarget(release common.Release) string      { return macos.UpdateTarget(release) }
+func applyTarget(raw []byte, version string) error    { return macos.ApplyTarget(raw, version) }

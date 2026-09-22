@@ -25,8 +25,7 @@ const taskRunnerName = "quesma-shipper-supervisor.exe"
 func taskName(userSID string) string { return legacyTaskName + " - " + userSID }
 
 func taskRunner(executable string) string {
-	dir := executable[:strings.LastIndexAny(executable, `\/`)+1]
-	return dir + taskRunnerName
+	return executable[:strings.LastIndexAny(executable, `\/`)+1] + taskRunnerName
 }
 
 func programFromTask(command string) string {
@@ -107,9 +106,8 @@ func legacyTaskIsOurs(doc taskDocument, userSID string) bool {
 }
 
 func parseTask(raw []byte) (taskDocument, error) {
-	raw = taskXMLUTF8(raw)
 	var doc taskDocument
-	err := xml.Unmarshal(raw, &doc)
+	err := xml.Unmarshal(taskXMLUTF8(raw), &doc)
 	return doc, err
 }
 

@@ -15,9 +15,21 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
 
-const macPackageTarget = "darwin/pkg"
+// UpdateTarget prefers the signed package when this binary runs from the app bundle.
+func UpdateTarget(release common.Release) string {
+	if _, ok := currentAppBundle(); ok {
+		return release.Targets["darwin/pkg"]
+	}
+	return common.BinaryTarget(release)
+}
 
-func appUpdateTarget(release common.Release) string { return release.Targets[macPackageTarget] }
+func ApplyTarget(raw []byte, version string) error {
+	app, ok := currentAppBundle()
+	if !ok {
+		return common.ApplyBinary(raw)
+	}
+	return applyAppPackage(raw, app, version)
+}
 
 func currentAppBundle() (string, bool) {
 	exe, err := common.CurrentExecutable()
@@ -42,12 +54,8 @@ func appForExecutable(exe string) (string, bool) {
 	if !ok || filepath.Base(app) != appName || filepath.Base(exe) != executableName {
 		return "", false
 	}
-	return app, bundleIdentifierOf(app) == bundleIdentifier
-}
-
-func bundleIdentifierOf(app string) string {
 	id, _ := plistValue(filepath.Join(app, "Contents", "Info.plist"), "CFBundleIdentifier")
-	return id
+	return app, id == bundleIdentifier
 }
 
 func plistValue(plist, key string) (string, error) {
@@ -102,11 +110,7 @@ func validateAppBundle(app, version string) error {
 		return fmt.Errorf("update %s is not a directory", appName)
 	}
 	plist := filepath.Join(app, "Contents", "Info.plist")
-	checks := map[string]string{
-		"CFBundleIdentifier": bundleIdentifier,
-		releaseVersionField:  version,
-	}
-	for key, want := range checks {
+	for key, want := range map[string]string{"CFBundleIdentifier": bundleIdentifier, releaseVersionField: version} {
 		got, err := plistValue(plist, key)
 		if err != nil {
 			return fmt.Errorf("reading %s from update: %w", key, err)

@@ -147,9 +147,8 @@ func ServiceState(ctx context.Context) Status {
 		return st
 	}
 	st.Path = systemdPath(home)
-	if _, err := os.Stat(st.Path); err == nil {
-		st.Installed = true
-	}
+	_, err = os.Stat(st.Path)
+	st.Installed = err == nil
 
 	active, _ := exec.CommandContext(ctx, "systemctl", "--user", "is-active", unitName).Output()
 	enabled, _ := exec.CommandContext(ctx, "systemctl", "--user", "is-enabled", unitName).Output()

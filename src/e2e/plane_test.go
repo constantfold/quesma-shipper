@@ -133,14 +133,9 @@ func (p *fakePlane) serve(w http.ResponseWriter, r *http.Request) {
 			headers["x-amz-meta-"+name] = value
 		}
 		tickets = append(tickets, map[string]any{
-			"ticket_id":             ticketID,
-			"object_id":             obj.ObjectID,
-			"method":                "PUT",
-			"url":                   p.ticketURL(obj.Key, stale),
-			"expires_at":            expires.Format(time.RFC3339Nano),
-			"required_headers":      headers,
-			"content_length":        obj.Size,
-			"content_length_signed": true,
+			"ticket_id": ticketID, "object_id": obj.ObjectID, "method": "PUT", "url": p.ticketURL(obj.Key, stale),
+			"expires_at": expires.Format(time.RFC3339Nano), "required_headers": headers,
+			"content_length": obj.Size, "content_length_signed": true,
 		})
 	}
 

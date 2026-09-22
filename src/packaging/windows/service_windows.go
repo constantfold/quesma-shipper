@@ -38,18 +38,14 @@ func InstallService(spec Spec) error {
 	}
 	name := taskName(current.Uid)
 
-	f, err := os.CreateTemp("", "quesma-shipper-task-*.xml")
+	dir, err := os.MkdirTemp("", "quesma-shipper-task-")
 	if err != nil {
 		return fmt.Errorf("supervise: create task definition: %w", err)
 	}
-	path := f.Name()
-	defer os.Remove(path)
-	if _, err := f.Write(taskXMLForSchtasks(renderTask(spec, current.Uid, current.Username))); err != nil {
-		f.Close()
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "task.xml")
+	if err := os.WriteFile(path, taskXMLForSchtasks(renderTask(spec, current.Uid, current.Username)), 0o600); err != nil {
 		return fmt.Errorf("supervise: write task definition: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("supervise: close task definition: %w", err)
 	}
 
 	// /F is an overwrite of this user's own task now that the name carries their SID.
@@ -76,13 +72,11 @@ func UninstallService() error {
 	if err == nil {
 		return legacyErr
 	}
-	exists, verifyErr := taskExists(context.Background(), name)
-	if verifyErr == nil && !exists {
+	switch exists, verifyErr := taskExists(context.Background(), name); {
+	case verifyErr != nil:
+		return fmt.Errorf("%w: %s (could not verify absence: %v)", common.ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
+	case !exists:
 		return legacyErr
-	}
-	if verifyErr != nil {
-		return fmt.Errorf("%w: %s (could not verify absence: %v)",
-			common.ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
 	}
 	return fmt.Errorf("supervise: delete scheduled task: %s", commandError(err, out))
 }

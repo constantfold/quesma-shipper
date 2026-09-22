@@ -31,12 +31,8 @@ func RemoveProgram(executable string) (string, error) {
 	if err := os.RemoveAll(app); err != nil {
 		return app, err
 	}
-	forgetReceipt(home)
-	return app, nil
-}
-
-func forgetReceipt(home string) {
 	_ = exec.Command("/usr/sbin/pkgutil", "--volume", home, "--forget", bundleIdentifier).Run()
+	return app, nil
 }
 
 func removeCLILink(path, executable string) {

@@ -25,11 +25,7 @@ func aroundStore(t *testing.T, fn func()) storeCounters {
 	before, requestsBefore := settledStoreBytes(t), s3RequestCount(t)
 	fn()
 	after := settledStoreBytes(t)
-	return storeCounters{
-		up:       after.up - before.up,
-		down:     after.down - before.down,
-		requests: s3RequestCount(t) - requestsBefore,
-	}
+	return storeCounters{up: after.up - before.up, down: after.down - before.down, requests: s3RequestCount(t) - requestsBefore}
 }
 
 // toxiproxy counts each byte once received and once sent: up and down are received only, total is all four.
