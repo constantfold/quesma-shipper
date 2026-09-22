@@ -65,31 +65,52 @@ func read(t *testing.T, path string, opts ...func(*sqliteread.Options)) sqlitere
 	return res
 }
 
-func TestTheFastPathReadsInPlace(t *testing.T) {
-	path := newStore(t, map[string]string{
-		"composerData:c1": `{"composerId":"c1"}`,
-		"bubbleId:c1:b1":  `{"type":1,"text":"hello"}`,
-	})
-
-	res := read(t, path)
-	assert.Equalf(t, sqliteread.ReadInPlace, res.Method, "method = %q, want the in-place fast path", res.Method)
-	assert.Lenf(t, res.Rows, 2, "read %d rows, want 2", len(res.Rows))
-}
-
-func TestTheDeclaredScopeIsTheOnlyThingRead(t *testing.T) {
+// One store pins scope, exact values, ordering, and the rule against writes beside the source.
+func TestDeclaredReadContract(t *testing.T) {
+	const verbatim = `{"z":1,"a":2,"m":{"y":3,"b":4}}`
 	path := newStore(t, map[string]string{
 		"composerData:c1":       `{"composerId":"c1"}`,
-		"bubbleId:c1:b1":        `{"type":1}`,
+		"bubbleId:c1:b1":        `{"type":1,"text":"hello"}`,
+		"bubbleId:c1:b2":        `{"type":2}`,
+		"bubbleId:c1:b3":        `{"type":2}`,
+		"composerData:nested":   `{"a":{"b":{"c":[{"blobEncryptionKey":"KEYMATERIAL-DEEP"}]}}}`,
+		"composerData:verbatim": verbatim,
 		"checkpointId:c1:x":     `{"secret":"not this enricher's business"}`,
 		"messageRequestContext": `{"also":"no"}`,
 	})
-
-	res := read(t, path)
-	// Scope is declared at registration, not discovered: returning the whole table would make the declaration decorative.
-	for _, r := range res.Rows {
-		assert.Truef(t, strings.HasPrefix(r.Key, "composerData:") || strings.HasPrefix(r.Key, "bubbleId:"), "read outside the declared keyspaces: %s", r.Key)
+	want := []sqliteread.Row{
+		{Key: "bubbleId:c1:b1", Value: []byte(`{"type":1,"text":"hello"}`)},
+		{Key: "bubbleId:c1:b2", Value: []byte(`{"type":2}`)},
+		{Key: "bubbleId:c1:b3", Value: []byte(`{"type":2}`)},
+		{Key: "composerData:c1", Value: []byte(`{"composerId":"c1"}`)},
+		{Key: "composerData:nested", Value: []byte(`{"a":{"b":{"c":[{}]}}}`)},
+		{Key: "composerData:verbatim", Value: []byte(verbatim)},
 	}
-	assert.Lenf(t, res.Rows, 2, "read %d rows, want 2", len(res.Rows))
+	dir := filepath.Dir(path)
+	before := listDir(t, dir)
+	t.Run("scope, contents and stable order", func(t *testing.T) {
+		for range 2 {
+			res := read(t, path)
+			assert.Equal(t, sqliteread.ReadInPlace, res.Method)
+			assert.Equal(t, want, res.Rows)
+		}
+	})
+	t.Run("narrow scope never writes beside the source", func(t *testing.T) {
+		scratch := filepath.Join(t.TempDir(), "scratch")
+		for range 3 {
+			res := read(t, path, func(o *sqliteread.Options) {
+				o.ScratchDir = scratch
+				o.KeyPrefixes = []string{"composerData:"}
+			})
+			assert.Equal(t, want[3:], res.Rows)
+		}
+		assert.Equal(t, before, listDir(t, dir))
+	})
+	t.Run("LIKE wildcards are literal", func(t *testing.T) {
+		res := read(t, path, func(o *sqliteread.Options) { o.KeyPrefixes = []string{"%"} })
+		assert.Empty(t, res.Rows)
+	})
+	assert.Equal(t, before, listDir(t, dir))
 }
 
 // The exact-key exceptions, stated in both directions: the four named keys pass, and a token key never does.
@@ -158,41 +179,6 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	assert.NotZero(t, res.StrippedFields, "stripped fields must be reported")
 }
 
-func TestNestedEncryptionKeysAreStrippedAtAnyDepth(t *testing.T) {
-	const secret = "KEYMATERIAL-DEEP"
-	path := newStore(t, map[string]string{
-		"composerData:c1": `{"a":{"b":{"c":[{"blobEncryptionKey":"` + secret + `"}]}}}`,
-	})
-	res := read(t, path)
-	for _, r := range res.Rows {
-		// Nested inside arrays inside objects, as the real fields are: a shallow filter would pass this.
-		assert.NotContainsf(t, string(r.Value), secret, "a nested encryption key survived: %s", r.Value)
-	}
-}
-
-func TestRowsThatNeedNoStrippingAreReturnedVerbatim(t *testing.T) {
-	// Byte-identical, not re-encoded: reordered keys would make the output hash re-ship on every run.
-	const value = `{"z":1,"a":2,"m":{"y":3,"b":4}}`
-	path := newStore(t, map[string]string{"composerData:c1": value})
-
-	res := read(t, path)
-	require.Lenf(t, res.Rows, 1, "read %d rows", len(res.Rows))
-	assert.Equalf(t, value, string(res.Rows[0].Value), "a row that needed no stripping was re-encoded:\n got %s\nwant %s", res.Rows[0].Value, value)
-}
-
-func TestRowsComeBackInAStableOrder(t *testing.T) {
-	path := newStore(t, map[string]string{
-		"bubbleId:c1:b3":  `{"type":2}`,
-		"bubbleId:c1:b1":  `{"type":1}`,
-		"bubbleId:c1:b2":  `{"type":2}`,
-		"composerData:c1": `{"composerId":"c1"}`,
-	})
-	first := read(t, path)
-	second := read(t, path)
-
-	require.Equal(t, first.Rows, second.Rows, "row order and values must be stable")
-}
-
 // The scratch-fallback gate: identical output, and nothing left beside the source.
 func TestTheSnapshotReadProducesTheSameRowsAndLeavesNoFilesBehind(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -224,30 +210,8 @@ func TestTheSnapshotReadProducesTheSameRowsAndLeavesNoFilesBehind(t *testing.T) 
 	assert.Containsf(t, err.Error(), "every read method failed", "the error does not name every method: %v", err)
 }
 
-// THE NO-FILES-BESIDE-THE-SOURCE GATE: the compensating control for putting this package on the write-path lint's allow-list.
-func TestAReadNeverWritesBesideTheSource(t *testing.T) {
-	path := newStore(t, map[string]string{
-		"composerData:c1": `{"composerId":"c1"}`,
-		"bubbleId:c1:b1":  `{"type":1,"text":"hi"}`,
-	})
-	dir := filepath.Dir(path)
-	scratch := filepath.Join(t.TempDir(), "scratch")
-
-	before := listDir(t, dir)
-
-	// Repeated in-place reads must not create -wal or -shm sidecars.
-	for i := 0; i < 3; i++ {
-		read(t, path, func(o *sqliteread.Options) {
-			o.ScratchDir = scratch
-			o.KeyPrefixes = []string{"composerData:"}
-		})
-	}
-
-	assert.Equal(t, before, listDir(t, dir), "a read changed the source directory")
-}
-
 // THE SIDECAR BASENAME RULE. A mistake this project already made once.
-func TestAColdCopyKeepsSidecarBasenames(t *testing.T) {
+func TestColdCopyKeepsSidecarsAndRefusesOverwrite(t *testing.T) {
 	src := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
 	// Give it a WAL and an SHM, as a live database has.
 	for _, suffix := range []string{"-wal", "-shm"} {
@@ -266,19 +230,9 @@ func TestAColdCopyKeepsSidecarBasenames(t *testing.T) {
 		}
 	}
 	assert.Equalf(t, filepath.Base(src), filepath.Base(copied), "the copy was renamed: %s vs %s", filepath.Base(copied), filepath.Base(src))
-}
-
-func TestAColdCopyRefusesToOverwriteAnExistingTarget(t *testing.T) {
-	src := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-	dst := t.TempDir()
-
-	if _, err := sqliteread.CopyCold(src, dst); err != nil {
-		t.Fatal(err)
-	}
-	// Second copy into the same directory: overwriting could mix a fresh database with a stale -wal.
-	if _, err := sqliteread.CopyCold(src, dst); err == nil {
-		t.Fatal("a cold copy overwrote an existing target")
-	}
+	// Overwriting could mix a fresh database with stale sidecars.
+	_, err = sqliteread.CopyCold(src, dst)
+	require.Error(t, err, "a cold copy overwrote an existing target")
 }
 
 func TestALiveDatabaseIsNotCopiedRaw(t *testing.T) {
@@ -309,15 +263,6 @@ func TestAnUndeclaredTableIsRefused(t *testing.T) {
 	_, err := sqliteread.Read(sqliteread.Options{Path: path, ScratchDir: t.TempDir()})
 	// Scope is declared: a read with no table is a programming fault, not something to guess at.
 	require.Error(t, err, "a read with no declared table was accepted")
-}
-
-func TestALikeWildcardInAPrefixMatchesLiterally(t *testing.T) {
-	path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`, "bubbleId:c1:b1": `{"type":1}`})
-	res := read(t, path, func(o *sqliteread.Options) {
-		// A prefix containing % must not sweep in every key: declared scope has to mean what it says.
-		o.KeyPrefixes = []string{"%"}
-	})
-	assert.Lenf(t, res.Rows, 0, "a %% prefix matched %d rows; wildcards in a declared prefix must be literal", len(res.Rows))
 }
 
 func listDir(t *testing.T, dir string) []string {
