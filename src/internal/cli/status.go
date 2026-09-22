@@ -13,12 +13,8 @@ import (
 
 func statusCmd(b app.Build) *cobra.Command {
 	var asJSON bool
-	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Is it on, what is collected, what is waiting to be sent",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return showStatus(cmd, b, asJSON) },
-	}
+	cmd := verb("status", "Is it on, what is collected, what is waiting to be sent",
+		func(cmd *cobra.Command) error { return showStatus(cmd, b, asJSON) })
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON")
 	_ = cmd.Flags().MarkHidden("json")
 	return cmd

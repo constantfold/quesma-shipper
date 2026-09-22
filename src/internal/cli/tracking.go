@@ -21,15 +21,10 @@ import (
 )
 
 func trackingCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "tracking",
-		Short: "What is collected, per agent and repository",
-		Long: "What is collected, per agent and repository: size, what is still to be sent, when\n" +
-			"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
-			"file is placed there, what was already sent stays sent) or to start again.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return browseTracking(cmd) },
-	}
+	cmd := verb("tracking", "What is collected, per agent and repository", browseTracking)
+	cmd.Long = "What is collected, per agent and repository: size, what is still to be sent, when\n" +
+		"it was last used. Press `t` on a repository to stop collecting from it (a `.notrajectories`\n" +
+		"file is placed there, what was already sent stays sent) or to start again."
 	return cmd
 }
 

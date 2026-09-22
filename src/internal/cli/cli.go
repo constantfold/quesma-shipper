@@ -90,6 +90,12 @@ func HelpPointer(w io.Writer) string {
 	return styled(p.dim, "More:", p.reset) + " " + styled(p.cyan, app.Name+" --help", p.reset)
 }
 
+// verb is a subcommand that takes no arguments.
+func verb(use, short string, run func(cmd *cobra.Command) error) *cobra.Command {
+	return &cobra.Command{Use: use, Short: short, Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return run(cmd) }}
+}
+
 type errSilent struct{ code int }
 
 func (e errSilent) Error() string { return fmt.Sprintf("exit %d", e.code) }
