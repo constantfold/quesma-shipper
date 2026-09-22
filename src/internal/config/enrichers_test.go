@@ -47,20 +47,14 @@ func TestEnricherEnablementAuthority(t *testing.T) {
 // *sources.Compiled: against two freshly loaded catalogs this would pass whether or not the clone exists.
 func TestTogglingAnEnricherDoesNotMutateTheCompiledCatalog(t *testing.T) {
 	home := fakeHome(t)
-	shared := loadCatalog(t)
+	in := baseInput(t, home, layerDoc(t, config.LayerUser, joinOff))
+	_, err := config.Resolve(in)
+	require.NoError(t, err)
 
-	first := config.Input{
-		Catalog:  shared,
-		Layers:   []config.LayeredDocument{{Layer: config.LayerUser, Doc: doc(t, joinOff)}},
-		Env:      env(home, nil),
-		StateDir: t.TempDir(),
-	}
-	if _, err := config.Resolve(first); err != nil {
-		t.Fatal(err)
-	}
-
-	// The same catalog, no override: if the first resolution wrote through, this still sees the enricher disabled.
-	clean, err := config.Resolve(config.Input{Catalog: shared, Env: env(home, nil), StateDir: t.TempDir()})
+	// Reuse the catalog: a fresh one would hide overrides that mutated the compiled source.
+	in.Layers = nil
+	in.StateDir = t.TempDir()
+	clean, err := config.Resolve(in)
 	require.NoError(t, err)
 	assert.True(t, sourceByID(t, clean, "cursor-transcripts").Enrichers["cursor-transcript-join"], "a previous resolution's override leaked into the compiled catalog")
 }

@@ -15,13 +15,7 @@ func TestResolveWithNoConfigFilesWorks(t *testing.T) {
 	home := fakeHome(t)
 	eff := resolved(t, home)
 
-	var claude *config.ResolvedSource
-	for i := range eff.Sources {
-		if eff.Sources[i].ID == "claude-code-transcripts" {
-			claude = &eff.Sources[i]
-		}
-	}
-	require.True(t, claude != nil, "claude-code-transcripts missing from the resolved set")
+	claude := sourceByID(t, eff, "claude-code-transcripts")
 	assert.Equalf(t, filepath.Join(home, ".claude"), claude.Root, "root should resolve to the fake home store, got %q (%s)", claude.Root, claude.RootUnresolvedReason)
 }
 
@@ -93,24 +87,14 @@ func TestDrainDeadlineParses(t *testing.T) {
 	assert.Equalf(t, 90*time.Second, eff.DrainDeadline, "drain_deadline = %s, want 90s", eff.DrainDeadline)
 }
 
-func TestANonPositiveDrainDeadlineIsRejected(t *testing.T) {
+// Non-positive deadlines lose drained data; a bare number must not be guessed to mean seconds.
+func TestInvalidDrainDeadlineIsRejected(t *testing.T) {
 	home := fakeHome(t)
-	for _, spelling := range []string{"0s", "-30s"} {
-		// A zero or negative deadline makes every drain a silent no-op, losing the data the drain exists to save.
+	for _, spelling := range []string{"0s", "-30s", "60"} {
 		_, err := config.Resolve(baseInput(t, home,
 			layerDoc(t, config.LayerUser, "drain_deadline: "+spelling+"\n"),
 		))
 		var rej *config.RejectionError
-		assert.ErrorAsf(t, err, &rej, "drain_deadline %s was accepted: %v", spelling, err)
+		require.ErrorAsf(t, err, &rej, "drain_deadline %s was accepted: %v", spelling, err)
 	}
-}
-
-func TestAnUnparseableDrainDeadlineIsRejected(t *testing.T) {
-	home := fakeHome(t)
-	_, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerUser, "drain_deadline: 60\n"),
-	))
-	// Bare "60" is the plausible mistake, and guessing at seconds would mean a config that means something else.
-	var rej *config.RejectionError
-	require.ErrorAsf(t, err, &rej, "drain_deadline: 60 was accepted: %v", err)
 }

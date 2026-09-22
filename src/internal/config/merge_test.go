@@ -94,15 +94,7 @@ scrub:
   rule_packs: [pii-core]
 `))
 	for _, want := range []string{"gitleaks-core", "cloud-keys", "generic-entropy", "pii-core"} {
-		found := false
-		for _, got := range eff.RulePacks {
-			if got == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("rule pack %q missing from %v", want, eff.RulePacks)
-		}
+		assert.Containsf(t, eff.RulePacks, want, "rule pack %q missing from %v", want, eff.RulePacks)
 	}
 }
 
@@ -137,14 +129,10 @@ func TestEnvelopeFieldsAreRefusedFromLocalLayers(t *testing.T) {
 func TestOrganizationComesFromServedConfigNotAConstant(t *testing.T) {
 	home := fakeHome(t)
 
-	standalone, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	standalone := resolved(t, home)
 	assert.Equalf(t, "default", standalone.OrganizationID, "standalone organization %q, want default", standalone.OrganizationID)
 
-	enterprise, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerRemote, "org: acme\n"),
-	))
-	require.NoError(t, err)
+	enterprise := resolved(t, home, layerDoc(t, config.LayerRemote, "org: acme\n"))
 	assert.Equalf(t, "acme", enterprise.OrganizationID, "enterprise organization %q, want acme", enterprise.OrganizationID)
 }
 
@@ -168,31 +156,24 @@ func TestServedParseToleratesUnknownFieldsAndTheLocalParseDoesNot(t *testing.T) 
 func TestSpecFingerprintCoversOnlyReadAffectingFields(t *testing.T) {
 	home := fakeHome(t)
 
-	before, err := config.Resolve(baseInput(t, home))
-	require.NoError(t, err)
+	before := resolved(t, home)
 
 	// A push that changes a redaction rule and the run budget.
-	unrelated, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerRemote, `
+	unrelated := resolved(t, home, layerDoc(t, config.LayerRemote, `
 scrub:
   rule_packs: [pii-core]
 max_files_per_run: 8
-`),
-	))
-	require.NoError(t, err)
+`))
 	for i := range before.Sources {
 		assert.Equal(t, before.Sources[i].SpecFingerprint, unrelated.Sources[i].SpecFingerprint)
 	}
 
 	// A glob change resets exactly one source.
-	globbed, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerUser, `
+	globbed := resolved(t, home, layerDoc(t, config.LayerUser, `
 sources:
   - id: claude-code-transcripts
     include: ["projects/**/*.jsonl"]
-`),
-	))
-	require.NoError(t, err)
+`))
 	changed := 0
 	for i := range before.Sources {
 		if before.Sources[i].SpecFingerprint != globbed.Sources[i].SpecFingerprint {

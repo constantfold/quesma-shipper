@@ -15,7 +15,6 @@ import (
 func fakeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	mustMkdir(t, filepath.Join(home, ".claude", "projects", "-Users-jane-work-api"))
 	mustWrite(t, filepath.Join(home, ".claude", "projects", "-Users-jane-work-api", "s.jsonl"), "{}\n")
 	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "# memory\n")
 	return home

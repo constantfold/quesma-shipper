@@ -64,10 +64,8 @@ encryption:
 	require.Error(t, err, "withholding the only recipient must be rejected: it would seal objects no key can open")
 
 	rec := testRecipient(t)
-	eff, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerRemote, "encryption:\n  include_install_recipient: false\n  additional_recipients: ["+rec+"]\n"),
-	))
-	require.NoErrorf(t, err, "withhold plus an org reader is the documented enterprise shape: %v", err)
+	eff := resolved(t, home, layerDoc(t, config.LayerRemote,
+		"encryption:\n  include_install_recipient: false\n  additional_recipients: ["+rec+"]\n"))
 	assert.True(t, !eff.IncludeInstallRecipient, "include_install_recipient=false from the served layer did not take effect")
 	assert.Truef(t, slices.Equal(eff.AdditionalRecipients, []string{rec}), "additional recipients: %v", eff.AdditionalRecipients)
 }

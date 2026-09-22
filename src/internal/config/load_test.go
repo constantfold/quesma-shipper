@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,10 +13,9 @@ import (
 
 // A layer file that exists but cannot be read must refuse the whole resolution, never be silently dropped.
 func TestLoadLayersRefusesAnUnreadableLayer(t *testing.T) {
-	dir := t.TempDir()
-	user := filepath.Join(dir, "config.yaml")
+	user := filepath.Join(t.TempDir(), "config.yaml")
 	body := "config_version: 1\n# " + strings.Repeat("x", 1<<20) + "\n"
-	require.NoError(t, os.WriteFile(user, []byte(body), 0o600))
+	mustWrite(t, user, body)
 
 	_, err := config.LoadLayers(config.Paths{User: user})
 	require.Error(t, err, "an oversized config layer was silently dropped")
@@ -26,10 +24,9 @@ func TestLoadLayersRefusesAnUnreadableLayer(t *testing.T) {
 
 // The strict local parse has to keep loading the `send:` block older builds wrote into config.yaml.
 func TestLoadLayersAcceptsTheSendBlockOlderBuildsWrote(t *testing.T) {
-	dir := t.TempDir()
-	user := filepath.Join(dir, "config.yaml")
+	user := filepath.Join(t.TempDir(), "config.yaml")
 	body := "config_version: 1\nsend:\n  sink: file\n  path: /var/tmp/trajectory-archive\n"
-	require.NoError(t, os.WriteFile(user, []byte(body), 0o600))
+	mustWrite(t, user, body)
 
 	layers, err := config.LoadLayers(config.Paths{User: user})
 	require.NoErrorf(t, err, "a config.yaml an older build wrote no longer loads: %v", err)

@@ -45,9 +45,8 @@ func Resolve(in Input) (*Effective, error) {
 	overrides := map[string][]layeredOverride{}
 	for _, s := range in.Catalog.Sources() {
 		eff.Sources = append(eff.Sources, ResolvedSource{
-			Source:          s,
-			Enabled:         s.IsEnabledByDefault(),
-			SpecFingerprint: sources.SpecFingerprint(s),
+			Source:  s,
+			Enabled: s.IsEnabledByDefault(),
 		})
 		eff.setOrigin("sources."+s.ID+".enabled", LayerBundledCatalog)
 		eff.setOrigin("sources."+s.ID+".include", LayerBundledCatalog)
