@@ -20,22 +20,7 @@ func validate(t *testing.T, raw []byte) error {
 	return formats.Validate(formats.SourceSpec, doc)
 }
 
-// Every bundled catalog file must validate: the catalog is edited by people who do not read Go.
-func TestBundledCatalogValidates(t *testing.T) {
-	files, err := fs.Glob(catalogdata.FS, "*.yaml")
-	require.NoError(t, err)
-	// Group 1 is the v1 scope ceiling: Claude Code, Codex, Cursor.
-	for _, want := range []string{"claude-code.yaml", "codex.yaml", "cursor.yaml"} {
-		assert.Contains(t, files, want)
-	}
-	for _, name := range files {
-		raw, err := catalogdata.FS.ReadFile(name)
-		require.NoError(t, err)
-		assert.NoError(t, validate(t, raw), name)
-	}
-}
-
-// Without these refusals, TestBundledCatalogValidates could be green with the validator inert.
+// Without these refusals, TestBundledSourceRules could be green with the validator inert.
 func TestSchemaRejectsBadCatalogFiles(t *testing.T) {
 	const valid = "spec_version: 1\nfamily: demo\nsources:\n  - id: demo-src\n    gather: file_glob\n" +
 		"    artifact_class: trajectory\n    roots: [\"~/.demo\"]\n    include: [\"**/*.jsonl\"]\n"
@@ -57,15 +42,18 @@ func TestSchemaRejectsBadCatalogFiles(t *testing.T) {
 	assert.Error(t, validate(t, []byte(sidecar)), "sidecar without a bounded probe")
 }
 
-// Checks every source in the bundled catalog against the rules the schema cannot express.
+// Every bundled catalog file validates, since it is edited by people who do not read Go, and meets the rules the schema cannot express.
 func TestBundledSourceRules(t *testing.T) {
 	files, err := fs.Glob(catalogdata.FS, "*.yaml")
 	require.NoError(t, err)
+	// Group 1 is the v1 scope ceiling: Claude Code, Codex, Cursor.
+	assert.Subset(t, files, []string{"claude-code.yaml", "codex.yaml", "cursor.yaml"})
 	seen := map[string]string{}
 	cursorJoin := false
 	for _, name := range files {
 		raw, err := catalogdata.FS.ReadFile(name)
 		require.NoError(t, err)
+		assert.NoError(t, validate(t, raw), name)
 		var doc struct {
 			Sources []struct {
 				ID           string          `yaml:"id"`
@@ -79,9 +67,7 @@ func TestBundledSourceRules(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		for _, s := range doc.Sources {
 			// Source ids key both object keys and fingerprint state, so a collision merges two sources.
-			if prev, dup := seen[s.ID]; dup {
-				t.Errorf("source id %q appears in both %s and %s", s.ID, prev, name)
-			}
+			assert.NotContainsf(t, seen, s.ID, "source id %q appears in both %s and %s", s.ID, seen[s.ID], name)
 			seen[s.ID] = name
 			// SQLite is enricher input only: no catalog entry may name a database as a shipping source.
 			assert.NotContains(t, s.Gather, "sqlite", s.ID)

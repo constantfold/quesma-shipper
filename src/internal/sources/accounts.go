@@ -138,7 +138,34 @@ func (p *accounts) observe(ctx context.Context, req Request, token string, endpo
 			request.Header.Set(name, value)
 		}
 	}
-	return p.fetch(obs, request)
+	client := http.Client{Timeout: 10 * time.Second}
+	if p.client != nil {
+		client = *p.client
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		obs.Error = "request_failed"
+		return obs
+	}
+	defer response.Body.Close()
+	obs.HTTPStatus = response.StatusCode
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		obs.Error = "http_error"
+		return obs
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, accountResponseLimit+1))
+	switch {
+	case err != nil:
+		obs.Error = "response_unreadable"
+	case len(raw) > accountResponseLimit:
+		obs.Error = "response_too_large"
+	case !json.Valid(raw):
+		obs.Error = "invalid_json"
+	default:
+		obs.Body = raw
+	}
+	return obs
 }
 
 func localAccount(req Request, source string, body json.RawMessage, err error) accountObservation {
@@ -164,40 +191,6 @@ func accountJSON(path string, limit int64) (map[string]json.RawMessage, error) {
 	var doc map[string]json.RawMessage
 	err = json.Unmarshal(raw, &doc)
 	return doc, err
-}
-
-func (p *accounts) fetch(obs accountObservation, request *http.Request) accountObservation {
-	client := http.Client{Timeout: 10 * time.Second}
-	if p.client != nil {
-		client = *p.client
-	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		obs.Error = "request_failed"
-		return obs
-	}
-	defer response.Body.Close()
-	obs.HTTPStatus = response.StatusCode
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		obs.Error = "http_error"
-		return obs
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, accountResponseLimit+1))
-	if err != nil {
-		obs.Error = "response_unreadable"
-		return obs
-	}
-	if len(raw) > accountResponseLimit {
-		obs.Error = "response_too_large"
-		return obs
-	}
-	if !json.Valid(raw) {
-		obs.Error = "invalid_json"
-		return obs
-	}
-	obs.Body = raw
-	return obs
 }
 
 func (p *accounts) collectClaude(ctx context.Context, req Request) ([]accountObservation, bool) {
@@ -256,7 +249,6 @@ func (p *accounts) collectClaude(ctx context.Context, req Request) ([]accountObs
 }
 
 func (p *accounts) collectCodex(ctx context.Context, req Request) ([]accountObservation, bool) {
-	var out []accountObservation
 	home := req.Source.Root
 	path := filepath.Join(home, "auth.json")
 	if !accountPathExists(home) {
@@ -283,23 +275,20 @@ func (p *accounts) collectCodex(ctx context.Context, req Request) ([]accountObse
 		}
 	}
 	body, _ := json.Marshal(metadata)
-	out = append(out, localAccount(req, "codex.local.account", body, err))
-	out = append(out, p.observe(ctx, req, tokens.Access, accountEndpoint{
+	return []accountObservation{localAccount(req, "codex.local.account", body, err), p.observe(ctx, req, tokens.Access, accountEndpoint{
 		source: "codex.wham.usage", method: "GET", url: "https://chatgpt.com/backend-api/wham/usage",
 		headers: map[string]string{"ChatGPT-Account-Id": tokens.AccountID},
-	}))
-	return out, true
+	})}, true
 }
 
 func (p *accounts) collectCursor(ctx context.Context, req Request) ([]accountObservation, bool) {
-	var out []accountObservation
 	path := filepath.Join(req.Source.Root, "state.vscdb")
 	if !accountPathExists(path) {
 		return nil, false
 	}
 	values, token, err := sqliteread.CursorAccount(ctx, path)
 	body, _ := json.Marshal(values)
-	out = append(out, localAccount(req, "cursor.local.account", body, err))
+	out := []accountObservation{localAccount(req, "cursor.local.account", body, err)}
 	for _, endpoint := range []string{"GetPlanInfo", "GetCurrentPeriodUsage"} {
 		out = append(out, p.observe(ctx, req, token, accountEndpoint{
 			source: "cursor.dashboard." + endpoint, method: "POST", body: "{}",

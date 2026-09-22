@@ -17,8 +17,7 @@ import (
 	"time"
 )
 
-// Per-phase timeouts, never one http.Client.Timeout: no single value both allows a 256 MiB body on a
-// slow link and catches a stall. The whole-operation bound scales with the body at a pessimistic rate.
+// Per-phase timeouts: no single Client.Timeout both allows 256 MiB on a slow link and catches a stall.
 const (
 	dialTimeout           = 10 * time.Second
 	tlsTimeout            = 10 * time.Second
@@ -53,8 +52,7 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("upload: object store answered HTTP %d: %s", e.Status, e.Reason)
 }
 
-// Uploader holds the bounded client, one per run so the pool is reused. The transport is not
-// configurable: every setting on it is a way back to the unbounded hang it exists to prevent.
+// Uploader's transport is not configurable: every setting is a way back to the unbounded hang it prevents.
 type Uploader struct {
 	client *http.Client
 }

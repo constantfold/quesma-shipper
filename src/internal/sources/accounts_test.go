@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,9 +67,7 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	req.Now = func() time.Time { return time.Date(2026, 9, 16, 14, 31, 0, 0, time.UTC) }
 	next, err := p.discover(req)
 	require.Truef(t, err == nil && len(next.Candidates) == 1 && calls == 1 && next.Candidates[0].Path != c.Path, "new bucket: %+v %v calls %d", next, err, calls)
-	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
-		t.Fatal("account collection wrote local state")
-	}
+	require.NoDirExists(t, req.StateDir, "account collection wrote local state")
 }
 
 func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
@@ -89,9 +86,7 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 			p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: http.Header{}}, nil
 			})}}
-			request, err := http.NewRequest("GET", "https://example.org", nil)
-			require.NoError(t, err)
-			obs := p.fetch(accountObservation{Source: "test"}, request)
+			obs := p.observe(context.Background(), accountFixture(t), "fixture-secret", accountEndpoint{source: "test", method: "GET", url: "https://example.org"})
 			require.Truef(t, obs.Error == tc.want && len(obs.Body) == 0, "%+v", obs)
 		})
 	}
@@ -100,11 +95,7 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 	defer target.Close()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer origin.Close()
-	p := accounts{}
-	request, err := http.NewRequest("GET", origin.URL, nil)
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer fixture-secret")
-	obs := p.fetch(accountObservation{Source: "test"}, request)
+	obs := (&accounts{}).observe(context.Background(), accountFixture(t), "fixture-secret", accountEndpoint{source: "test", method: "GET", url: origin.URL})
 	require.Truef(t, !redirected && obs.HTTPStatus == 302, "followed credential redirect: %+v", obs)
 }
 
@@ -169,13 +160,11 @@ func TestCandidateLoadLimitsAndCancellation(t *testing.T) {
 	d, err := (&accounts{}).discover(req)
 	require.NoError(t, err)
 	for _, load := range []func(context.Context) (Payload, error){fileLoader(path, 1), d.Candidates[0].Load} {
-		if _, err := load(context.Background()); !errors.Is(err, platform.ErrTooLarge) {
-			t.Fatalf("expected size limit: %v", err)
-		}
+		_, err := load(context.Background())
+		require.ErrorIs(t, err, platform.ErrTooLarge)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := load(ctx); !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected cancellation: %v", err)
-		}
+		_, err = load(ctx)
+		require.ErrorIs(t, err, context.Canceled)
 	}
 }

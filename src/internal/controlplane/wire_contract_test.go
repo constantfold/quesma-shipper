@@ -28,7 +28,6 @@ var wireTypes = map[string]func() any{
 	"v2/uploads-authorize-response.schema.json": func() any { return &controlplane.AuthorizeResponse{} },
 }
 
-// validateWire validates a JSON document against one embedded protocol schema.
 func validateWire(t *testing.T, name string, raw []byte) error {
 	t.Helper()
 	schemaRaw, err := fs.ReadFile(protocol.FS, pathpkg.Join("schemas", name))
@@ -140,8 +139,7 @@ func TestStructsMatchSchemas(t *testing.T) {
 	}
 }
 
-// Bad fixtures must fail validation; good fixtures must also survive strict typed round trips.
-// The auth directory is not a message and has no schema.
+// Bad fixtures fail validation; good ones also survive strict typed round trips. auth/ is not a message.
 func TestWireFixtures(t *testing.T) {
 	paths, err := fs.Glob(protocol.FS, "fixtures/*/*/*.json")
 	require.NoError(t, err)

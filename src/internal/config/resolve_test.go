@@ -84,10 +84,8 @@ func TestResolveRejects(t *testing.T) {
 	}
 }
 
-// The control plane's served document in the exact shape renderConfig composes it. This is the
-// cross-repo contract: a field here that starts being refused makes the client refuse the WHOLE
-// document and fall back to its cached config, so the server must stop serving it first. The
-// send: block is the s3 one still served to the pre-vend fleet and has to keep LOADING here.
+// The served document as renderConfig composes it, send: block included for the pre-vend fleet: refusing
+// any field here makes the client refuse the WHOLE document, so the server must stop serving it first.
 func TestServedDocumentWithAuthoredPartResolves(t *testing.T) {
 	eff := resolved(t, fakeHome(t), remote(t, `
 issued_at: 2026-08-12T10:00:00Z
@@ -162,8 +160,7 @@ func TestEnricherEnablementAuthority(t *testing.T) {
 	}
 }
 
-// The two resolutions deliberately SHARE one *sources.Compiled: against two freshly loaded
-// catalogs this would pass whether or not the enricher map is cloned.
+// Both resolutions SHARE one *sources.Compiled: with two fresh catalogs this passes whether or not the map is cloned.
 func TestTogglingAnEnricherDoesNotMutateTheCompiledCatalog(t *testing.T) {
 	in := input(t, fakeHome(t), user(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"))
 	_, err := config.Resolve(in)
@@ -179,9 +176,7 @@ func TestTranscriptDisableDoesNotDisableAccountSource(t *testing.T) {
 	require.True(t, sourceByID(t, eff, "codex-account").Enabled, "account source coupled to transcripts")
 }
 
-// The daemon resolves roots once and then ticks for days. Claude Code creates projects/ on its
-// first run, which is routinely after the shipper started: without a refresh that install reports
-// agent_absent forever, looking healthy while collecting nothing.
+// Claude Code creates projects/ on first run, often after the daemon resolved roots: without a refresh it stays agent_absent forever.
 func TestRootResolutionLifecycle(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o700))

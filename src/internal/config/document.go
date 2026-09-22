@@ -7,8 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
 // AcceptedConfigVersions is enumerated, never a range: an unknown config_version is a hard error.
@@ -37,8 +43,7 @@ type Document struct {
 	StructuralEx   map[string][]string `yaml:"structural_exempt"`
 	Autoupdate     *Autoupdate         `yaml:"autoupdate"`
 
-	// TelemetryEndpoint is a path such as `/v1/telemetry`, never a URL: it resolves against the enrolled
-	// control-plane origin, so a served document cannot redirect telemetry. Absent means disabled.
+	// TelemetryEndpoint is a path resolved against the enrolled origin, never a URL, so it cannot redirect telemetry; absent is off.
 	TelemetryEndpoint *string `yaml:"telemetry_endpoint"`
 }
 
@@ -110,4 +115,76 @@ func parseDocument(raw []byte, knownFields bool) (*Document, error) {
 type LayeredDocument struct {
 	Layer Layer
 	Doc   *Document
+}
+
+const (
+	DefaultTick = 15 * time.Minute // the design's loss-window bound
+	MinTick     = time.Minute      // a poll loop at seconds is a hot loop
+)
+
+// TickInterval turns `mode.schedule` into the tick interval; a bad value is refused with a warning and the default, never approximated.
+func TickInterval(schedule string) (time.Duration, string) {
+	s := strings.TrimSpace(schedule)
+	if s == "" {
+		return DefaultTick, ""
+	}
+	d, err := time.ParseDuration(s)
+	var problem string
+	switch {
+	case err != nil:
+		problem = `not a duration like "5m"`
+	case d <= 0:
+		problem = "a tick interval must be positive"
+	case d < MinTick:
+		return MinTick, fmt.Sprintf("mode.schedule %q is under the %s floor — ticking every %s", schedule, MinTick, MinTick)
+	default:
+		return d, ""
+	}
+	return DefaultTick, fmt.Sprintf("mode.schedule %q: %s — ticking every %s instead", schedule, problem, DefaultTick)
+}
+
+// maxConfigBytes bounds a config file; anything larger is a mistake or an attempt to exhaust memory.
+const maxConfigBytes = 1 << 20
+
+// Paths locates the one config file and the state directory; the remote layer needs enrollment instead.
+type Paths struct {
+	User     string
+	StateDir string
+}
+
+// DefaultPaths honours XDG where it applies.
+func DefaultPaths(home string, lookup func(string) (string, bool)) Paths {
+	xdg := func(name string, fallback ...string) string {
+		if v, ok := lookup(name); ok && v != "" {
+			return v
+		}
+		return filepath.Join(append([]string{home}, fallback...)...)
+	}
+	return Paths{
+		User:     filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "trajectory-shipper", "config.yaml"),
+		StateDir: filepath.Join(xdg("XDG_STATE_HOME", ".local", "state"), "trajectory-shipper"),
+	}
+}
+
+// LoadLayers reads the user's config file: missing is clone-and-run, unreadable is an error, since skipping it drops the layer.
+func LoadLayers(p Paths) ([]LayeredDocument, error) {
+	raw, _, err := platform.ReadWhole(p.User, maxConfigBytes)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case errors.Is(err, platform.ErrNotRegular):
+		return nil, fmt.Errorf("config: %s is not a regular file", p.User)
+	case err != nil:
+		return nil, fmt.Errorf("config: cannot read %s: %w", p.User, err)
+	}
+	doc, err := ParseDocument(raw)
+	if err != nil {
+		return nil, fmt.Errorf("config: %s: %w", p.User, err)
+	}
+	return []LayeredDocument{{Layer: LayerUser, Doc: doc}}, nil
+}
+
+func UserConfigFound(p Paths) (string, bool) {
+	_, err := os.Stat(p.User)
+	return p.User, err == nil
 }

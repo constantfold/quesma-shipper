@@ -25,9 +25,7 @@ func TestClientRequestContract(t *testing.T) {
 	p, srv := newPlane(t)
 	c, err := controlplane.New(controlplane.Options{Endpoint: srv.URL})
 	require.NoError(t, err)
-	resp, err := c.Enroll(context.Background(), controlplane.EnrollRequest{
-		InstallID: installID, DevicePublicKey: "device-pub", AgeRecipient: "age1recipient",
-	})
+	resp, err := c.Enroll(context.Background(), controlplane.EnrollRequest{InstallID: installID, DevicePublicKey: "device-pub", AgeRecipient: "age1recipient"})
 	require.NoError(t, err)
 	assert.Equal(t, "acme", resp.Organization)
 	assert.Empty(t, p.headers["/v1/enroll"].Get("Authorization"))
@@ -104,8 +102,7 @@ func TestEnrollmentRecord(t *testing.T) {
 	}
 }
 
-// Every historical schema is a frozen fixture in testdata/ that must load through the migration:
-// a fleet on auto-update meets old records routinely, never by hand-editing JSON.
+// Every historical schema is a frozen testdata/ fixture that must migrate: an auto-updating fleet meets them routinely.
 func TestHistoricalEnrollmentSchemasMigrateOnLoad(t *testing.T) {
 	fixtures, err := filepath.Glob(filepath.Join("testdata", "enrollment-schema-*.json"))
 	require.NoError(t, err)

@@ -34,12 +34,8 @@ func realTempDir(t *testing.T) string {
 }
 
 func globSource(root string, include ...string) Resolved {
-	return Resolved{
-		Source: Source{ID: "claude-code-transcripts", Family: "claude-code", Gather: "file_glob", Include: include,
-			Sniff: &Sniff{Kind: "jsonl", MaxScanBytes: 65536}},
-		Root:    root,
-		Enabled: true,
-	}
+	return Resolved{Root: root, Enabled: true, Source: Source{ID: "claude-code-transcripts", Family: "claude-code", Gather: "file_glob",
+		Include: include, Sniff: &Sniff{Kind: "jsonl", MaxScanBytes: 65536}}}
 }
 
 func discover(t *testing.T, src Resolved, deny *List) Discovery {
@@ -242,7 +238,6 @@ func TestDenyListAppliesAtDiscoveryTime(t *testing.T) {
 	assert.Zerof(t, d.Unreadable, "the denied tree was opened: %s", d.UnreadableReason)
 }
 
-// A permission denial deep in a store must not abort the walk.
 func TestUnreadableSubtreeDoesNotAbortTheWalk(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("permission bits do not apply")

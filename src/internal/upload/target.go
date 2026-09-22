@@ -19,8 +19,7 @@ const (
 	VirtualHosted Addressing = "virtual-hosted" // the bucket is the host; the path is "/" plus the key
 	PathStyle     Addressing = "path-style"     // the path is the pinned "/bucket" prefix plus the key
 
-	// addressingUnpinned marks a target adopted from a ticket's own origin when nothing was pinned,
-	// so the exact-key check accepts either layout.
+	// addressingUnpinned is a target adopted from the ticket's origin, so the exact-key check accepts either layout.
 	addressingUnpinned Addressing = "unpinned"
 )
 
@@ -88,9 +87,7 @@ func NewUploadTarget(spec TargetSpec) (UploadTarget, error) {
 
 func (t UploadTarget) Origin() string { return t.origin }
 
-// Match returns the entry a ticket URL belongs to. An empty list is unpinned: the ticket's own
-// origin becomes the target, but every other check still applies, so an owner trusts the plane
-// on WHERE, never on WHAT.
+// Match returns a ticket URL's entry; an empty list adopts the ticket's origin, trusting the plane on WHERE, never on WHAT.
 func (l UploadTargetList) Match(rawURL string) (UploadTarget, error) {
 	t, _, err := l.match(rawURL)
 	return t, err

@@ -121,20 +121,13 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		}
 		if src.MaxFileBytes > 0 && info.Size() > src.MaxFileBytes {
 			// Over the budget: counted on its own channel, since a policy decision is not a path that could not be read.
-			oversize = append(oversize, Oversize{
-				RelPath: rel, Size: info.Size(), Limit: src.MaxFileBytes,
-			})
+			oversize = append(oversize, Oversize{RelPath: rel, Size: info.Size(), Limit: src.MaxFileBytes})
 			return nil
 		}
 
 		// Reported under the CONFIGURED root: resolving a symlink here would orphan every fingerprint in the archive.
-		out = append(out, Candidate{
-			Load:    fileLoader(named, src.MaxFileBytes),
-			Path:    named,
-			RelPath: rel,
-			Size:    info.Size(),
-			MTime:   info.ModTime().UTC(),
-		})
+		out = append(out, Candidate{Path: named, RelPath: rel, Size: info.Size(), MTime: info.ModTime().UTC(),
+			Load: fileLoader(named, src.MaxFileBytes)})
 		return nil
 	})
 	// A walk that failed at the root: WalkDir's own error, which the callback never saw.
