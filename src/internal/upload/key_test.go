@@ -18,7 +18,7 @@ func TestCanonicalPathReproducesGoldenTicketPath(t *testing.T) {
 	want := parsed.EscapedPath()
 	require.Equal(t, "/"+canonicalPath(prepared.Key), want)
 
-	// Why hand-rolled: net/url leaves "=" unescaped and every mirror key carries organization=.
+	// Path escaping leaves "=" literal, while the signed key spelling requires %3D.
 	require.NotEqual(t, (&url.URL{Path: "/" + prepared.Key}).EscapedPath(), want)
 }
 
@@ -27,7 +27,9 @@ func TestCanonicalPathEscaping(t *testing.T) {
 		key  string
 		want string
 	}{
+		{"=", "%3D"},
 		{"organization=acme", "organization%3Dacme"},
+		{"%2F+ /", "%252F%2B%20/"},
 		{"a/b/c.age", "a/b/c.age"},
 		{"keep-._~", "keep-._~"},
 		{"space here", "space%20here"},
@@ -37,14 +39,8 @@ func TestCanonicalPathEscaping(t *testing.T) {
 		{"café", "caf%C3%A9"},
 	}
 	for _, c := range cases {
-		assert.Equal(t, canonicalPath(c.key), c.want)
+		assert.Equal(t, c.want, canonicalPath(c.key), c.key)
 	}
-}
-
-func TestCanonicalPathUsesUppercaseHex(t *testing.T) {
-	got := canonicalPath("=")
-	require.Equalf(t, "%3D", got, "canonicalPath(\"=\") = %q, want %%3D", got)
-	require.Truef(t, !strings.ContainsAny(got, "abcdef"), "canonicalPath produced lowercase hex: %q", got)
 }
 
 func TestValidateKeyRejects(t *testing.T) {

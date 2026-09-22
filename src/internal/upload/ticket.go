@@ -6,6 +6,7 @@ package upload
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -281,24 +282,8 @@ func hasDotSegment(escaped string) bool {
 	return slices.Contains(segments, ".") || slices.Contains(segments, "..")
 }
 
-const upperhex = "0123456789ABCDEF"
-
-// canonicalPath renders the one AWS-style escaped spelling of a key: uppercase percent-hex outside
-// the unreserved set, "/" kept. Hand-rolled: net/url leaves "=" unescaped and keys are full of them.
+// Query escaping supplies uppercase percent-hex; paths keep slashes and spell spaces as %20.
 func canonicalPath(key string) string {
-	var b strings.Builder
-	b.Grow(len(key) + 16)
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '-', c == '.', c == '_', c == '~', c == '/':
-			b.WriteByte(c)
-		default:
-			b.WriteByte('%')
-			b.WriteByte(upperhex[c>>4])
-			b.WriteByte(upperhex[c&0x0f])
-		}
-	}
-	return b.String()
+	escaped := strings.ReplaceAll(url.QueryEscape(key), "+", "%20")
+	return strings.ReplaceAll(escaped, "%2F", "/")
 }
