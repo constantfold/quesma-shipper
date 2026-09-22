@@ -200,22 +200,19 @@ LICENSE_OSES := linux darwin windows
 .PHONY: licenses-check
 licenses-check: ## Fail on a non-permissive dependency, or when the embedded notices are stale
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-	cd $(MODULE) && GOTOOLCHAIN=$$(go env GOVERSION) GOBIN=$$tmp/bin go install $(GOLICENSES) 2>/dev/null; \
-	for os in $(LICENSE_OSES); do \
-		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses check ./cmd/quesma-shipper \
-			--allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,Unlicense 2>/dev/null || exit 1; \
-	done; cd ..; \
 	$(MAKE) --no-print-directory licenses LEGAL_DIR=$$tmp/legal >/dev/null || exit 1; \
 	if ! diff -r -q -x '*.go' -x references $$tmp/legal $(LEGAL_DIR) >/dev/null; then \
 		diff -r -x '*.go' -x references $$tmp/legal $(LEGAL_DIR) | head -20; \
 		echo "embedded notices are stale: run make licenses and commit"; exit 1; fi
 
 .PHONY: licenses
-licenses: ## Regenerate the embedded notices: LICENSE and NOTICE copies, third-party texts and the package,license inventory for every target OS (references/ is hand-maintained; no versions, so a plain bump does not change it)
+licenses: ## Validate dependencies and regenerate embedded notices for all target OSes (references/ is hand-maintained)
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	mkdir -p $(LEGAL_DIR); \
 	cd $(MODULE) && GOTOOLCHAIN=$$(go env GOVERSION) GOBIN=$$tmp/bin go install $(GOLICENSES) 2>/dev/null; \
 	for os in $(LICENSE_OSES); do \
+		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses check ./cmd/quesma-shipper \
+			--allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,Unlicense 2>/dev/null || exit 1; \
 		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses save ./cmd/quesma-shipper --save_path $$tmp/save-$$os 2>/dev/null \
 			|| { echo "go-licenses save failed for $$os"; exit 1; }; \
 		GOOS=$$os GOARCH=amd64 $$tmp/bin/go-licenses report ./cmd/quesma-shipper 2>/dev/null > $$tmp/report-$$os.csv \
