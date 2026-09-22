@@ -33,7 +33,7 @@ func (r *Runtime) options(dryRun bool) engine.Options {
 
 // Enrichers is the compiled enricher registry, shared with doctor so "in this build" cannot
 // drift from what the engine runs. Config can disable an entry; no layer can add one.
-func Enrichers() *transforms.Registry {
+func Enrichers() transforms.Registry {
 	return transforms.NewRegistry(cursorjoin.New())
 }
 

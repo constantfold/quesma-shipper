@@ -154,41 +154,36 @@ func TestUnavailableUploadGroups(t *testing.T) {
 	}
 }
 
-// An expired ticket earns exactly one more authorization, and the object ships on it.
-func TestAnExpiredTicketIsReauthorizedOnce(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/e0.jsonl", line1)
-	port := newPort()
-	port.verdict = func(call, _ int, _ engine.PreparedObject) error {
-		if call == 0 {
-			return fmt.Errorf("upload: HTTP 403: %w", engine.ErrTicketExpired)
-		}
-		return nil
-	}
-
-	rep, err := vendRun(f, port, nil)
-	require.NoErrorf(t, err, "run: %v", err)
-	assert.Equalf(t, 1, rep.Shipped, "the reauthorized object did not ship: %+v", rep)
-	assert.Len(t, port.sizes(), 2)
-	port.storedOnce(t)
-}
-
-// The reauthorization is bounded to ONE: a second expiry is a wrong clock or a wrong lease.
-func TestReauthorizationDoesNotLoop(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/e1.jsonl", line1)
-	port := newPort()
-	port.verdict = func(int, int, engine.PreparedObject) error {
-		return fmt.Errorf("upload: HTTP 403: %w", engine.ErrTicketExpired)
-	}
-
-	rep, err := vendRun(f, port, nil)
-	require.NoErrorf(t, err, "run: %v", err)
-	assert.Truef(t, rep.Failed == 1 && rep.Shipped == 0, "want the object failed and nothing shipped, got %d failed and %d shipped", rep.Failed, rep.Shipped)
-	assert.Equal(t, 2, len(port.sizes()))
-	if _, ok := f.store.Get(engine.Key{SourceID: "claude-code-transcripts",
-		NativePath: f.home + "/.claude/projects/p/e1.jsonl"}); ok {
-		t.Error("a ticket that never uploaded committed a fingerprint")
+// Only one reauthorization is allowed; commit requires that attempt to succeed.
+func TestExpiredTicketRetryContract(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		expired bool
+		shipped int
+	}{
+		{"p/e0.jsonl", false, 1},
+		{"p/e1.jsonl", true, 0},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			f := newFixture(t)
+			f.writeTranscript(tc.path, line1)
+			port := newPort()
+			port.verdict = func(call, _ int, _ engine.PreparedObject) error {
+				if call == 0 || tc.expired {
+					return fmt.Errorf("upload: HTTP 403: %w", engine.ErrTicketExpired)
+				}
+				return nil
+			}
+			rep, err := vendRun(f, port, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tc.shipped, rep.Shipped)
+			assert.Equal(t, 1-tc.shipped, rep.Failed)
+			assert.Len(t, port.sizes(), 2)
+			_, committed := f.store.Get(engine.Key{SourceID: "claude-code-transcripts",
+				NativePath: f.home + "/.claude/projects/" + tc.path})
+			assert.Equal(t, tc.shipped == 1, committed)
+			port.storedOnce(t)
+		})
 	}
 }
 

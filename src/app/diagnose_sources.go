@@ -40,11 +40,10 @@ func pendingFile(doc engine.Document, src config.ResolvedSource, c sources.Candi
 }
 
 type enricherProbe struct {
-	id  string
-	e   transforms.Enricher
-	on  bool
-	db  string // resolved database path; empty means not found
-	err error  // declared but not in this build
+	id string
+	e  transforms.Enricher
+	on bool
+	db string // resolved database path; empty means not found
 }
 
 func probeEnrichers(src config.ResolvedSource) []enricherProbe {
@@ -54,8 +53,8 @@ func probeEnrichers(src config.ResolvedSource) []enricherProbe {
 	compiled := Enrichers()
 	var out []enricherProbe
 	for _, id := range slices.Sorted(maps.Keys(src.Enrichers)) {
-		p := enricherProbe{id: id, on: src.Enrichers[id]}
-		if p.e, p.err = compiled.For(id); p.err == nil && p.on {
+		p := enricherProbe{id: id, e: compiled[id], on: src.Enrichers[id]}
+		if p.e != nil && p.on {
 			p.db = firstExistingDB(p.e)
 		}
 		out = append(out, p)
@@ -67,7 +66,7 @@ func enricherIssues(name string, src config.ResolvedSource) []Row {
 	var rows []Row
 	for _, p := range probeEnrichers(src) {
 		switch {
-		case p.err != nil:
+		case p.e == nil:
 			rows = append(rows, Row{Sev: SevWarn, Sub: true, Label: "  database",
 				Brief:  name + ": enricher missing from this build",
 				Detail: "tool results and timestamps are not captured - enricher " + p.id + " is not in this build",
@@ -165,9 +164,9 @@ func enricherRows(src config.ResolvedSource) []Row {
 	var rows []Row
 	for _, p := range probeEnrichers(src) {
 		switch {
-		case p.err != nil:
+		case p.e == nil:
 			rows = append(rows, Row{Sev: SevWarn, Label: "  enricher " + p.id,
-				Detail: fmt.Sprintf("declared but not in this build: %v", p.err)})
+				Detail: fmt.Sprintf("declared but not in this build: enrich: no enricher %q in this build", p.id)})
 		case !p.on:
 			rows = append(rows, Row{Sev: SevDim, Label: "  enricher " + p.id,
 				Detail: "disabled - no tool results, call ids or timestamps will be collected"})

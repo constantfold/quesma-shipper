@@ -25,24 +25,13 @@ const recomputeWindow = 24 * time.Hour
 // enrichersFor returns every enabled enricher of a source, sorted by id because src.Enrichers is a
 // map: two flushes of the same config must run the same enrichers in the same order.
 func (o Options) enrichersFor(src sources.Resolved) []transforms.Enricher {
-	if o.Enrichers == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(src.Enrichers))
-	for id, on := range src.Enrichers {
-		if on {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
 	var out []transforms.Enricher
-	for _, id := range ids {
-		e, err := o.Enrichers.For(id)
-		if err != nil {
-			continue
+	for id, e := range o.Enrichers {
+		if src.Enrichers[id] {
+			out = append(out, e)
 		}
-		out = append(out, e)
 	}
+	slices.SortFunc(out, func(a, b transforms.Enricher) int { return strings.Compare(a.ID(), b.ID()) })
 	return out
 }
 

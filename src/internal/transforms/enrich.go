@@ -5,7 +5,6 @@ package transforms
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 )
 
 // Status is the outcome of one enrichment. Anything but StatusOK means that window's DB-side
@@ -144,30 +143,16 @@ type Enricher interface {
 	Enrich(Input) EnrichResult
 }
 
-// Registry is the compiled set. Config enables or disables entries but can never add one,
-// which would mean config installing transformation code.
-type Registry struct {
-	byID map[string]Enricher
-}
+// Registry is the compiled set, keyed by Enricher.ID. Config can only enable or disable entries.
+type Registry map[string]Enricher
 
 // NewRegistry builds the compiled registry.
-func NewRegistry(es ...Enricher) *Registry {
-	r := &Registry{byID: map[string]Enricher{}}
+func NewRegistry(es ...Enricher) Registry {
+	r := Registry{}
 	for _, e := range es {
-		r.byID[e.ID()] = e
+		r[e.ID()] = e
 	}
 	return r
-}
-
-// For returns a registered enricher.
-func (r *Registry) For(id string) (Enricher, error) {
-	e, ok := r.byID[id]
-	if !ok {
-		// Refused, never ignored: an unknown enricher would otherwise silently collect
-		// raw-only and lose the DB-side fields with no signal.
-		return nil, fmt.Errorf("enrich: no enricher %q in this build", id)
-	}
-	return e, nil
 }
 
 // Hash is the output-hash helper every enricher uses, so the change signal is computed one way.

@@ -76,8 +76,8 @@ The main files name the decisions they own:
 | Tick judgement and failure persistence | `app/{judge,failure_record}.go` |
 | Diagnostic agent summaries, source details, history | `app/diagnose_{agents,sources,history}.go` |
 
-`sources.Discover` dispatches to the compiled collectors. Enrichers retain their
-registry because the app supplies their implementations. Workers return write intents;
+`sources.Discover` dispatches to the compiled collectors. Enrichers use an ID-to-implementation
+map populated by the app and shared with diagnostics. Workers return write intents;
 only the source coordinator commits them, after the destination confirms the write.
 A `fileResult` carries ciphertext while pending and clears it after upload or abandonment;
 batching uses that same record without another staging wrapper.

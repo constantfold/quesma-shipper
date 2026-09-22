@@ -32,9 +32,8 @@ type Options struct {
 	// DryRun reads, scrubs and seals but neither uploads nor commits. This is `preview`.
 	DryRun bool
 
-	// Enrichers is the compiled registry. Nil disables enrichment, and a source declaring one
-	// is then refused rather than silently collected raw-only.
-	Enrichers *transforms.Registry
+	// Enrichers is the compiled registry. Nil disables enrichment.
+	Enrichers transforms.Registry
 
 	// Env expands an enricher's database candidates with the same ~ and $VAR rules as catalog roots.
 	Env sources.Env
