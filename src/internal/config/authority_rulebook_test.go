@@ -21,16 +21,12 @@ import (
 
 type rulebookField struct {
 	Field     string `json:"field"`
-	Default   string `json:"default"`
 	ServerMay string `json:"server_may"`
-	Note      string `json:"note"`
 }
 
 type rulebookDoc struct {
-	Comment     string            `json:"comment"`
-	Classes     map[string]string `json:"classes"`
-	Fields      []rulebookField   `json:"fields"`
-	NotSettable []string          `json:"not_settable"`
+	Classes map[string]string `json:"classes"`
+	Fields  []rulebookField   `json:"fields"`
 }
 
 // rulebookProbe exercises one row: accept must apply, reject must be refused, custom covers the asymmetries.
@@ -58,15 +54,11 @@ func served(t *testing.T, y string) config.LayeredDocument {
 
 func mustReject(t *testing.T, err error, context string) {
 	t.Helper()
-	if err == nil {
-		t.Fatalf("%s: resolved cleanly, want a rejection", context)
-		return
-	}
 	var rej *config.RejectionError
 	require.ErrorAsf(t, err, &rej, "%s: failed with %v, want a *RejectionError", context, err)
 }
 
-func rulebookProbes(t *testing.T) map[string]rulebookProbe {
+func rulebookProbes() map[string]rulebookProbe {
 	return map[string]rulebookProbe{
 		"issued_at / org": {custom: func(t *testing.T) {
 			envelope := "issued_at: \"2026-08-12T00:00:00Z\"\norg: acme\n"
@@ -129,16 +121,16 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			},
 		},
 
-		"scrub.rule_packs": {custom: func(t *testing.T) {
-			// A served subset must not remove the compiled floor: union only adds.
-			eff, err := resolveLayers(t, served(t, "scrub:\n  rule_packs:\n    - gitleaks-core\n"))
-			require.NoError(t, err)
-			for _, floor := range []string{"gitleaks-core", "quesma-extra", "cloud-keys", "generic-entropy", "pii-core"} {
-				assert.Truef(t, slices.Contains(eff.RulePacks, floor), "served rule_packs removed compiled pack %s: union must only add", floor)
-			}
-			_, err = resolveLayers(t, served(t, "scrub:\n  rule_packs:\n    - no-such-pack\n"))
-			mustReject(t, err, "a rule pack this build does not have")
-		}},
+		"scrub.rule_packs": {
+			accept: "scrub:\n  rule_packs:\n    - gitleaks-core\n",
+			verify: func(t *testing.T, eff *config.Effective) {
+				// A served subset must not remove the compiled floor: union only adds.
+				for _, floor := range []string{"gitleaks-core", "quesma-extra", "cloud-keys", "generic-entropy", "pii-core"} {
+					assert.Truef(t, slices.Contains(eff.RulePacks, floor), "served rule_packs removed compiled pack %s: union must only add", floor)
+				}
+			},
+			reject: "scrub:\n  rule_packs:\n    - no-such-pack\n",
+		},
 
 		"scrub.secret_key_names": {custom: func(t *testing.T) {
 			eff, err := resolveLayers(t,
@@ -209,22 +201,21 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			},
 		},
 
-		"sources[].enrichers{}": {custom: func(t *testing.T) {
-			// Disable applies from the served document.
-			eff, err := resolveLayers(t, served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"))
-			require.NoError(t, err)
-			assert.True(t, !sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"], "served enricher disable did not apply")
-			// A served enable over a local disable is ignored, not honored.
-			eff, err = resolveLayers(t,
-				layerDoc(t, config.LayerUser, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"),
-				served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: true\n"),
-			)
-			require.NoError(t, err)
-			assert.True(t, !sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"], "served enable overrode a local enricher disable")
-			// Attaching an enricher the catalog does not know is refused, not ignored.
-			_, err = resolveLayers(t, served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      exfiltrate-everything: true\n"))
-			mustReject(t, err, "attaching an unregistered enricher")
-		}},
+		"sources[].enrichers{}": {
+			accept: "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n",
+			verify: func(t *testing.T, eff *config.Effective) {
+				assert.True(t, !sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"], "served enricher disable did not apply")
+			},
+			reject: "sources:\n  - id: cursor-transcripts\n    enrichers:\n      exfiltrate-everything: true\n",
+			custom: func(t *testing.T) {
+				// A served enable over a local disable is ignored, not honored.
+				eff := resolved(t, fakeHome(t),
+					layerDoc(t, config.LayerUser, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"),
+					served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: true\n"),
+				)
+				assert.True(t, !sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"], "served enable overrode a local enricher disable")
+			},
+		},
 
 		"a source id not in the compiled catalog": {reject: "sources:\n  - id: no-such-source\n    enabled: false\n"},
 
@@ -259,7 +250,7 @@ func loadRulebook(t *testing.T) rulebookDoc {
 
 func TestRulebookMatchesResolver(t *testing.T) {
 	rb := loadRulebook(t)
-	probes := rulebookProbes(t)
+	probes := rulebookProbes()
 
 	documented := map[string]bool{}
 	for _, f := range rb.Fields {
