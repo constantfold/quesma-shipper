@@ -59,21 +59,10 @@ clean: ## Remove build and coverage output
 
 .PHONY: doctor
 doctor: ## Check the tools this repository's targets need
-	@ok=1; \
-	printf '%-10s %-8s %s\n' TOOL STATUS NEEDED-FOR; \
-	check() { \
-	  if command -v "$$1" >/dev/null 2>&1; then \
-	    printf '%-10s %-8s %s\n' "$$1" "ok" "$$3"; \
-	  else \
-	    printf '%-10s %-8s %s  — %s\n' "$$1" "MISSING" "$$3" "$$4"; \
-	    [ "$$2" = required ] && ok=0; \
-	  fi; \
-	}; \
-	check go required "building and testing the client" "https://go.dev/dl"; \
-	check claude optional "make cover-review" "https://claude.com/claude-code"; \
-	echo; \
-	if [ "$$ok" = 1 ]; then echo "ready"; \
-	else echo "install what is marked MISSING, then run make doctor again"; exit 1; fi
+	@command -v go >/dev/null && echo "go      ok  (required: building and testing)" || \
+		{ echo "go      MISSING (required): https://go.dev/dl"; exit 1; }
+	@command -v claude >/dev/null && echo "claude  ok  (optional: make cover-review)" || \
+		echo "claude  missing (optional, for make cover-review): https://claude.com/claude-code"
 
 # ---------------------------------------------------------------------------- test and coverage
 

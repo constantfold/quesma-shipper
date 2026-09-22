@@ -9,7 +9,7 @@ import (
 	windowspkg "github.com/QuesmaOrg/quesma-shipper/packaging/windows"
 )
 
-func InstallService(spec ServiceSpec) (ServiceStatus, error) { return windowspkg.InstallService(spec) }
+func InstallService(spec ServiceSpec) error { return windowspkg.InstallService(spec) }
 func UninstallService() (ServiceKind, error) {
 	return serviceWindowsTask, windowspkg.UninstallService()
 }
