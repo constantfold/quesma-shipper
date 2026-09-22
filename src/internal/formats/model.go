@@ -13,25 +13,17 @@ import (
 // It applies to the install rather than to one file, so the run must stop instead of retrying.
 var ErrCredentialsRefused = errors.New("this install's credentials were refused")
 
-// HealthState is a source's discovery state. A closed enum rather than free text because a
-// missing agent and a root whose globs match nothing look alike but only one is drift.
+// HealthState is a closed enum because a missing agent and a root whose globs match nothing look alike, but only one is drift.
 type HealthState string
 
 const (
-	// AgentAbsent means no root resolved: expected silence.
-	AgentAbsent HealthState = "agent_absent"
-
-	// RootPresentNoMatch means the root exists but the globs matched nothing: probable drift.
-	RootPresentNoMatch HealthState = "root_present_no_match"
-
-	// MatchPresentUnreadable means files were found but could not be used.
+	AgentAbsent            HealthState = "agent_absent"          // no root resolved: expected silence
+	RootPresentNoMatch     HealthState = "root_present_no_match" // probable drift
 	MatchPresentUnreadable HealthState = "match_present_unreadable"
-
-	// Collected is the normal case.
-	Collected HealthState = "collected"
+	Collected              HealthState = "collected"
 )
 
-// SniffResult is the closed enum. Shape, never semantics.
+// SniffResult judges shape, never semantics.
 type SniffResult string
 
 const (
@@ -41,32 +33,21 @@ const (
 	SniffUnreadable      SniffResult = "unreadable"
 )
 
-// Decision is what the client decided about one file. It is the audit log's vocabulary.
+// Decision is what the client decided about one file, in the audit log's vocabulary.
 type Decision string
 
 const (
-	// DecisionShipped: sealed and written to the sink.
-	DecisionShipped Decision = "shipped"
-
-	// DecisionUnchanged: the content hash matched, so nothing was re-shipped.
-	DecisionUnchanged Decision = "unchanged"
-
-	// DecisionSkipped: not collected, with a reason.
-	DecisionSkipped Decision = "skipped"
-
-	// DecisionParked: held off behind a backoff, matching the fingerprint's parked flag.
-	DecisionParked Decision = "parked"
-
-	// DecisionFailed: the attempt failed and will be re-run. Nothing was committed.
-	DecisionFailed Decision = "failed"
+	DecisionShipped   Decision = "shipped"
+	DecisionUnchanged Decision = "unchanged" // content hash matched
+	DecisionSkipped   Decision = "skipped"
+	DecisionParked    Decision = "parked" // behind a backoff, matching the fingerprint's parked flag
+	DecisionFailed    Decision = "failed" // nothing committed; re-run next time
 )
 
-// FileOutcome is what happened to one file.
 type FileOutcome struct {
 	// Fatal marks a failure about the install rather than the file; the run stops on it.
 	Fatal bool
-
-	// Derived payloads count in the file counters but stay out of byte totals: nothing was read off disk.
+	// Derived payloads count as files but stay out of byte totals: nothing was read off disk.
 	Derived bool
 
 	SourceID   string
@@ -81,11 +62,9 @@ type FileOutcome struct {
 	Reason     string
 }
 
-// Progress receives one file's outcome as the run decides it, done of total for that source.
-// A status carrier, not part of the data path: nil means silent.
+// Progress receives each file's outcome as the run decides it; nil means silent.
 type Progress func(sourceID string, done, total int, f FileOutcome)
 
-// SourceOutcome is one source's contribution to a run.
 type SourceOutcome struct {
 	SourceID     string
 	Family       string
@@ -95,27 +74,23 @@ type SourceOutcome struct {
 	Reason       string
 	Root         string
 
-	// Remaining counts candidates this pass never started: budget exhausted or byte gate held.
+	// Remaining counts candidates this pass never started.
 	Remaining int
-
 	// Emitted marks files the shipper generated itself; they ship but stay out of byte totals.
 	Emitted bool
 
-	// Oversize counts files the size cap kept out; they are never read and never shipped.
-	Oversize int
-
-	// The worst offender: a count alone cannot say whether the cap met one pathological file.
+	// Oversize counts files the size cap kept out; the largest shows whether it met one pathological file.
+	Oversize        int
 	OversizeLargest int64
 	OversizeExample string
 	OversizeLimit   int64
 
-	// Unreadable counts paths the walk could not look at, reported even when the source collected.
 	Unreadable        int
 	UnreadableExample string
 	UnreadableReason  string
 	Files             []FileOutcome
 
-	// Enrich counters. A mismatch loses that window's DB-side fields until the join is fixed; a skip does not.
+	// A mismatch loses that window's DB-side fields until the join is fixed; a skip does not.
 	Enriched        int
 	EnrichSkipped   int
 	EnrichMismatch  int
@@ -123,9 +98,7 @@ type SourceOutcome struct {
 	EnrichNotes     []string
 	EnricherID      string
 	EnricherVersion int
-
-	// Informational enrich notes: explained store shortfalls on objects that shipped. Apart
-	// from EnrichNotes so a renderer can tell loss from commentary without parsing text.
+	// EnrichInfos are commentary on objects that shipped, kept apart from EnrichNotes, which report loss.
 	EnrichInfos []string
 }
 
@@ -134,26 +107,20 @@ type SourceOutcome struct {
 type FailureRecord struct {
 	// A run that died without being able to say anything, detected by a journal with no "exit".
 	LastCrash *LastCrash `json:"last_crash,omitempty"`
-
-	// Oldest first. Bounded rather than complete because it rides a document that ships every run;
-	// consecutive heartbeats overlap, so a version nobody read loses nothing.
-	Recent []FailureEvent `json:"recent_failures,omitempty"`
-
-	ConsecutiveFailures int `json:"consecutive_failures,omitempty"`
-
-	// Overwritten every run, unlike the log above. None of it is a failure; it is what makes one
-	// explicable, and what a machine that is degrading rather than erroring shows first.
+	// Oldest first, and bounded because it ships every run; consecutive heartbeats overlap.
+	Recent              []FailureEvent `json:"recent_failures,omitempty"`
+	ConsecutiveFailures int            `json:"consecutive_failures,omitempty"`
+	// Overwritten every run: not failures, but what makes one explicable.
 	Facts *RunFacts `json:"facts,omitempty"`
 }
 
-// RunFacts records the last run’s resource costs and concurrency limits.
+// RunFacts records the last run's resource costs and concurrency limits.
 type RunFacts struct {
 	GOMAXPROCS       int   `json:"gomaxprocs,omitempty"`
 	MaxFilesPerRun   int   `json:"max_files_per_run,omitempty"`
 	MaxInFlightBytes int64 `json:"max_in_flight_bytes,omitempty"`
 
-	// SoftLimitBytes is the ceiling Go is holding the heap under; HeapInuseBytes against it is the
-	// pressure. GCCycles rises sharply as the two converge, which is the earlier signal.
+	// HeapInuseBytes against SoftLimitBytes is the pressure; GCCycles rising is the earlier signal.
 	SoftLimitBytes int64  `json:"soft_limit_bytes,omitempty"`
 	HeapInuseBytes uint64 `json:"heap_inuse_bytes,omitempty"`
 	SysBytes       uint64 `json:"sys_bytes,omitempty"`
@@ -166,32 +133,19 @@ type RunFacts struct {
 // Twenty is about five hours of a daemon failing every tick, and keeps the document a few KB.
 const MaxRecentFailures = 20
 
-// Failure kinds. A closed set, so a reader can group without parsing prose.
+// Failure kinds, a closed set so a reader can group without parsing prose. Counted() says which count toward the streak.
 const (
-	FailureTick  = "tick_failed" // a run that failed, or returned nil having shipped nothing
-	FailurePanic = "panic"       // a verb that panicked; the stack stays on the machine
-
-	// The run continues from an empty store, so this is reported without being counted.
-	FailureStoreCorrupt = "store_corrupt"
-
-	// Counted: an install that cannot start is not collecting at all.
-	FailureInit = "init_failed"
-
-	// Uncounted, and the one class where the run around it is fine: collection succeeded, but the
-	// install cannot replace itself, so it is frozen on this version and no fix can reach it.
+	FailureTick         = "tick_failed"   // a run that failed, or returned nil having shipped nothing
+	FailurePanic        = "panic"         // the stack stays on the machine
+	FailureStoreCorrupt = "store_corrupt" // the run continues from an empty store
+	FailureInit         = "init_failed"   // an install that cannot start is not collecting at all
+	// Collection succeeded, but the install cannot replace itself, so no fix can reach it.
 	FailureUpdate = "update_failed"
-
-	// FailureShutdown is the SIGTERM drain, the last slice before exit. Same mechanism as a tick,
-	// separate kind because the consequence differs: a tick re-ships next tick, and on a host about
-	// to disappear this one does not.
+	// The SIGTERM drain: unlike a tick, nothing re-ships it on a host about to disappear.
 	FailureShutdown = "shutdown_failed"
-
-	// Recorded by the run AFTER a death, read back out of the crash journal: the dead run could
-	// say nothing itself. Uncounted; crashes keep their own counter in last_crash.
+	// Read back from the crash journal by the next run; crashes keep their own counter in last_crash.
 	FailureCrash = "crashed"
-
-	// A tick that outlived its own interval, recorded before its outcome is known: a run stuck
-	// forever never reaches the judge. Uncounted, and the tick may yet complete.
+	// A tick that outlived its interval, recorded before its outcome is known; it may yet complete.
 	FailureStalled = "tick_stalled"
 )
 
@@ -199,9 +153,7 @@ const (
 type FailureEvent struct {
 	At   string `json:"at"`
 	Kind string `json:"kind"`
-
-	// Twenty events from twenty runs must read differently from one run that failed twenty times.
-	// Empty for a panic, recorded from outside the crash journal before any id is minted.
+	// RunID tells twenty runs from one run failing twenty times; empty for a panic before any id is minted.
 	RunID   string `json:"run_id,omitempty"`
 	Message string `json:"message"`
 }
@@ -244,9 +196,8 @@ func (r *FailureRecord) Latest() *FailureEvent {
 	return &r.Recent[len(r.Recent)-1]
 }
 
-// LastCrash reports how the previous run died, fleet-visibly: the run id and the lifecycle step it
-// had reached, never a path. Attributing a death to the FILE being read cost a journal line per
-// file, which was 92% of everything the journal wrote, so the phase is as fine as this gets.
+// LastCrash reports how the previous run died: the run id and lifecycle phase, never a path,
+// since a journal line per file was 92% of everything the journal wrote.
 type LastCrash struct {
 	RunID       string `json:"run_id,omitempty"`
 	Phase       string `json:"phase,omitempty"`
@@ -256,11 +207,9 @@ type LastCrash struct {
 // Report is what one run did, for status, preview output and the heartbeat.
 type Report struct {
 	StartedAt time.Time
-
 	// FinishedAt is the denominator of every rate the CLI prints; zero suppresses those lines.
 	FinishedAt time.Time
-
-	Sources []SourceOutcome
+	Sources    []SourceOutcome
 
 	Shipped   int
 	Unchanged int
@@ -270,31 +219,21 @@ type Report struct {
 
 	// Truncated is true when max_files_per_run cut the run short.
 	Truncated bool
-
-	// Remaining is the run's backlog: candidates no source got to. Only what was NOT attempted,
-	// so parked and oversize stay separate; they are not a speed problem.
+	// Remaining counts candidates never attempted; parked and oversize are not a speed problem and stay separate.
 	Remaining int
 
-	// BytesRead is what was read off the machine, BytesSealed what left it after sealing, and
-	// MedianFileBytes the middle shipped file's input size: a mean would follow one huge transcript.
+	// MedianFileBytes is the middle shipped file's input size: a mean would follow one huge transcript.
 	BytesRead       int64
 	BytesSealed     int64
 	MedianFileBytes int64
 
 	// EnrichMismatch is the fleet-wide alarm total: there is no raw-row fallback.
 	EnrichMismatch int
-
-	// Paused says the pause state stopped the run; PauseReason carries what the operator wrote.
-	Paused      bool
-	PauseReason string
-
-	// StoreCorrupt says this run's fingerprint document could not be loaded and was discarded: the
-	// run started from empty and its first flush replaced the file. Carried on the report because
-	// detecting it silently would leave the one true silent-loss hole reported to nobody.
+	Paused         bool
+	PauseReason    string
+	// StoreCorrupt says the fingerprint document was discarded and the run started from empty.
 	StoreCorrupt bool
-
-	// SlowestScrubNanos is the worst single redaction this run served, with the payload behind it.
-	// A pattern that backtracks pathologically stalls an install without erroring anywhere.
+	// The worst single redaction: a pathologically backtracking pattern stalls an install without erroring.
 	SlowestScrubNanos int64
 	SlowestScrubBytes int64
 }

@@ -14,11 +14,7 @@ func sniff(path string, spec *Sniff) (SniffResult, string) {
 		return SniffOK, ""
 	}
 
-	budget := spec.MaxScanBytes
-	if budget <= 0 {
-		budget = 64 << 10
-	}
-	head, info, err := readHead(path, budget)
+	head, info, err := readHead(path, spec.MaxScanBytes)
 	if err != nil {
 		return SniffUnreadable, ""
 	}
@@ -48,7 +44,11 @@ func sniff(path string, spec *Sniff) (SniffResult, string) {
 	return SniffOK, ""
 }
 
+// readHead reads up to budget bytes, 64 KiB when budget is not positive.
 func readHead(path string, budget int64) ([]byte, os.FileInfo, error) {
+	if budget <= 0 {
+		budget = 64 << 10
+	}
 	f, info, err := platform.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -96,16 +96,12 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 
 // sampleIndexes picks up to n positions spread evenly across length, always including the first and the last.
 func sampleIndexes(length, n int) []int {
-	if length <= n {
-		out := make([]int, length)
-		for i := range out {
-			out[i] = i
+	out := make([]int, min(length, n))
+	for i := range out {
+		out[i] = i
+		if length > n {
+			out[i] = i * (length - 1) / (n - 1)
 		}
-		return out
-	}
-	out := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, i*(length-1)/(n-1))
 	}
 	return out
 }

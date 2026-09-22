@@ -26,21 +26,17 @@ func sniffJSONL(head []byte, truncated bool) (SniffResult, string) {
 	}
 
 	var rec map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+	if json.Unmarshal([]byte(line), &rec) != nil {
 		if unjudgeable {
 			return SniffOK, ""
 		}
 		return SniffUnexpectedShape, ""
 	}
-	if v := versionFrom(rec); v != "" {
-		return SniffOK, v
-	}
-	// The version rides a header line that is not always the first, so scan on past line one.
-	_, rest, _ := bytes.Cut(head, []byte{'\n'})
-	return SniffOK, versionFromHead(rest)
+	return SniffOK, versionFromHead(head)
 }
 
-const maxVersionScanLines = 16
+// The version rides a header line that is not always the first: the first line plus sixteen more.
+const maxVersionScanLines = 17
 
 func versionFromHead(head []byte) string {
 	scanned := 0

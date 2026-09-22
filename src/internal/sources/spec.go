@@ -18,7 +18,6 @@ import (
 	catalogdata "github.com/QuesmaOrg/quesma-shipper/internal/formats/catalogdata"
 )
 
-// Spec is one catalog file.
 type Spec struct {
 	SpecVersion int      `yaml:"spec_version"`
 	Family      string   `yaml:"family"`
@@ -41,13 +40,10 @@ type Source struct {
 	Sniff         *Sniff          `yaml:"sniff"`
 	Enrichers     map[string]bool `yaml:"enrichers"`
 	Scrub         *bool           `yaml:"scrub"`
-
-	// Emit, CWDProbe and GitRead belong to the sidecar primitive. Remote normalisation is not
-	// configurable: NormaliseRemote strips userinfo unconditionally.
+	// Emit, CWDProbe and GitRead belong to the sidecar primitive.
 	Emit     string    `yaml:"emit"`
 	CWDProbe *CWDProbe `yaml:"cwd_probe"`
 	GitRead  *GitRead  `yaml:"git_read"`
-
 	// Family is copied down from the containing spec so a Source travels alone.
 	Family string `yaml:"-"`
 }
@@ -71,14 +67,12 @@ type CWDProbe struct {
 	ScanBytes int64    `yaml:"scan_bytes"`
 }
 
-// GitRead is the equally bounded .git handling.
 type GitRead struct {
 	WalkUp           bool     `yaml:"walk_up"`
 	FollowGitdirFile bool     `yaml:"follow_gitdir_file"`
 	Take             []string `yaml:"take"`
 }
 
-// Compiled is the whole parsed catalog.
 type Compiled struct {
 	Specs   []Spec
 	byID    map[string]Source
@@ -98,7 +92,6 @@ func Load() (*Compiled, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		var asAny any
 		if err := yaml.Unmarshal(raw, &asAny); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
@@ -106,14 +99,12 @@ func Load() (*Compiled, error) {
 		if err := formats.Validate(formats.SourceSpec, asAny); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
 		}
-
 		var spec Spec
 		dec := yaml.NewDecoder(bytes.NewReader(raw))
 		dec.KnownFields(true)
 		if err := dec.Decode(&spec); err != nil {
 			return nil, fmt.Errorf("catalog: %s: %w", name, err)
 		}
-
 		for i := range spec.Sources {
 			spec.Sources[i].Family = spec.Family
 			s := spec.Sources[i]
@@ -165,13 +156,10 @@ func SpecFingerprint(s Source) string {
 // config package that builds it, so discovery and the loop never import the layered merge.
 type Resolved struct {
 	Source
-
 	// Root is the first candidate that expanded, exists and satisfied require_subdir; empty means the agent is not installed here.
 	Root string
-
 	// RootUnresolvedReason explains an empty Root, so agent_absent stays distinguishable from a misconfiguration.
 	RootUnresolvedReason string
-
-	Enabled         bool
-	SpecFingerprint string
+	Enabled              bool
+	SpecFingerprint      string
 }

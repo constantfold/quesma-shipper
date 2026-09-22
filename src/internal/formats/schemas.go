@@ -40,7 +40,6 @@ var (
 func Compile(name string) (*jsonschema.Schema, error) {
 	mu.Lock()
 	defer mu.Unlock()
-
 	if s, ok := compiled[name]; ok {
 		return s, nil
 	}
@@ -53,7 +52,6 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schemas: parse %s: %w", name, err)
 	}
-
 	c := jsonschema.NewCompiler()
 	// Registered under the bare file name so callers pass a file name, not the document's $id.
 	if err := c.AddResource(name, doc); err != nil {
@@ -63,7 +61,6 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schemas: compile %s: %w", name, err)
 	}
-
 	compiled[name] = s
 	return s, nil
 }

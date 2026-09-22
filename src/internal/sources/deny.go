@@ -60,18 +60,11 @@ type List struct {
 func New(home string) *List {
 	d := &List{}
 	env := Env{Home: home, Lookup: os.LookupEnv}
-	seen := map[string]bool{}
 	for _, p := range CompiledDeny {
 		expanded, err := env.expandVars(p)
-		if err != nil {
-			continue
+		if e := normalize(ExpandHome(expanded, home)); err == nil && !slices.Contains(d.patterns, e) {
+			d.patterns = append(d.patterns, e)
 		}
-		e := normalize(ExpandHome(expanded, home))
-		if seen[e] {
-			continue
-		}
-		seen[e] = true
-		d.patterns = append(d.patterns, e)
 	}
 	return d
 }
@@ -83,22 +76,16 @@ func (d *List) Patterns() []string {
 
 // Match reports whether an absolute path is denied, checking both the literal and the symlink-resolved form.
 func (d *List) Match(path string) (bool, string) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		// A path that does not exist has no resolved form, and cannot be read either.
-		resolved = ""
-	}
+	// A path that does not exist has no resolved form, and cannot be read either.
+	resolved, _ := filepath.EvalSymlinks(path)
 	return d.MatchPair(path, resolved)
 }
 
 // MatchPair is Match for a caller that already resolved; an empty or equal resolved form means the literal one is all there is to check.
 func (d *List) MatchPair(given, resolved string) (bool, string) {
 	c := normalize(given)
-	if denied, pat := d.matchCandidate(c); denied {
-		return true, pat
-	}
-	if resolved == "" {
-		return false, ""
+	if denied, pat := d.matchCandidate(c); denied || resolved == "" {
+		return denied, pat
 	}
 	if r := normalize(resolved); r != c {
 		return d.matchCandidate(r)
@@ -120,10 +107,7 @@ func (d *List) MatchTree(dir string) (bool, string) {
 // matchCandidate reports the first pattern in list order that matches, so doctor and the audit log quote back the compiled entry.
 func (d *List) matchCandidate(c string) (bool, string) {
 	for _, pat := range d.patterns {
-		if ok, err := doublestar.Match(pat, c); err == nil && ok {
-			return true, pat
-		}
-		if matchesTree(pat, c) {
+		if ok, err := doublestar.Match(pat, c); (err == nil && ok) || matchesTree(pat, c) {
 			return true, pat
 		}
 	}
@@ -152,7 +136,6 @@ func (d *List) CheckIncludes(root string, includes []string) error {
 		pattern := strings.TrimPrefix(filepath.ToSlash(glob), "/")
 		matches, err := doublestar.Glob(fsys, pattern)
 		if err != nil {
-			// A malformed glob is a config error in its own right.
 			return fmt.Errorf("include glob %q is not valid: %w", glob, err)
 		}
 		for _, m := range matches {

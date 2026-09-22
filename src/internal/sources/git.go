@@ -29,18 +29,15 @@ func gitRemoteFor(cwd string, cfg *GitRead) (remote, project, gaveUp string) {
 	}
 
 	for _, u := range remoteURLs(string(raw), cfg.Take) {
-		normalised, name, err := NormaliseRemote(u)
-		if err != nil {
-			continue
+		if normalised, name, err := NormaliseRemote(u); err == nil {
+			return normalised, name, ""
 		}
-		return normalised, name, ""
 	}
 	return "", "", "no usable remote in git config"
 }
 
-// findGitDir walks up from cwd to the checkout root holding .git and the repository's
-// COMMON git dir: a linked worktree's own gitdir holds no config, and its commondir
-// names the one that does.
+// findGitDir walks up from cwd to the checkout root holding .git and the repository's COMMON git dir:
+// a linked worktree's own gitdir holds no config, and its commondir names the one that does.
 func findGitDir(cwd string, cfg *GitRead, ceiling string) (root, common string, ok bool) {
 	if !filepath.IsAbs(cwd) {
 		return "", "", false
@@ -73,8 +70,7 @@ func findGitDir(cwd string, cfg *GitRead, ceiling string) (root, common string, 
 	return "", "", false
 }
 
-// gitPointer reads one of git's pointer files (a "gitdir:" line, or commondir's bare
-// path) and resolves it against base.
+// gitPointer reads a "gitdir:" line or commondir's bare path and resolves it against base.
 func gitPointer(file, prefix, base string) (string, bool) {
 	body, _, err := platform.ReadWhole(file, 64<<10)
 	if err != nil {
@@ -99,8 +95,7 @@ func gitCommonDir(gitDir string) string {
 	return gitDir
 }
 
-// mainWorktreeDir is the checkout holding the common git dir; "" for a bare repository,
-// which has no working tree to mark.
+// mainWorktreeDir is the checkout holding the common git dir; "" for a bare repository.
 func mainWorktreeDir(commonDir string) string {
 	if filepath.Base(commonDir) == ".git" {
 		return filepath.Dir(commonDir)
@@ -108,7 +103,6 @@ func mainWorktreeDir(commonDir string) string {
 	return ""
 }
 
-// remoteURLs pulls url values out of a git config, ignoring everything else.
 func remoteURLs(body string, take []string) []string {
 	if len(take) > 0 && !slices.ContainsFunc(take, func(t string) bool { return strings.Contains(t, "url") }) {
 		return nil
@@ -116,12 +110,9 @@ func remoteURLs(body string, take []string) []string {
 
 	var out []string
 	for line := range strings.SplitSeq(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		key, value, found := strings.Cut(trimmed, "=")
-		if !found || strings.TrimSpace(key) != "url" {
-			continue
+		if key, value, found := strings.Cut(line, "="); found && strings.TrimSpace(key) == "url" {
+			out = append(out, strings.TrimSpace(value))
 		}
-		out = append(out, strings.TrimSpace(value))
 	}
 	return out
 }
