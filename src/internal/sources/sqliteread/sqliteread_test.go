@@ -177,35 +177,51 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	assert.NotZero(t, res.StrippedFields, "stripped fields must be reported")
 }
 
-// The scratch-fallback gate: identical output, and nothing left beside the source.
-func TestTheSnapshotReadProducesTheSameRowsAndLeavesNoFilesBehind(t *testing.T) {
+// Unreadable databases fail through every fallback; a live database must also refuse raw copying.
+func TestUnreadableDatabaseFallbacks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX modes")
 	}
-	path := newStore(t, map[string]string{
-		"composerData:c1": `{"composerId":"c1"}`,
-		"bubbleId:c1:b1":  `{"type":1,"text":"hi"}`,
-	})
-	scratch := filepath.Join(t.TempDir(), "scratch")
-
-	inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
-	require.Equalf(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first, got %q", inPlace.Method)
-
-	// Force a fallback: whichever method answers, the ROWS must be identical.
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Skipf("cannot chmod: %v", err)
+	for _, tc := range []struct {
+		name, want string
+		rows       map[string]string
+		prefixes   []string
+		now        func() time.Time
+		prepare    func(*testing.T, string, string)
+	}{
+		{"all methods fail", "every read method failed",
+			map[string]string{"composerData:c1": `{"composerId":"c1"}`, "bubbleId:c1:b1": `{"type":1,"text":"hi"}`},
+			[]string{"composerData:", "bubbleId:"}, nil,
+			func(t *testing.T, path, scratch string) {
+				inPlace := read(t, path, func(o *sqliteread.Options) { o.ScratchDir = scratch })
+				require.Equal(t, sqliteread.ReadInPlace, inPlace.Method, "expected the fast path first")
+			}},
+		{"live database cannot be copied", "not cold enough",
+			map[string]string{"composerData:c1": `{"composerId":"c1"}`},
+			[]string{"composerData:"}, time.Now,
+			func(t *testing.T, path, _ string) {
+				require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := newStore(t, tc.rows)
+			scratch := filepath.Join(t.TempDir(), "scratch")
+			tc.prepare(t, path, scratch)
+			if err := os.Chmod(path, 0o000); err != nil {
+				t.Skipf("cannot chmod: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+			_, err := sqliteread.Read(sqliteread.Options{
+				Path:        path,
+				ScratchDir:  scratch,
+				Table:       "cursorDiskKV",
+				KeyPrefixes: tc.prefixes,
+				Now:         tc.now,
+			})
+			require.Error(t, err, "an unreadable database produced a successful read")
+			assert.Contains(t, err.Error(), tc.want)
+		})
 	}
-	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-
-	_, err := sqliteread.Read(sqliteread.Options{
-		Path:        path,
-		ScratchDir:  scratch,
-		Table:       "cursorDiskKV",
-		KeyPrefixes: []string{"composerData:", "bubbleId:"},
-	})
-	// Unreadable by every method must be reported as a failure, not as an empty successful read.
-	require.Error(t, err, "an unreadable database produced a successful read")
-	assert.Containsf(t, err.Error(), "every read method failed", "the error does not name every method: %v", err)
 }
 
 // THE SIDECAR BASENAME RULE. A mistake this project already made once.
@@ -231,29 +247,6 @@ func TestColdCopyKeepsSidecarsAndRefusesOverwrite(t *testing.T) {
 	// Overwriting could mix a fresh database with stale sidecars.
 	_, err = sqliteread.CopyCold(src, dst)
 	require.Error(t, err, "a cold copy overwrote an existing target")
-}
-
-func TestALiveDatabaseIsNotCopiedRaw(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no POSIX modes")
-	}
-	path := newStore(t, map[string]string{"composerData:c1": `{"composerId":"c1"}`})
-	require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
-	// The raw copy is cold-only and must refuse here: a raw copy of a database being written is not consistent.
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Skipf("cannot chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-
-	_, err := sqliteread.Read(sqliteread.Options{
-		Path:        path,
-		ScratchDir:  filepath.Join(t.TempDir(), "scratch"),
-		Table:       "cursorDiskKV",
-		KeyPrefixes: []string{"composerData:"},
-		Now:         func() time.Time { return time.Now() },
-	})
-	require.Error(t, err, "a live database was read by raw copy")
-	assert.Containsf(t, err.Error(), "not cold enough", "the refusal does not name coldness: %v", err)
 }
 
 func TestAnUndeclaredTableIsRefused(t *testing.T) {

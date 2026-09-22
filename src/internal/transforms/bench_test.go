@@ -72,7 +72,7 @@ func syntheticTranscript(size int) []byte {
 				"version":     "1.0.60",
 				"type":        "assistant",
 				"message": map[string]any{
-					"id":      "msg_01" + randToken(rng, 22),
+					"id":      "msg_01" + randString(rng, tokenAlphabet, 22),
 					"role":    "assistant",
 					"model":   "claude-opus-4",
 					"content": []any{map[string]any{"type": "text", "text": randProse(rng, 200+rng.Intn(600))}},
@@ -96,7 +96,7 @@ func syntheticTranscript(size int) []byte {
 			if i%37 == 0 {
 				// Enough planted secrets to exercise the re-serialize path, without a file of secrets.
 				line["message"].(map[string]any)["content"] =
-					"export AWS_SECRET_ACCESS_KEY=" + randToken(rng, 40) + " && ./deploy.sh"
+					"export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
 			}
 		}
 		if err := encoder.Encode(line); err != nil {
@@ -120,7 +120,7 @@ func syntheticBigValueWith(size int, seed int64, output func(*rand.Rand, int) st
 		"uuid":          randUUID(rng),
 		"sessionId":     randUUID(rng),
 		"cwd":           "/Users/devuser/git/trajectory-shipper",
-		"toolUseResult": map[string]any{"stdout": body, "stderr": "", "tool_use_id": "toolu_01" + randToken(rng, 22)},
+		"toolUseResult": map[string]any{"stdout": body, "stderr": "", "tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22)},
 		"timestamp":     "2026-08-16T09:13:02.900Z",
 	})
 	if err != nil {
@@ -141,7 +141,7 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 			"content": []any{
 				map[string]any{
 					"type":        "tool_result",
-					"tool_use_id": "toolu_01" + randToken(rng, 22),
+					"tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22),
 					"content":     output(rng, 300+rng.Intn(900)),
 				},
 			},
@@ -149,7 +149,7 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 		"toolUseResult": map[string]any{
 			"stdout":      output(rng, 200+rng.Intn(400)),
 			"stderr":      "",
-			"tool_use_id": "toolu_01" + randToken(rng, 22),
+			"tool_use_id": "toolu_01" + randString(rng, tokenAlphabet, 22),
 		},
 		"uuid":      randUUID(rng),
 		"timestamp": "2026-08-16T09:12:45.002Z",
@@ -159,24 +159,16 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 const hexDigits = "0123456789abcdef"
 
 func randUUID(rng *rand.Rand) string {
-	var sb strings.Builder
-	for i, n := range []int{8, 4, 4, 4, 12} {
-		if i > 0 {
-			sb.WriteByte('-')
-		}
-		for j := 0; j < n; j++ {
-			sb.WriteByte(hexDigits[rng.Intn(16)])
-		}
-	}
-	return sb.String()
+	hex := randString(rng, hexDigits, 32)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hex[:8], hex[8:12], hex[12:16], hex[16:20], hex[20:])
 }
 
 const tokenAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-func randToken(rng *rand.Rand, n int) string {
+func randString(rng *rand.Rand, alphabet string, n int) string {
 	var sb strings.Builder
 	for i := 0; i < n; i++ {
-		sb.WriteByte(tokenAlphabet[rng.Intn(len(tokenAlphabet))])
+		sb.WriteByte(alphabet[rng.Intn(len(alphabet))])
 	}
 	return sb.String()
 }
@@ -210,11 +202,11 @@ func randCommandOutput(rng *rand.Rand, n int) string {
 				proseWords[rng.Intn(len(proseWords))], rng.Intn(900)+1, rng.Intn(80)+1,
 				randProse(rng, 40))
 		case 1:
-			fmt.Fprintf(&sb, "%s  refs/heads/%s\n", randHex(rng, 40),
+			fmt.Fprintf(&sb, "%s  refs/heads/%s\n", randString(rng, hexDigits, 40),
 				proseWords[rng.Intn(len(proseWords))])
 		case 2:
 			fmt.Fprintf(&sb, "  \"%s\": \"%s\",\n", proseWords[rng.Intn(len(proseWords))],
-				randToken(rng, 8+rng.Intn(30)))
+				randString(rng, tokenAlphabet, 8+rng.Intn(30)))
 		case 3:
 			fmt.Fprintf(&sb, "ok  \tgithub.com/QuesmaOrg/quesma-shipper/internal/%s\t%d.%03ds\n",
 				proseWords[rng.Intn(len(proseWords))], rng.Intn(9), rng.Intn(999))
@@ -222,14 +214,6 @@ func randCommandOutput(rng *rand.Rand, n int) string {
 			sb.WriteString(randProse(rng, 60+rng.Intn(60)))
 			sb.WriteByte('\n')
 		}
-	}
-	return sb.String()
-}
-
-func randHex(rng *rand.Rand, n int) string {
-	var sb strings.Builder
-	for i := 0; i < n; i++ {
-		sb.WriteByte(hexDigits[rng.Intn(16)])
 	}
 	return sb.String()
 }

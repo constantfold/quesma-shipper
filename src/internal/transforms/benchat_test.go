@@ -28,7 +28,7 @@ func randCommandOutputAt(rng *rand.Rand, n int) string {
 				proseWords[rng.Intn(len(proseWords))], rng.Intn(9), rng.Intn(20), rng.Intn(20),
 				proseWords[rng.Intn(len(proseWords))])
 		case 1:
-			fmt.Fprintf(&sb, "commit %s\nAuthor: Dev User <devuser@example.com>\n", randHex(rng, 40))
+			fmt.Fprintf(&sb, "commit %s\nAuthor: Dev User <devuser@example.com>\n", randString(rng, hexDigits, 40))
 		case 2:
 			fmt.Fprintf(&sb, "  @param {%s} %s - %s\n", proseWords[rng.Intn(len(proseWords))],
 				proseWords[rng.Intn(len(proseWords))], randProse(rng, 40))
@@ -55,7 +55,7 @@ func syntheticTranscriptAt(size int) []byte {
 		line := syntheticToolResult(rng, randCommandOutputAt)
 		if i%37 == 0 {
 			line["message"].(map[string]any)["content"] =
-				"export AWS_SECRET_ACCESS_KEY=" + randToken(rng, 40) + " && ./deploy.sh"
+				"export AWS_SECRET_ACCESS_KEY=" + randString(rng, tokenAlphabet, 40) + " && ./deploy.sh"
 		}
 		if err := encoder.Encode(line); err != nil {
 			panic(err)
