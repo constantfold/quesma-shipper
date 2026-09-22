@@ -23,10 +23,7 @@ func stagedFor(idx, size int) fileResult {
 	return fileResult{
 		idx:     idx,
 		outcome: FileOutcome{ObjectKey: fmt.Sprintf("v1/o/%d.age", idx)},
-		pending: &pendingPut{
-			obj: make([]byte, size),
-			md:  map[string]string{"source-hash": "deadbeef"},
-		},
+		pending: &pendingPut{obj: make([]byte, size), md: map[string]string{"source-hash": "deadbeef"}},
 	}
 }
 

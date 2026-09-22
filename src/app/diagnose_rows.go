@@ -69,9 +69,8 @@ func controlPlaneRows(enr *controlplane.Enrollment, enrErr error,
 	eff *config.Effective, remote controlplane.Remote) []Row {
 	if enr == nil {
 		if enrErr != nil && !errors.Is(enrErr, os.ErrNotExist) {
-			return []Row{{Sev: SevWarn, Label: "server",
-				Detail: fmt.Sprintf("enrollment record unreadable: %v", enrErr),
-				Fix:    "the install behaves as standalone until this is fixed"}}
+			return []Row{{Sev: SevWarn, Label: "server", Detail: fmt.Sprintf("enrollment record unreadable: %v", enrErr),
+				Fix: "the install behaves as standalone until this is fixed"}}
 		}
 		return nil
 	}
@@ -81,8 +80,7 @@ func controlPlaneRows(enr *controlplane.Enrollment, enrErr error,
 			Detail: fmt.Sprintf("unreachable, running on cached settings: %v", remote.Err),
 			Fix:    "collecting continues, settings changes wait until it answers"})
 	} else {
-		rows = append(rows, Row{Sev: SevOK, Label: "server",
-			Detail: "connected, settings current"})
+		rows = append(rows, Row{Sev: SevOK, Label: "server", Detail: "connected, settings current"})
 	}
 	if remote.Expired || eff.ConfigExpired {
 		rows = append(rows, Row{Sev: SevWarn, Label: "server", Brief: "cached settings expired",
@@ -122,9 +120,8 @@ func enrollmentRows(stateDir string, enr *controlplane.Enrollment, enrErr error,
 
 	rows = append(rows, Row{Sev: SevDim, Label: "config_source", Detail: string(remote.Origin)})
 	if remote.Err != nil {
-		rows = append(rows, Row{Sev: SevWarn, Label: "config_fetch",
-			Detail: fmt.Sprintf("failed: %v", remote.Err),
-			Fix:    "the run still collects under cached/local layers; a pushed policy change has not taken effect"})
+		rows = append(rows, Row{Sev: SevWarn, Label: "config_fetch", Detail: fmt.Sprintf("failed: %v", remote.Err),
+			Fix: "the run still collects under cached/local layers; a pushed policy change has not taken effect"})
 	}
 	if eff.ConfigExpired {
 		rows = append(rows, Row{Sev: SevWarn, Label: "config_expired",

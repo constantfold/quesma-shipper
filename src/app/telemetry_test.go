@@ -52,22 +52,14 @@ func telemetryRuntime(t *testing.T, record formats.FailureRecord) *Runtime {
 	body, err := json.Marshal(record)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, lastFailureFile), body, 0o600))
-	return &Runtime{
-		eff:      &config.Effective{StateDir: dir, TelemetryEndpoint: "/v1/telemetry"},
-		hostname: "ci-runner-3",
-		build:    Build{Version: "0.0.3"},
-	}
+	return &Runtime{eff: &config.Effective{StateDir: dir, TelemetryEndpoint: "/v1/telemetry"}, hostname: "ci-runner-3",
+		build: Build{Version: "0.0.3"}}
 }
 
 // The collector reads these field names from the signed body verbatim.
 func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
-	r := telemetryRuntime(t, formats.FailureRecord{
-		ConsecutiveFailures: 2,
-		Recent: []formats.FailureEvent{{
-			At: "2026-09-18T11:58:00Z", Kind: formats.FailureTick, RunID: "r1",
-			Message: "backend: 503",
-		}},
-	})
+	r := telemetryRuntime(t, formats.FailureRecord{ConsecutiveFailures: 2,
+		Recent: []formats.FailureEvent{{At: "2026-09-18T11:58:00Z", Kind: formats.FailureTick, RunID: "r1", Message: "backend: 503"}}})
 	// The CLI journal supplies the crash independently of the failure file.
 	r.lastCrash = &formats.LastCrash{RunID: "r0", Phase: "tick 1", Consecutive: 1}
 

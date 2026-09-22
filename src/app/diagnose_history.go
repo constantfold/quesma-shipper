@@ -60,8 +60,7 @@ func scheduleRows(stateDir string, now time.Time) []Row {
 	var rows []Row
 	if p := platform.Read(stateDir); p.Paused {
 		rows = append(rows, Row{Sev: SevWarn, Label: "collecting", Brief: "paused",
-			Detail: "paused until " + FormatUntil(p.UntilTime(), now),
-			Fix:    "`quesma-shipper resume`"})
+			Detail: "paused until " + FormatUntil(p.UntilTime(), now), Fix: "`quesma-shipper resume`"})
 	}
 
 	rows = append(rows, failureRows(stateDir, now)...)
@@ -95,8 +94,7 @@ func failureRows(stateDir string, now time.Time) []Row {
 		}
 		fix = last.Message
 	}
-	return []Row{{Sev: SevWarn, Label: "recent runs", Brief: "recent runs are failing",
-		Detail: detail, Fix: fix}}
+	return []Row{{Sev: SevWarn, Label: "recent runs", Brief: "recent runs are failing", Detail: detail, Fix: fix}}
 }
 
 // lastFailureRows adds recovered failures to verbose output; scheduleRows already reports an ongoing streak.

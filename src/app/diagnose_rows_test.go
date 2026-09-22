@@ -53,11 +53,9 @@ func TestDiscoveryRowsSeverity(t *testing.T) {
 // Size-cap and unreadable counts each get their own warning with the exact remedy.
 func TestDiscoveryRowsLossSubRows(t *testing.T) {
 	src := config.ResolvedSource{Source: sources.Source{ID: "claude"}}
-	rows := discoveryRows(src, sources.Discovery{
-		Health: formats.Collected, Sniff: formats.SniffOK,
+	rows := discoveryRows(src, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
 		Unreadable: 2, UnreadableReason: "permission denied", UnreadableExample: "/x/y",
-		Oversize: []sources.Oversize{{RelPath: "big", Size: 200, Limit: 100}},
-	})
+		Oversize: []sources.Oversize{{RelPath: "big", Size: 200, Limit: 100}}})
 	require.Len(t, rows, 3)
 	assert.Equal(t, []Severity{SevOK, SevWarn, SevWarn}, []Severity{rows[0].Sev, rows[1].Sev, rows[2].Sev})
 	assert.Contains(t, rows[1].Fix, "/x/y")
@@ -207,8 +205,7 @@ func TestFamilyUploadRow(t *testing.T) {
 		assert.Containsf(t, rows[1].Detail, want, "detail %q missing %q", rows[1].Detail, want)
 	}
 
-	rows, _, _ = familyRows("F", probes,
-		familyUpload{recorded: true, at: now, failed: 2}, now, false)
+	rows, _, _ = familyRows("F", probes, familyUpload{recorded: true, at: now, failed: 2}, now, false)
 	assert.True(t, rows[1].Sev == SevWarn && rows[1].Fix != "", "failed uploads must warn with a fix: %+v", rows[1])
 	assert.Containsf(t, rows[1].Detail, "nothing new", "zero shipped should read as checked/nothing new: %q", rows[1].Detail)
 

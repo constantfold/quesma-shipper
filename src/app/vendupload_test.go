@@ -49,11 +49,8 @@ func TestClassifyPut(t *testing.T) {
 }
 
 func preparedObject(id string) engine.PreparedObject {
-	return engine.PreparedObject{
-		ObjectID: id, Key: "k" + id, Body: []byte("sealed " + id),
-		SourceHash: strings.Repeat("a", 64),
-		Metadata:   map[string]string{"source-id": "claude-code-transcripts"},
-	}
+	return engine.PreparedObject{ObjectID: id, Key: "k" + id, Body: []byte("sealed " + id), SourceHash: strings.Repeat("a", 64),
+		Metadata: map[string]string{"source-id": "claude-code-transcripts"}}
 }
 
 // portAgainst serves both the control plane and the store from fn, so the test sees every request.
@@ -63,11 +60,8 @@ func portAgainst(t *testing.T, fn http.HandlerFunc) *vendPort {
 	t.Cleanup(srv.Close)
 	_, key, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
-	client, err := controlplane.New(controlplane.Options{
-		Endpoint:  srv.URL,
-		InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", Organization: "acme",
-		DeviceKey: key,
-	})
+	client, err := controlplane.New(controlplane.Options{Endpoint: srv.URL, InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+		Organization: "acme", DeviceKey: key})
 	require.NoError(t, err)
 	target, err := upload.NewUploadTarget(upload.TargetSpec{
 		Origin: srv.URL, Addressing: upload.PathStyle, PathPrefix: "/b", AllowLoopbackHTTP: true,

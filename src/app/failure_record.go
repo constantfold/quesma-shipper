@@ -80,8 +80,7 @@ func RecordStartupFailure(verb, runID string, cause error) {
 	if cause == nil {
 		return
 	}
-	recordWithoutRuntime(runID, formats.FailureInit,
-		fmt.Sprintf("%s could not start: %v", verb, cause))
+	recordWithoutRuntime(runID, formats.FailureInit, fmt.Sprintf("%s could not start: %v", verb, cause))
 }
 
 // RecordUpdateFailure records a failed remediation attempt without counting it as a collection failure.

@@ -103,11 +103,9 @@ func TestEnrichNotes(t *testing.T) {
 		src.SourceID, src.Health = "cursor-transcripts", formats.Collected
 		return summaryOutput(formats.Report{Sources: []formats.SourceOutcome{src}}, false)
 	}
-	out := summary(formats.SourceOutcome{
-		EnrichMismatch: 1, EnrichErrors: 1,
+	out := summary(formats.SourceOutcome{EnrichMismatch: 1, EnrichErrors: 1,
 		EnrichNotes: []string{"conv-a: 2 transcript events did not align with the store"},
-		EnrichInfos: []string{"conv-b: 3 events carried native-only in the derived object"},
-	})
+		EnrichInfos: []string{"conv-b: 3 events carried native-only in the derived object"}})
 	assert.Equal(t, 1, strings.Count(out, "did not align"))
 	assert.Contains(t, out, "1 files sent without their database details")
 	assert.Contains(t, out, "enrich errors ×1")
