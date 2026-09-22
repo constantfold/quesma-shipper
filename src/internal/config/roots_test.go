@@ -3,7 +3,6 @@ package config_test
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,11 +36,7 @@ sources:
   - id: claude-code-transcripts
     include: ["projects/**/*.jsonl"]
 `))
-	for _, s := range eff.Sources {
-		if s.ID == "claude-code-transcripts" {
-			assert.Truef(t, len(s.Include) == 1 && s.Include[0] == "projects/**/*.jsonl", "include not applied: %v", s.Include)
-		}
-	}
+	assert.Equal(t, []string{"projects/**/*.jsonl"}, sourceByID(t, eff, "claude-code-transcripts").Include)
 }
 
 // A config whose include glob reaches a compiled-deny path is rejected and reported, not applied.
@@ -58,43 +53,6 @@ sources:
 	))
 	require.Error(t, err, "an include glob reaching .credentials.json must be rejected")
 	assert.Containsf(t, err.Error(), "deny", "the refusal should name the deny list, got: %v", err)
-}
-
-func TestDenyListMatchesCredentialShapes(t *testing.T) {
-	home := t.TempDir()
-	d := sources.New(home)
-
-	denied := []string{
-		filepath.Join(home, ".aws", "credentials"),
-		filepath.Join(home, ".ssh", "id_rsa"),
-		filepath.Join(home, ".ssh", "nested", "deeper", "key"),
-		filepath.Join(home, ".claude", ".credentials.json"),
-		filepath.Join(home, ".claude.json"),
-		filepath.Join(home, ".codex", "auth.json"),
-		filepath.Join(home, ".netrc"),
-		filepath.Join(home, "work", "project", ".env"),
-		filepath.Join(home, "work", "project", ".env.local"),
-		filepath.Join(home, "work", "certs", "server.pem"),
-		filepath.Join(home, "Library", "Keychains", "login.keychain-db"),
-		filepath.Join(home, ".config", "gh", "hosts.yml"),
-	}
-	for _, p := range denied {
-		if ok, _ := d.Match(p); !ok {
-			t.Errorf("must be denied: %s", p)
-		}
-	}
-
-	allowed := []string{
-		filepath.Join(home, ".claude", "projects", "proj", "s.jsonl"),
-		filepath.Join(home, ".claude", "CLAUDE.md"),
-		filepath.Join(home, ".codex", "sessions", "2026", "r.jsonl"),
-		filepath.Join(home, "work", "project", "src", "db.go"),
-	}
-	for _, p := range allowed {
-		if ok, pat := d.Match(p); ok {
-			t.Errorf("must not be denied: %s (matched %q)", p, pat)
-		}
-	}
 }
 
 // The deny list applies to the resolved path, so a symlink under an allowed root cannot launder a denied target.
@@ -115,66 +73,34 @@ func TestDenyFollowsSymlinksToTheirTarget(t *testing.T) {
 	}
 }
 
-// A root that does not look like the store it claims to be is not that store.
-func TestRequireSubdirRefusesAWrongShapedRoot(t *testing.T) {
-	home := t.TempDir()
-	mustMkdir(t, filepath.Join(home, ".claude"))
-	// No projects/ dir: the root exists but is the wrong shape.
-
-	eff := resolved(t, home)
-	for _, s := range eff.Sources {
-		if s.ID == "claude-code-transcripts" {
-			assert.Equalf(t, "", s.Root, "a root with no projects/ dir must not resolve, got %q", s.Root)
-			assert.Containsf(t, s.RootUnresolvedReason, "projects", "the reason should name the missing subdir, got %q", s.RootUnresolvedReason)
-		}
-	}
-}
-
 // The daemon resolves roots once and then ticks for days. Claude Code creates projects/ on its
 // first run, which is routinely after the shipper started: without a refresh that install reports
 // agent_absent forever, looking healthy while collecting nothing.
-func TestARootThatAppearsAfterStartupIsPickedUp(t *testing.T) {
-	home := t.TempDir()
-	mustMkdir(t, filepath.Join(home, ".claude")) // present, but not yet the right shape
-
-	eff := resolved(t, home)
-	require.Equal(t, "", sourceByID(t, eff, "claude-code-transcripts").Root)
-
-	// The agent runs for the first time.
-	mustWrite(t, filepath.Join(home, ".claude", "projects", "-Users-jane-api", "s.jsonl"), "{}\n")
-
-	found := config.RefreshAbsentRoots(eff, env(home, nil))
-	assert.Truef(t, slices.Contains(found, "claude-code-transcripts"), "the newly resolved source must be reported so the tick can announce it, got %v", found)
-	src := sourceByID(t, eff, "claude-code-transcripts")
-	assert.Equalf(t, filepath.Join(home, ".claude"), src.Root, "root should now resolve, got %q (%s)", src.Root, src.RootUnresolvedReason)
-	assert.Equalf(t, "", src.RootUnresolvedReason, "a resolved root must carry no absence reason, got %q", src.RootUnresolvedReason)
-}
-
-// A root already in use keys the fingerprints that decide what has been shipped. Re-picking it
-// could move collection to a different directory mid-run, so a refresh only fills in the gaps.
-func TestRefreshLeavesAnAlreadyResolvedRootAlone(t *testing.T) {
-	home := fakeHome(t)
-	eff := resolved(t, home)
-	before := sourceByID(t, eff, "claude-code-transcripts").Root
-	require.NotEqual(t, "", before, "precondition: the root must resolve from a fake home")
-
-	if found := config.RefreshAbsentRoots(eff, env(home, nil)); slices.Contains(found, "claude-code-transcripts") {
-		t.Errorf("a source that already resolved must not be reported as newly found, got %v", found)
-	}
-	assert.Equal(t, sourceByID(t, eff, "claude-code-transcripts").Root, before)
-}
-
-// An agent that is still absent keeps an accurate reason, and the refresh reports nothing: doctor
-// and the heartbeat read this string, so a stale one is what made the outage unreadable.
-func TestRefreshKeepsTheReasonCurrentWhileTheAgentStaysAbsent(t *testing.T) {
+func TestRootResolutionLifecycle(t *testing.T) {
 	home := t.TempDir()
 	mustMkdir(t, filepath.Join(home, ".claude"))
-
 	eff := resolved(t, home)
-	assert.Len(t, config.RefreshAbsentRoots(eff, env(home, nil)), 0)
 	src := sourceByID(t, eff, "claude-code-transcripts")
-	assert.Equalf(t, "", src.Root, "the root must stay unresolved, got %q", src.Root)
-	assert.Containsf(t, src.RootUnresolvedReason, "projects", "the reason should still name the missing subdir, got %q", src.RootUnresolvedReason)
+	assert.Empty(t, src.Root)
+	assert.Contains(t, src.RootUnresolvedReason, "projects")
+
+	require.Empty(t, config.RefreshAbsentRoots(eff, env(home, nil)))
+	assert.Empty(t, src.Root)
+	assert.Contains(t, src.RootUnresolvedReason, "projects")
+
+	mustWrite(t, filepath.Join(home, ".claude", "projects", "-Users-jane-api", "s.jsonl"), "{}\n")
+	assert.Contains(t, config.RefreshAbsentRoots(eff, env(home, nil)), "claude-code-transcripts")
+	assert.Equal(t, filepath.Join(home, ".claude"), src.Root)
+	assert.Empty(t, src.RootUnresolvedReason)
+
+	// Once selected, a root keeps the same fingerprint identity across later refreshes.
+	for _, current := range []*config.Effective{eff, resolved(t, home)} {
+		src := sourceByID(t, current, "claude-code-transcripts")
+		before := src.Root
+		require.NotEmpty(t, before)
+		assert.NotContains(t, config.RefreshAbsentRoots(current, env(home, nil)), "claude-code-transcripts")
+		assert.Equal(t, before, src.Root)
+	}
 }
 
 // Expansion is an attack surface: the deny list must act on the expanded value, never the template.
@@ -192,9 +118,8 @@ func TestEnvVarRootIsExpandedThenDenyChecked(t *testing.T) {
 func TestUnsetEnvVarFallsThroughToTheNextRoot(t *testing.T) {
 	home := fakeHome(t)
 	eff := resolved(t, home)
-	for _, s := range eff.Sources {
-		assert.Truef(t, s.ID != "claude-code-transcripts" || s.Root != "", "with $CLAUDE_CONFIG_DIR unset, ~/.claude must still resolve: %s", s.RootUnresolvedReason)
-	}
+	src := sourceByID(t, eff, "claude-code-transcripts")
+	assert.NotEmpty(t, src.Root, src.RootUnresolvedReason)
 }
 
 func TestRelativeExpansionIsRefused(t *testing.T) {

@@ -86,11 +86,13 @@ func resolved(t *testing.T, home string, layers ...config.LayeredDocument) *conf
 	return eff
 }
 
-func enrichersOf(eff *config.Effective, id string) map[string]bool {
-	for _, s := range eff.Sources {
-		if s.ID == id {
-			return s.Enrichers
+func sourceByID(t *testing.T, eff *config.Effective, id string) *config.ResolvedSource {
+	t.Helper()
+	for i := range eff.Sources {
+		if eff.Sources[i].ID == id {
+			return &eff.Sources[i]
 		}
 	}
+	t.Fatalf("source %s missing from the resolved set", id)
 	return nil
 }

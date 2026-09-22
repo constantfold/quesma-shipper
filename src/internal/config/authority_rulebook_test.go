@@ -66,17 +66,6 @@ func mustReject(t *testing.T, err error, context string) {
 	require.ErrorAsf(t, err, &rej, "%s: failed with %v, want a *RejectionError", context, err)
 }
 
-func sourceByID(t *testing.T, eff *config.Effective, id string) *config.ResolvedSource {
-	t.Helper()
-	for i := range eff.Sources {
-		if eff.Sources[i].ID == id {
-			return &eff.Sources[i]
-		}
-	}
-	t.Fatalf("source %s missing from the resolved set", id)
-	return nil
-}
-
 func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 	return map[string]rulebookProbe{
 		"issued_at / org": {custom: func(t *testing.T) {

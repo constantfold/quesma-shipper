@@ -9,31 +9,38 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 )
 
-func TestALocalLayerCanDisableAndEnableARegisteredEnricher(t *testing.T) {
-	home := fakeHome(t)
-
-	off, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerUser, `
+const joinOff = `
 sources:
   - id: cursor-transcripts
     enrichers:
       cursor-transcript-join: false
-`),
-	))
-	require.NoError(t, err)
-	assert.True(t, !enrichersOf(off, "cursor-transcripts")["cursor-transcript-join"], "a local disable did not take effect")
+`
 
-	// And back on: enabling has to work from a local layer or the switch is one-way.
-	on, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerUser, `
+const joinOn = `
 sources:
   - id: cursor-transcripts
     enrichers:
       cursor-transcript-join: true
-`),
-	))
-	require.NoError(t, err)
-	assert.True(t, enrichersOf(on, "cursor-transcripts")["cursor-transcript-join"], "a local enable did not take effect")
+`
+
+func TestEnricherEnablementAuthority(t *testing.T) {
+	home := fakeHome(t)
+	localOff := layerDoc(t, config.LayerUser, joinOff)
+	for _, tc := range []struct {
+		name   string
+		layers []config.LayeredDocument
+		want   bool
+	}{
+		{"local disable", []config.LayeredDocument{localOff}, false},
+		{"local enable", []config.LayeredDocument{layerDoc(t, config.LayerUser, joinOn)}, true},
+		{"remote disable", []config.LayeredDocument{layerDoc(t, config.LayerRemote, joinOff)}, false},
+		{"remote cannot undo local disable", []config.LayeredDocument{localOff, layerDoc(t, config.LayerRemote, joinOn)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eff := resolved(t, home, tc.layers...)
+			assert.Equal(t, tc.want, sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"])
+		})
+	}
 }
 
 // Toggling must not edit the compiled catalog. The two resolutions deliberately SHARE one
@@ -43,13 +50,8 @@ func TestTogglingAnEnricherDoesNotMutateTheCompiledCatalog(t *testing.T) {
 	shared := loadCatalog(t)
 
 	first := config.Input{
-		Catalog: shared,
-		Layers: []config.LayeredDocument{{Layer: config.LayerUser, Doc: doc(t, `
-sources:
-  - id: cursor-transcripts
-    enrichers:
-      cursor-transcript-join: false
-`)}},
+		Catalog:  shared,
+		Layers:   []config.LayeredDocument{{Layer: config.LayerUser, Doc: doc(t, joinOff)}},
 		Env:      env(home, nil),
 		StateDir: t.TempDir(),
 	}
@@ -60,41 +62,7 @@ sources:
 	// The same catalog, no override: if the first resolution wrote through, this still sees the enricher disabled.
 	clean, err := config.Resolve(config.Input{Catalog: shared, Env: env(home, nil), StateDir: t.TempDir()})
 	require.NoError(t, err)
-	assert.True(t, enrichersOf(clean, "cursor-transcripts")["cursor-transcript-join"], "a previous resolution's override leaked into the compiled catalog")
-}
-
-func TestARemoteLayerMayDisableButNotEnableAnEnricher(t *testing.T) {
-	home := fakeHome(t)
-
-	// Disabling from the served document is fine: it only ever narrows.
-	off, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerRemote, `
-sources:
-  - id: cursor-transcripts
-    enrichers:
-      cursor-transcript-join: false
-`),
-	))
-	require.NoError(t, err)
-	assert.True(t, !enrichersOf(off, "cursor-transcripts")["cursor-transcript-join"], "a remote layer could not disable an enricher, but narrowing is always allowed")
-
-	// Enabling from a non-local layer would widen what gets read: an enricher reads a database the raw pipeline never touches.
-	on, err := config.Resolve(baseInput(t, home,
-		layerDoc(t, config.LayerUser, `
-sources:
-  - id: cursor-transcripts
-    enrichers:
-      cursor-transcript-join: false
-`),
-		layerDoc(t, config.LayerRemote, `
-sources:
-  - id: cursor-transcripts
-    enrichers:
-      cursor-transcript-join: true
-`),
-	))
-	require.NoError(t, err)
-	assert.True(t, !enrichersOf(on, "cursor-transcripts")["cursor-transcript-join"], "a remote layer enabled an enricher the machine owner had switched off")
+	assert.True(t, sourceByID(t, clean, "cursor-transcripts").Enrichers["cursor-transcript-join"], "a previous resolution's override leaked into the compiled catalog")
 }
 
 func TestALayerCannotAttachAnEnricherTheCatalogDidNot(t *testing.T) {

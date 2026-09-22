@@ -152,6 +152,14 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 		{"~/proj/bundle.p12", "**/*.p12"},
 		{"~/proj/private.key", "**/*.key"},
 		{"~/proj/keyfile", ""},
+		// Credential shapes and collectable files under a developer workspace.
+		{"~/work/project/.env", "**/.env"},
+		{"~/work/project/.env.local", "**/.env.*"},
+		{"~/work/certs/server.pem", "**/*.pem"},
+		{"~/.claude/projects/proj/s.jsonl", ""},
+		{"~/.claude/CLAUDE.md", ""},
+		{"~/.codex/sessions/2026/r.jsonl", ""},
+		{"~/work/project/src/db.go", ""},
 		// Ordinary files that must stay collectable.
 		{"~/.claude/projects/p/session.jsonl", ""},
 		{"/var/log/app.log", ""},
@@ -170,22 +178,27 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 			row{"$APPDATA/GitHub CLI/hosts.yml", "$APPDATA/GitHub CLI/**"})
 	}
 
-	exp := func(s string) string {
-		if s == "" {
-			return ""
+	for _, home := range []string{testHome, t.TempDir()} {
+		exp := func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return normalize(os.ExpandEnv(strings.Replace(s, "~", home, 1)))
 		}
-		return normalize(os.ExpandEnv(strings.Replace(s, "~", testHome, 1)))
-	}
-	d := New(testHome)
-	reported := map[string]bool{}
-	for _, row := range corpus {
-		path, want := exp(row.path), exp(row.want)
-		reported[want] = true
-		ok, pat := d.matchCandidate(path)
-		assert.Truef(t, ok == (want != "") && pat == want, "%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
-	}
-	// A new compiled pattern needs a path that reports against it, or the corpus stops covering the list.
-	for _, pat := range d.Patterns() {
-		assert.Truef(t, reported[pat], "no corpus path is reported against %q: add one", pat)
+		d := New(home)
+		reported := map[string]bool{}
+		for _, row := range corpus {
+			path, want := exp(row.path), exp(row.want)
+			reported[want] = true
+			ok, pat := d.matchCandidate(path)
+			assert.Truef(t, ok == (want != "") && pat == want, "%s: reported (%v, %q), want (%v, %q)", path, ok, pat, want != "", want)
+			ok, pat = d.Match(path)
+			assert.Equal(t, want != "", ok, path)
+			assert.Equal(t, want, pat, path)
+		}
+		// A new compiled pattern needs a path that reports against it, or the corpus stops covering the list.
+		for _, pat := range d.Patterns() {
+			assert.Truef(t, reported[pat], "no corpus path is reported against %q: add one", pat)
+		}
 	}
 }
