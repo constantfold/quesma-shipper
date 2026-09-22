@@ -8,7 +8,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
 )
 
-func (p *Accounts) collectCursor(ctx context.Context, req Request) ([]accountObservation, bool) {
+func (p *accounts) collectCursor(ctx context.Context, req Request) ([]accountObservation, bool) {
 	var out []accountObservation
 	path := filepath.Join(req.Source.Root, "state.vscdb")
 	if !accountPathExists(path) {

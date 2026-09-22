@@ -47,12 +47,12 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"dev@example.org","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`))
 	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"workspace-1","id_token":"x.`+claims+`.x"}}`)
 	calls := 0
-	p := Accounts{client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
+	p := accounts{client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
 		assert.True(t, r.Header.Get("Authorization") == "Bearer fixture-access" && r.Header.Get("ChatGPT-Account-Id") == "workspace-1", "wrong authentication")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{ "unknown":{"input_tokens":9007199254740993,"utilization":123.456,"optional":null,"accessToken":"fixture-secret"}, "windows":[] }`)), Header: http.Header{}}, nil
 	})}}
-	first, err := p.Discover(req)
+	first, err := p.discover(req)
 	require.NoError(t, err)
 	require.Truef(t, len(first.Candidates) == 1 && calls == 0, "first: %+v calls %d", first, calls)
 	c := first.Candidates[0]
@@ -64,10 +64,10 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	for _, field := range []string{`"input_tokens":9007199254740993`, `"utilization":123.456`, `"optional":null`, `"windows":[]`, `"chatgpt_plan_type":"pro"`} {
 		require.Containsf(t, string(raw), field, "lost %s: %s", field, raw)
 	}
-	again, err := p.Discover(req)
+	again, err := p.discover(req)
 	require.Truef(t, err == nil && len(again.Candidates) == 1 && calls == 1 && again.Candidates[0].Path == c.Path, "same bucket: %+v %v calls %d", again, err, calls)
 	req.Now = func() time.Time { return time.Date(2026, 9, 16, 14, 31, 0, 0, time.UTC) }
-	next, err := p.Discover(req)
+	next, err := p.discover(req)
 	require.Truef(t, err == nil && len(next.Candidates) == 1 && calls == 1 && next.Candidates[0].Path != c.Path, "new bucket: %+v %v calls %d", next, err, calls)
 	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
 		t.Fatal("account collection wrote local state")
@@ -77,13 +77,13 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 func TestAccountDiscoveryDoesNotFetchOrWrite(t *testing.T) {
 	req := accountFixture(t)
 	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture"}}`)
-	p := Accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
+	p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
 		t.Fatal("discovery fetched account data")
 		return nil, nil
 	})}}
 	for _, capture := range []bool{false, true} {
 		req.Capture = capture
-		d, err := p.Discover(req)
+		d, err := p.discover(req)
 		require.Truef(t, err == nil && len(d.Candidates) == 1 == capture, "capture=%v discovery: %+v %v", capture, d, err)
 	}
 	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
@@ -104,7 +104,7 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 		{"oversized", 200, strings.Repeat("x", accountResponseLimit+1), "response_too_large"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := Accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
+			p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: http.Header{}}, nil
 			})}}
 			request, err := http.NewRequest("GET", "https://example.org", nil)
@@ -118,7 +118,7 @@ func TestAccountHTTPFailuresAreBoundedAndDoNotLeak(t *testing.T) {
 	defer target.Close()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer origin.Close()
-	p := Accounts{}
+	p := accounts{}
 	request, err := http.NewRequest("GET", origin.URL, nil)
 	require.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer fixture-secret")
@@ -136,12 +136,12 @@ func TestClaudeUsesActiveCredentialsAndPreservesLocalAccount(t *testing.T) {
 	accountFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"organizationType":"max","future":42},"unrelated":"not collected"}`)
 	accountFile(t, filepath.Join(home, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"correct","scopes":["user:profile"]}}`)
 	calls := 0
-	p := Accounts{keychain: func(context.Context, string) ([]byte, error) { return nil, errors.New("locked") }, client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
+	p := accounts{keychain: func(context.Context, string) ([]byte, error) { return nil, errors.New("locked") }, client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
 		assert.True(t, r.Header.Get("Authorization") == "Bearer correct" && r.Header.Get("anthropic-beta") != "", "wrong Claude credentials")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"five_hour":null,"limits":[{"kind":"future","percent":111}]}`)), Header: http.Header{}}, nil
 	})}}
-	d, err := p.Discover(req)
+	d, err := p.discover(req)
 	require.NoError(t, err)
 	payload, err := d.Candidates[0].Load(req.Context)
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestAccountBucketUsesCollectionInterval(t *testing.T) {
 			req := accountFixture(t)
 			req.Interval = interval
 			accountFile(t, filepath.Join(req.Source.Root, "auth.json"), `{}`)
-			d, err := (&Accounts{}).Discover(req)
+			d, err := (&accounts{}).discover(req)
 			if interval <= 0 {
 				require.Error(t, err, "accepted nonpositive interval")
 				return
@@ -194,7 +194,7 @@ func TestCandidateLoadLimitsAndCancellation(t *testing.T) {
 	req.Source.MaxFileBytes = 1
 	path := filepath.Join(req.Source.Root, "auth.json")
 	accountFile(t, path, `{}`)
-	d, err := (&Accounts{}).Discover(req)
+	d, err := (&accounts{}).discover(req)
 	require.NoError(t, err)
 	for _, load := range []func(context.Context) (Payload, error){fileLoader(path, 1), d.Candidates[0].Load} {
 		if _, err := load(context.Background()); !errors.Is(err, platform.ErrTooLarge) {

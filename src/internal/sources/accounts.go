@@ -13,7 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-type Accounts struct {
+type accounts struct {
 	client   *http.Client
 	keychain func(context.Context, string) ([]byte, error)
 }
@@ -26,7 +26,7 @@ type accountObservation struct {
 	Body       json.RawMessage `json:"body,omitempty"`
 }
 
-func (p *Accounts) Discover(req Request) (Discovery, error) {
+func (p *accounts) discover(req Request) (Discovery, error) {
 	d := Discovery{Health: RootPresentNoMatch, Sniff: SniffOK}
 	if req.Source.Root == "" {
 		d.Health = AgentAbsent
@@ -53,7 +53,7 @@ func (p *Accounts) Discover(req Request) (Discovery, error) {
 	return d, nil
 }
 
-func (p *Accounts) load(ctx context.Context, req Request, bucket time.Time) (Payload, error) {
+func (p *accounts) load(ctx context.Context, req Request, bucket time.Time) (Payload, error) {
 	if err := ctx.Err(); err != nil {
 		return Payload{}, err
 	}
@@ -87,7 +87,7 @@ func (p *Accounts) load(ctx context.Context, req Request, bucket time.Time) (Pay
 	return payload, nil
 }
 
-func (p *Accounts) collect(ctx context.Context, req Request) ([]accountObservation, bool) {
+func (p *accounts) collect(ctx context.Context, req Request) ([]accountObservation, bool) {
 	switch req.Source.ID {
 	case "claude-account":
 		return p.collectClaude(ctx, req)

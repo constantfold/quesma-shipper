@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func (p *Accounts) collectCodex(ctx context.Context, req Request) ([]accountObservation, bool) {
+func (p *accounts) collectCodex(ctx context.Context, req Request) ([]accountObservation, bool) {
 	var out []accountObservation
 	home := req.Source.Root
 	path := filepath.Join(home, "auth.json")

@@ -13,9 +13,9 @@ func Discover(req Request) (Discovery, error) {
 	case "file_glob", "compressed_file":
 		return discoverByGlob(req)
 	case "sidecar":
-		return (&Sidecar{}).Discover(req)
+		return discoverSidecar(req)
 	case "account":
-		return (&Accounts{}).Discover(req)
+		return (&accounts{}).discover(req)
 	default:
 		return Discovery{}, fmt.Errorf("gather: no compiled primitive %q", req.Source.Gather)
 	}

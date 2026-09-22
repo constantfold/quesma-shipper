@@ -267,7 +267,7 @@ func TestHumanCount(t *testing.T) {
 
 func TestAccountInspectionIsNeutral(t *testing.T) {
 	src := config.ResolvedSource{Source: sources.Source{ID: "codex-account", Family: "codex", Gather: "account"}, Root: t.TempDir(), Enabled: true}
-	d, err := (&sources.Accounts{}).Discover(sources.Request{Source: src})
+	d, err := sources.Discover(sources.Request{Source: src})
 	require.NoError(t, err)
 	for _, verbose := range []bool{false, true} {
 		rows, collecting, files := familyRows("Codex", []sourceProbe{{src: src, d: d}}, familyUpload{}, time.Now(), verbose)

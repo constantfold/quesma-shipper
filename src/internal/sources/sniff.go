@@ -64,11 +64,8 @@ func versionFromHead(head []byte) string {
 // versionFrom looks for a producer version under the field names the surveyed stores actually use.
 func versionFrom(rec map[string]json.RawMessage) string {
 	for _, field := range []string{"version", "cli_version"} {
-		if raw, ok := rec[field]; ok {
-			var s string
-			if err := json.Unmarshal(raw, &s); err == nil && s != "" {
-				return s
-			}
+		if value := lookupField(rec, field); value != "" {
+			return value
 		}
 	}
 	// Codex nests it one level down.

@@ -71,23 +71,7 @@ func TestSidecarEmitsMappingWithoutTheToken(t *testing.T) {
 
 	transcripts := source(agentRoot, []string{"projects/**/*.jsonl"})
 	sidecar := sidecarSource()
-	stateDir := t.TempDir()
-
-	d, err := sources.Discover(sources.Request{
-		Source:   sidecar,
-		All:      []config.ResolvedSource{transcripts, sidecar},
-		Deny:     sources.New(home),
-		StateDir: stateDir,
-		Username: "jane",
-	})
-	require.NoError(t, err)
-
-	require.Equalf(t, sources.Collected, d.Health, "health %q reason %q", d.Health, d.Reason)
-	// One inventory object, not one per file.
-	require.Lenf(t, d.Candidates, 1, "expected exactly one inventory candidate, got %d", len(d.Candidates))
-
-	body, err := os.ReadFile(d.Candidates[0].Path)
-	require.NoError(t, err)
+	body := sidecarBody(t, home, transcripts, sidecar)
 	require.NotContainsf(t, string(body), "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the token reached the inventory:\n%s", body)
 	assert.NotContainsf(t, string(body), "jane:", "userinfo survived:\n%s", body)
 
@@ -223,27 +207,25 @@ func sidecarSource() config.ResolvedSource {
 	}
 }
 
-func runSidecar(t *testing.T, home, agentRoot string) sources.ProjectRecord {
+func sidecarBody(t *testing.T, home string, transcripts, sc config.ResolvedSource) []byte {
 	t.Helper()
-
-	transcripts := source(agentRoot, []string{"projects/**/*.jsonl"})
-	sc := sidecarSource()
-
 	d, err := sources.Discover(sources.Request{
-		Source:   sc,
-		All:      []config.ResolvedSource{transcripts, sc},
-		Deny:     sources.New(home),
-		StateDir: t.TempDir(),
-		Username: "jane",
+		Source: sc, All: []config.ResolvedSource{transcripts, sc}, Deny: sources.New(home),
+		StateDir: t.TempDir(), Username: "jane",
 	})
 	require.NoError(t, err)
-	require.Lenf(t, d.Candidates, 1, "expected one inventory, got %d (health %q reason %q)", len(d.Candidates), d.Health, d.Reason)
+	require.Equal(t, sources.Collected, d.Health, d.Reason)
+	require.Len(t, d.Candidates, 1, "one inventory per source")
 	body, err := os.ReadFile(d.Candidates[0].Path)
 	require.NoError(t, err)
-	line := strings.TrimSpace(string(body))
-	require.NotEqual(t, "", line, "inventory is empty")
+	return body
+}
+
+func runSidecar(t *testing.T, home, agentRoot string) sources.ProjectRecord {
+	t.Helper()
+	body := sidecarBody(t, home, source(agentRoot, []string{"projects/**/*.jsonl"}), sidecarSource())
 	var rec sources.ProjectRecord
-	require.NoError(t, json.Unmarshal([]byte(strings.Split(line, "\n")[0]), &rec))
+	require.NoError(t, json.Unmarshal(body, &rec))
 	return rec
 }
 
@@ -263,17 +245,7 @@ func TestSidecarEmitsNoRecordWithoutAProjectDirSegment(t *testing.T) {
 	sc := sidecarSource()
 	sc.CWDProbe.From = []string{"codex-rollouts"}
 
-	d, err := sources.Discover(sources.Request{
-		Source:   sc,
-		All:      []config.ResolvedSource{rollouts, sc},
-		Deny:     sources.New(home),
-		StateDir: t.TempDir(),
-		Username: "jane",
-	})
-	require.NoError(t, err)
-
-	body, err := os.ReadFile(d.Candidates[0].Path)
-	require.NoError(t, err)
+	body := sidecarBody(t, home, rollouts, sc)
 	assert.NotContainsf(t, string(body), `"project_dir":"sessions"`, "a date-sharded path produced a bogus join key:\n%s", body)
 	assert.Equalf(t, "", strings.TrimSpace(string(body)), "expected no records for a source with no projects/ segment:\n%s", body)
 }

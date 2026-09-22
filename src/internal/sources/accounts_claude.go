@@ -13,7 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-func (p *Accounts) collectClaude(ctx context.Context, req Request) ([]accountObservation, bool) {
+func (p *accounts) collectClaude(ctx context.Context, req Request) ([]accountObservation, bool) {
 	var out []accountObservation
 	env := req.Env
 	if env.Lookup == nil {

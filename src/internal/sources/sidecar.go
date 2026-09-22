@@ -12,11 +12,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// Sidecar emits the directory-to-repository mapping, which is unrecoverable later: agents record
-// cwd but no remote, and a reaped session cannot be traced back. A bounded probe, not a parser: the
-// field names live in config, and a miss means project = none, which is a legal value.
-type Sidecar struct{}
-
 // ProjectRecord is one directory-to-repository mapping.
 type ProjectRecord struct {
 	At   string `json:"at"`
@@ -40,7 +35,8 @@ type ProjectRecord struct {
 	GaveUp string `json:"gave_up,omitempty"`
 }
 
-func (p *Sidecar) Discover(req Request) (Discovery, error) {
+// discoverSidecar records repository mappings before the sessions that reveal them are reaped.
+func discoverSidecar(req Request) (Discovery, error) {
 	src := req.Source
 	d := Discovery{Health: AgentAbsent, Sniff: SniffOK}
 
@@ -92,18 +88,12 @@ func (p *Sidecar) Discover(req Request) (Discovery, error) {
 				SourceID:   sourceID,
 			}
 
-			cwd, ok := probeCWD(c.Path, probe)
-			if !ok {
+			if cwd, ok := probeCWD(c.Path, probe); ok {
+				rec.CWD = formats.ApplyUserPlaceholder(cwd, req.Username)
+				rec.Remote, rec.Project, rec.GaveUp = gitRemoteFor(cwd, src.GitRead)
+			} else {
 				rec.GaveUp = "no cwd field found in the head of the file"
-				records = append(records, rec)
-				continue
 			}
-			rec.CWD = formats.ApplyUserPlaceholder(cwd, req.Username)
-
-			remote, project, gaveUp := gitRemoteFor(cwd, src.GitRead)
-			rec.Remote = remote
-			rec.Project = project
-			rec.GaveUp = gaveUp
 			records = append(records, rec)
 		}
 	}
@@ -159,7 +149,7 @@ func probeCWD(path string, probe *CWDProbe) (string, bool) {
 			continue
 		}
 		for _, field := range probe.Fields {
-			if v, ok := lookupField(rec, field); ok && v != "" {
+			if v := lookupField(rec, field); v != "" {
 				return v, true
 			}
 		}
@@ -168,28 +158,22 @@ func probeCWD(path string, probe *CWDProbe) (string, bool) {
 }
 
 // lookupField resolves a dotted field name, so a config can name payload.cwd as easily as cwd.
-func lookupField(rec map[string]json.RawMessage, field string) (string, bool) {
-	parts := strings.Split(field, ".")
-	current := rec
-	for i, part := range parts {
-		raw, ok := current[part]
-		if !ok {
-			return "", false
-		}
-		if i == len(parts)-1 {
-			var s string
-			if err := json.Unmarshal(raw, &s); err != nil {
-				return "", false
-			}
-			return s, true
-		}
-		var nested map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &nested); err != nil {
-			return "", false
-		}
-		current = nested
+func lookupField(rec map[string]json.RawMessage, field string) string {
+	key, rest, nested := strings.Cut(field, ".")
+	raw := rec[key]
+	if len(raw) == 0 {
+		return ""
 	}
-	return "", false
+	if nested {
+		var next map[string]json.RawMessage
+		if json.Unmarshal(raw, &next) != nil {
+			return ""
+		}
+		return lookupField(next, rest)
+	}
+	var value string
+	_ = json.Unmarshal(raw, &value)
+	return value
 }
 
 // encodeJSONL renders records one JSON object per line, the inventory wire shape.

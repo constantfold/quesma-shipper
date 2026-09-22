@@ -19,7 +19,7 @@ type accountEndpoint struct {
 	headers                   map[string]string
 }
 
-func (p *Accounts) observe(ctx context.Context, req Request, token string, endpoint accountEndpoint) accountObservation {
+func (p *accounts) observe(ctx context.Context, req Request, token string, endpoint accountEndpoint) accountObservation {
 	obs := accountObservation{Source: endpoint.source, ObservedAt: req.Now().UTC()}
 	if token == "" {
 		obs.Error = "credentials_unavailable"
@@ -70,7 +70,7 @@ func accountJSON(path string, limit int64) (map[string]json.RawMessage, error) {
 	return doc, err
 }
 
-func (p *Accounts) fetch(obs accountObservation, request *http.Request) accountObservation {
+func (p *accounts) fetch(obs accountObservation, request *http.Request) accountObservation {
 	client := http.Client{Timeout: 10 * time.Second}
 	if p.client != nil {
 		client = *p.client

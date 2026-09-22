@@ -294,7 +294,7 @@ func TestUnreadableSubtreeDoesNotAbortTheWalk(t *testing.T) {
 	assert.Lenf(t, d.Candidates, 1, "the readable file should still be collected, got %d candidates", len(d.Candidates))
 }
 
-func TestRegistryHasNoReservedPrimitives(t *testing.T) {
+func TestOnlyCompiledGatherPrimitives(t *testing.T) {
 	for _, reserved := range []string{"acp", "cloud_pull", "sqlite_rows"} {
 		if _, err := sources.Discover(sources.Request{Source: sources.Resolved{Source: sources.Source{Gather: reserved}}}); err == nil {
 			t.Errorf("%q must not be a compiled primitive", reserved)
