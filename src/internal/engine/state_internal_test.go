@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,9 +51,7 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 
 			s, err := open(dir, install, maxBytes)
 			require.NoErrorf(t, err, "open must succeed over a document it cannot load: %v", err)
-			if s.Len() != 0 || !s.Corrupt() {
-				t.Fatalf("len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
-			}
+			require.Truef(t, s.Len() == 0 && s.Corrupt(), "len=%d corrupt=%v, want an empty discarded store", s.Len(), s.Corrupt())
 			k := Key{SourceID: "s", NativePath: "/x/b.jsonl"}
 			fp := Fingerprint{SourceSize: 1, SourceMTime: time.Unix(1, 0).UTC(), SourceHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			require.NoError(t, s.CommitAll(map[Key]Fingerprint{k: fp}))
@@ -61,12 +60,9 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 			s2, err := Open(dir, install)
 			require.NoErrorf(t, err, "reopen: %v", err)
 			defer s2.Close()
-			if s2.Corrupt() || s2.Len() != 1 {
-				t.Fatalf("after the replace: corrupt=%v len=%d, want a clean store of one", s2.Corrupt(), s2.Len())
-			}
-			if got, ok := s2.Get(k); !ok || got != fp {
-				t.Errorf("the committed entry did not survive the replace: %+v ok=%v", got, ok)
-			}
+			require.Truef(t, !s2.Corrupt() && s2.Len() == 1, "after the replace: corrupt=%v len=%d, want a clean store of one", s2.Corrupt(), s2.Len())
+			got, ok := s2.Get(k)
+			assert.Truef(t, ok && got == fp, "the committed entry did not survive the replace: %+v ok=%v", got, ok)
 		})
 	}
 }

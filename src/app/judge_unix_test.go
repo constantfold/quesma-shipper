@@ -32,9 +32,8 @@ func TestUnwrittenFailureSurvivesTelemetryAndRecovery(t *testing.T) {
 	rec := r.failureRecord()
 	require.Truef(t, rec.Latest() != nil && strings.Contains(rec.Latest().Message, "no space left"), "the unwritable failure did not survive in memory: %+v", rec)
 	assert.Equalf(t, 1, rec.ConsecutiveFailures, "consecutive_failures = %d, want 1", rec.ConsecutiveFailures)
-	if disk := readFailureRecord(dir); disk.Latest() != nil {
-		t.Fatalf("the read-only state dir somehow took a write: %+v", disk)
-	}
+	disk := readFailureRecord(dir)
+	require.Nil(t, disk.Latest(), "the read-only state dir somehow took a write")
 
 	for _, recovered := range []bool{false, true} {
 		wantCount := 1
@@ -49,7 +48,6 @@ func TestUnwrittenFailureSurvivesTelemetryAndRecovery(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body, &event))
 		require.Truef(t, event.Consecutive == wantCount && len(event.Faults) == 1 && strings.Contains(event.Faults[0].Message, "no space left"), "recovered=%v: telemetry lost the failure or its recovery: %+v", recovered, event)
 	}
-	if disk := readFailureRecord(dir); disk.ConsecutiveFailures != 0 || disk.Latest() == nil {
-		t.Fatalf("recovery did not persist the retained failure: %+v", disk)
-	}
+	disk = readFailureRecord(dir)
+	assert.Truef(t, disk.ConsecutiveFailures == 0 && disk.Latest() != nil, "recovery did not persist the retained failure: %+v", disk)
 }

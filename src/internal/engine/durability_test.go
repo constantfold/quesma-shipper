@@ -63,9 +63,8 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 
 	// The five past the last full batch must be durable when the run returns, too.
 	f.reopen()
-	if rep := f.run(); rep.Shipped != 0 || rep.Unchanged != files {
-		t.Errorf("after a reload the run should ship nothing and see %d unchanged, got %+v", files, rep)
-	}
+	rep := f.run()
+	assert.Truef(t, rep.Shipped == 0 && rep.Unchanged == files, "after a reload the run should ship nothing and see %d unchanged, got %+v", files, rep)
 }
 
 // The flag has to survive Run's own report construction: it was first set before the line that
@@ -73,9 +72,7 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 func TestARunReportsThatItDiscardedTheStore(t *testing.T) {
 	f := newFixture(t)
 	f.writeTranscript("p/a.jsonl", line1)
-	if rep := f.run(); rep.StoreCorrupt {
-		t.Fatalf("a healthy store reported as corrupt: %+v", rep)
-	}
+	require.False(t, f.run().StoreCorrupt, "a healthy store reported as corrupt")
 
 	// A flipped hex digit: still valid JSON, still schema-clean, only the checksum catches it.
 	path := filepath.Join(f.stateDir, engine.FileName)
@@ -85,7 +82,5 @@ func TestARunReportsThatItDiscardedTheStore(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(tampered[:len(tampered)-1]), 0o600))
 
 	f.reopen()
-	if rep := f.run(); !rep.StoreCorrupt {
-		t.Errorf("the run did not report discarding the store: %+v", rep)
-	}
+	assert.True(t, f.run().StoreCorrupt, "the run did not report discarding the store")
 }

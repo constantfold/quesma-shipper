@@ -73,9 +73,7 @@ func TestToUploadTicketFeedsValidation(t *testing.T) {
 
 	ticket := toUploadTicket(issued)
 	require.NoError(t, upload.ValidateTicket(upload.UploadTargetList{target}, prepared, ticket))
-	if _, ok := ticket.RequiredHeaders["x-amz-meta-source-id"]; ok {
-		t.Error("an unset optional header reached the map")
-	}
+	assert.NotContains(t, ticket.RequiredHeaders, "x-amz-meta-source-id", "an unset optional header reached the map")
 	assert.Equal(t, "class=trajectory", ticket.RequiredHeaders["x-amz-tagging"])
 	assert.Truef(t, ticket.ContentLengthSigned && ticket.ExpiresAt == issued.ExpiresAt, "bridge dropped a field: %+v", ticket)
 }

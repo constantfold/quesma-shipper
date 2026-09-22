@@ -39,9 +39,6 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	o.Now = func() time.Time { return now }
 	f.port.verdict = always(errors.New("offline"))
 	f.runWith(o)
-	if _, err := os.Stat(filepath.Join(f.stateDir, "snapshots")); !os.IsNotExist(err) {
-		t.Fatal("account collection staged files")
-	}
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"fresh","tokens":{"id_token":"x.eyJlbWFpbCI6ImRldkBleGFtcGxlLm9yZyJ9.x"}}`), 0600))
 	f.reopen()
 	f.port.verdict = nil

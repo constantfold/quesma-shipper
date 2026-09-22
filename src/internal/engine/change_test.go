@@ -26,9 +26,7 @@ func TestAppendTwoLinesOverwritesTheSameKey(t *testing.T) {
 	rep := f.run()
 
 	require.Equalf(t, 1, rep.Shipped, "the grown file should re-ship: %+v", rep)
-	if got := f.port.keys(); len(got) != 1 || got[0] != keysAfterFirst[0] {
-		t.Errorf("keys changed: %v, want %v", got, keysAfterFirst)
-	}
+	assert.Equal(t, keysAfterFirst, f.port.keys(), "the key changed")
 	obj, _, payload := f.openObject(t, keysAfterFirst[0])
 	assert.Equalf(t, 2, obj.Versions, "expected version 2, got %d — history is noncurrent versions", obj.Versions)
 
