@@ -100,9 +100,8 @@ func TestTornLastLineDoesNotBreakTheRead(t *testing.T) {
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	require.NoError(t, err)
-	if _, err := f.WriteString(`{"decision":"shipped","fi`); err != nil {
-		t.Fatal(err)
-	}
+	_, writeStringErr := f.WriteString(`{"decision":"shipped","fi`)
+	require.NoError(t, writeStringErr)
 	f.Close()
 
 	entries, err := auditlog.Tail(path, 0)

@@ -58,9 +58,8 @@ func TestVendPathShipsAuthorizedObjectsToTheStore(t *testing.T) {
 	require.Lenf(t, beats, 1, "the run wrote %d heartbeats, want exactly one", len(beats))
 	assert.Equal(t, "heartbeat", beats[0].Headers["x-amz-meta-kind"])
 	assert.Equal(t, "class=context", beats[0].Headers["x-amz-tagging"])
-	if _, _, err := seal.Open(beats[0].Body, v.Identity); err != nil {
-		t.Errorf("the heartbeat is not a sealed object: %v", err)
-	}
+	_, _, openErr := seal.Open(beats[0].Body, v.Identity)
+	assert.NoErrorf(t, openErr, "the heartbeat is not a sealed object: %v", openErr)
 }
 
 // Progress lives in the local fingerprint document and nowhere else: a second run with nothing
@@ -184,9 +183,8 @@ func TestAFailedRunsFailureRidesTheNextHeartbeat(t *testing.T) {
 	// Every ticket names an origin no upload_targets entry admits, so the run ships nothing.
 	elsewhere := startFakeStore(t)
 	v.plane.store = elsewhere
-	if _, err := runOneShotExpectingFailure(t); err == nil {
-		t.Fatal("the staged sync was supposed to fail")
-	}
+	_, syncErr := runOneShotExpectingFailure(t)
+	require.Error(t, syncErr, "the staged sync was supposed to fail")
 	require.Len(t, v.store.heartbeats(), 0, "a run whose uploads all failed managed to ship a heartbeat")
 
 	// Recovered: the tickets are good again, and this run's heartbeat carries the earlier failure.

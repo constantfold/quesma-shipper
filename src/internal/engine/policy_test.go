@@ -60,9 +60,8 @@ func TestRunRefusesWithoutRecipients(t *testing.T) {
 	f := newFixture(t)
 	o := f.opts()
 	o.Recipients = nil
-	if _, err := engine.Run(context.Background(), f.store, o); err == nil {
-		t.Fatal("a run with no recipients must be refused: encryption is not optional")
-	}
+	_, runErr := engine.Run(context.Background(), f.store, o)
+	require.Error(t, runErr, "a run with no recipients must be refused: encryption is not optional")
 }
 
 // Expiry is recorded per object because the archive outlives the collection run.

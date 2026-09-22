@@ -159,9 +159,8 @@ func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
 			t.Errorf("%s was accepted as client-declarable metadata", name)
 		}
 	}
-	if _, _, err := uploadMetadata(map[string]string{"native-path": "/home/dev/x.jsonl"}); err == nil {
-		t.Error("a metadata name outside the closed set was accepted")
-	}
+	_, _, uploadMetadataErr := uploadMetadata(map[string]string{"native-path": "/home/dev/x.jsonl"})
+	assert.Error(t, uploadMetadataErr, "a metadata name outside the closed set was accepted")
 }
 
 // agent-version is read out of a transcript, so out of the server's grammar it would fail the

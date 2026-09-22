@@ -221,9 +221,8 @@ func appendLine(t *testing.T, path, line string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
-	if _, err := f.WriteString(line + "\n"); err != nil {
-		t.Fatal(err)
-	}
+	_, writeStringErr := f.WriteString(line + "\n")
+	require.NoError(t, writeStringErr)
 	require.NoError(t, f.Close())
 	// Later than the fixture's on purpose: keeping the old timestamp would test the content hash
 	// alone, and the mtime pre-filter is part of what runs.

@@ -175,9 +175,8 @@ func writeCursorStore(t *testing.T, w *world, turns []cursorTurn) {
 		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
 		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
+		_, execErr := db.Exec(stmt)
+		require.NoError(t, execErr)
 	}
 
 	var headers []string

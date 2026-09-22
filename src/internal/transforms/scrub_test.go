@@ -332,9 +332,8 @@ func TestDensityAndRuleHitLedger(t *testing.T) {
 func TestUnknownPackIsAnError(t *testing.T) {
 	cfg := transforms.DefaultConfig()
 	cfg.RulePacks = append(cfg.RulePacks, "acme-invented")
-	if _, err := transforms.New(cfg); err == nil {
-		t.Fatal("an unknown rule pack must be refused at compile time")
-	}
+	_, newErr := transforms.New(cfg)
+	require.Error(t, newErr, "an unknown rule pack must be refused at compile time")
 }
 
 // buildRecordWithValueAt plants a value at a dotted path ("[]" meaning an array element),
@@ -396,17 +395,15 @@ func TestTheScrubberKeepsItsWorstCase(t *testing.T) {
 	for len(big) < 64<<10 {
 		big = append(big, `{"msg":"the quick brown fox jumps over the lazy dog"}`+"\n"...)
 	}
-	if _, err := s.Scrub(big, transforms.Hint{JSONL: true}); err != nil {
-		t.Fatal(err)
-	}
+	_, scrubErr := s.Scrub(big, transforms.Hint{JSONL: true})
+	require.NoError(t, scrubErr)
 	afterBig, bytesBig := s.Slowest()
 	assert.NotEqual(t, time.Duration(0), afterBig, "scrubbing 64 KB registered no cost at all")
 	assert.Equalf(t, int64(len(big)), bytesBig, "slowest scrub is attributed to %d bytes, want %d", bytesBig, len(big))
 
 	// The small one must not displace it: this is a maximum, not a last-value.
-	if _, err := s.Scrub(small, transforms.Hint{JSONL: true}); err != nil {
-		t.Fatal(err)
-	}
+	_, smallScrubErr := s.Scrub(small, transforms.Hint{JSONL: true})
+	require.NoError(t, smallScrubErr)
 	if d, n := s.Slowest(); d != afterBig || n != bytesBig {
 		t.Errorf("a cheaper scrub overwrote the worst case: %v over %d bytes", d, n)
 	}

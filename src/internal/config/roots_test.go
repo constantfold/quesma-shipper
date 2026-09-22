@@ -125,9 +125,8 @@ func TestUnsetEnvVarFallsThroughToTheNextRoot(t *testing.T) {
 func TestRelativeExpansionIsRefused(t *testing.T) {
 	home := fakeHome(t)
 	e := env(home, map[string]string{"CLAUDE_CONFIG_DIR": "relative/path"})
-	if _, err := e.ExpandRoot("$CLAUDE_CONFIG_DIR"); err == nil {
-		t.Fatal("a root expanding to a relative path must be refused")
-	}
+	_, expandRootErr := e.ExpandRoot("$CLAUDE_CONFIG_DIR")
+	require.Error(t, expandRootErr, "a root expanding to a relative path must be refused")
 }
 
 // A root that does not exist must not resolve: agent_absent has to stay separable from root_present_no_match.

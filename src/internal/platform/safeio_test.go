@@ -122,9 +122,8 @@ func TestOpenTruncatingEmptiesWhatItOpens(t *testing.T) {
 
 	f, err := platform.OpenTruncating(p, 0o600)
 	require.NoError(t, err)
-	if _, err := f.WriteString("this run\n"); err != nil {
-		t.Fatal(err)
-	}
+	_, writeStringErr := f.WriteString("this run\n")
+	require.NoError(t, writeStringErr)
 	require.NoError(t, f.Close())
 
 	got, err := os.ReadFile(p)
@@ -145,7 +144,6 @@ func TestWriteAtomicIsNotWedgedByAStrandedTemp(t *testing.T) {
 	got, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Equalf(t, "fresh", string(got), "content: got %q want %q", got, "fresh")
-	if _, err := os.Stat(stale); err != nil {
-		t.Errorf("the stranded temp should be left alone (no cleanup, by decision): %v", err)
-	}
+	_, statErr := os.Stat(stale)
+	assert.NoErrorf(t, statErr, "the stranded temp should be left alone (no cleanup, by decision): %v", statErr)
 }

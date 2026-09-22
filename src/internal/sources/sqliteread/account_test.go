@@ -41,9 +41,8 @@ func TestCursorCredentialReadIsSeparateFromCollectedRows(t *testing.T) {
 	after, err := os.ReadFile(path)
 	require.True(t, err == nil && bytes.Equal(before, after), "account read changed store", err)
 	missing := filepath.Join(t.TempDir(), "absent.vscdb")
-	if _, _, err := sqliteread.CursorAccount(context.Background(), missing); err == nil {
-		t.Fatal("missing store succeeded")
-	}
+	_, _, cursorAccountErr := sqliteread.CursorAccount(context.Background(), missing)
+	require.Error(t, cursorAccountErr, "missing store succeeded")
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatal("read created database")
 	}

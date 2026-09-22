@@ -57,9 +57,8 @@ func TestBuiltPackageSatisfiesTheUpdater(t *testing.T) {
 	}
 	raw, err := os.ReadFile(pkg)
 	require.NoError(t, err)
-	if _, err := expandAppPackage(raw, t.TempDir(), version); err != nil {
-		t.Fatalf("the updater rejects the built package: %v", err)
-	}
+	_, expandAppPackageErr := expandAppPackage(raw, t.TempDir(), version)
+	require.NoErrorf(t, expandAppPackageErr, "the updater rejects the built package: %v", expandAppPackageErr)
 	if selected := installerChoices(t, pkg); !selected[bundleIdentifier] {
 		t.Fatalf("Installer choice selection = %v; %s must be laid out", selected, bundleIdentifier)
 	}

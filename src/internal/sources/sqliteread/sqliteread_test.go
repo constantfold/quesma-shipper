@@ -31,9 +31,8 @@ func newStore(t *testing.T, rows map[string]string) string {
 		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
 		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
+		_, execErr := db.Exec(stmt)
+		require.NoError(t, execErr)
 	}
 	for k, v := range rows {
 		table := "cursorDiskKV"
@@ -41,9 +40,8 @@ func newStore(t *testing.T, rows map[string]string) string {
 			// Planted in the table the enricher does NOT declare, and again below in the one it does.
 			table = "ItemTable"
 		}
-		if _, err := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v); err != nil {
-			t.Fatal(err)
-		}
+		_, insertErr := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v)
+		require.NoError(t, insertErr)
 	}
 	require.NoError(t, db.Close())
 	return path

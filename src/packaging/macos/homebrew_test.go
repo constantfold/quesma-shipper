@@ -98,9 +98,8 @@ func TestHomebrewProgramCannotRemoveItself(t *testing.T) {
 	if _, err := RemoveProgram(exe); err == nil || !strings.Contains(err.Error(), "brew uninstall") {
 		t.Fatalf("RemoveProgram = %v", err)
 	}
-	if _, err := os.Stat(exe); err != nil {
-		t.Fatal(err)
-	}
+	_, statErr := os.Stat(exe)
+	require.NoError(t, statErr)
 }
 
 func TestHomebrewUninstallOwnership(t *testing.T) {

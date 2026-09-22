@@ -121,9 +121,8 @@ func normalizeTar(t *testing.T, tarred []byte) []byte {
 			hdr.Size = int64(len(body))
 		}
 		require.NoError(t, tw.WriteHeader(hdr))
-		if _, err := tw.Write(body); err != nil {
-			t.Fatal(err)
-		}
+		_, writeErr := tw.Write(body)
+		require.NoError(t, writeErr)
 	}
 	require.NoError(t, tw.Close())
 	return out.Bytes()

@@ -29,12 +29,10 @@ func newStore(t *testing.T, rows []storeRow) string {
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`); err != nil {
-		t.Fatal(err)
-	}
+	_, execErr := db.Exec(`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`)
+	require.NoError(t, execErr)
+	_, itemTableErr := db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`)
+	require.NoError(t, itemTableErr)
 	for _, r := range rows {
 		if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, r.key, r.value); err != nil {
 			t.Fatalf("insert %s: %v", r.key, err)

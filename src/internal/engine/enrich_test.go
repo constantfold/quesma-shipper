@@ -57,9 +57,8 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
 		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
+		_, execErr := db.Exec(stmt)
+		require.NoError(t, execErr)
 	}
 
 	rows := []struct{ table, key, value string }{
@@ -316,9 +315,8 @@ func updateBubble(t *testing.T, dbPath, key, value string) {
 	db, err := sql.Open("sqlite", "file:"+dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	if _, err := db.Exec(`UPDATE cursorDiskKV SET value = ? WHERE key = ?`, value, key); err != nil {
-		t.Fatal(err)
-	}
+	_, execErr := db.Exec(`UPDATE cursorDiskKV SET value = ? WHERE key = ?`, value, key)
+	require.NoError(t, execErr)
 	// Touch the file so a coldness check cannot mistake it for stale.
 	require.NoError(t, os.Chtimes(dbPath, time.Now(), time.Now()))
 }

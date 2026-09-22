@@ -62,9 +62,8 @@ func TestUnknownConfigVersionIsAHardError(t *testing.T) {
 
 // A typo in a security-relevant config file must not be a silent no-op.
 func TestUnknownFieldInADocumentIsRefused(t *testing.T) {
-	if _, err := config.ParseDocument([]byte("max_file_per_run: 8\n")); err == nil {
-		t.Fatal("an unknown config field must be refused, not ignored")
-	}
+	_, parseDocumentErr := config.ParseDocument([]byte("max_file_per_run: 8\n"))
+	require.Error(t, parseDocumentErr, "an unknown config field must be refused, not ignored")
 }
 
 func TestSourceOverrideForUnknownSourceIsRefused(t *testing.T) {

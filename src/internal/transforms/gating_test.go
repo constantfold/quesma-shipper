@@ -44,9 +44,8 @@ func TestNegativeEntropyMinLengthFailsTheBuild(t *testing.T) {
 
 	// Zero stays legal: it clamps to a one-byte floor, which no positive threshold can tell apart.
 	cfg.Entropy.MinLength = 0
-	if _, err := transforms.New(cfg); err != nil {
-		t.Errorf("min_length 0 must still compile, got %v", err)
-	}
+	_, newErr := transforms.New(cfg)
+	assert.NoErrorf(t, newErr, "min_length 0 must still compile, got %v", newErr)
 }
 
 // The token walk visits duplicate members independently instead of collapsing them into a map.

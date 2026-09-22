@@ -85,16 +85,14 @@ func TestEnrollmentRecordRoundTripsAndRefusesLoosePermissions(t *testing.T) {
 	got, err := controlplane.LoadEnrollment(dir)
 	require.NoError(t, err)
 	assert.Truef(t, got.Organization == rec.Organization && got.DeviceKey == rec.DeviceKey, "record did not round-trip: %+v", got)
-	if _, err := got.PrivateKey(); err != nil {
-		t.Errorf("device key did not decode: %v", err)
-	}
+	_, privateKeyErr := got.PrivateKey()
+	assert.NoErrorf(t, privateKeyErr, "device key did not decode: %v", privateKeyErr)
 
 	// It holds a private signing key: a group-readable one is a finding, and the operator has to
 	// know it was exposed rather than have it repaired silently.
 	require.NoError(t, os.Chmod(filepath.Join(dir, controlplane.EnrollmentFile), 0o644))
-	if _, err := controlplane.LoadEnrollment(dir); err == nil {
-		t.Fatal("loaded an enrollment record readable by everyone")
-	}
+	_, loadEnrollmentErr := controlplane.LoadEnrollment(dir)
+	require.Error(t, loadEnrollmentErr, "loaded an enrollment record readable by everyone")
 }
 
 func TestMissingEnrollmentIsNotAnError(t *testing.T) {
@@ -109,9 +107,8 @@ func TestEnrollmentSchemaMismatchIsRefused(t *testing.T) {
 	body := fmt.Sprintf(`{"enrollment_schema":99,"install_id":%q,"organization":"acme",`+
 		`"endpoint":"https://x","device_key":"","enrolled_at":"now"}`, installID)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, controlplane.EnrollmentFile), []byte(body), 0o600))
-	if _, err := controlplane.LoadEnrollment(dir); err == nil {
-		t.Fatal("accepted a record written by a version this client does not speak")
-	}
+	_, loadEnrollmentErr := controlplane.LoadEnrollment(dir)
+	require.Error(t, loadEnrollmentErr, "accepted a record written by a version this client does not speak")
 }
 
 // Every historical schema is a frozen fixture in testdata/ that must load through the migration
@@ -132,9 +129,8 @@ func TestHistoricalEnrollmentSchemasMigrateOnLoad(t *testing.T) {
 			// The identity material must survive verbatim: a migration that loses the
 			// device key silently re-keys the install.
 			assert.Truef(t, e.InstallID == "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061" && e.Organization == "acme" && e.Endpoint == "https://cp.example.com" && e.EnrolledAt != "", "migrated record lost fields: %+v", e)
-			if _, err := e.PrivateKey(); err != nil {
-				t.Errorf("device key did not survive migration: %v", err)
-			}
+			_, privateKeyErr := e.PrivateKey()
+			assert.NoErrorf(t, privateKeyErr, "device key did not survive migration: %v", privateKeyErr)
 
 			// The upgrade is persisted once, at the current schema, still private.
 			persisted, err := os.ReadFile(path)

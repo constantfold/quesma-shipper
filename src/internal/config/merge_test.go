@@ -147,9 +147,8 @@ func TestServedParseToleratesUnknownFieldsAndTheLocalParseDoesNot(t *testing.T) 
 	eff := resolved(t, home, servedLayer(t, config.LayerRemote, body))
 	assert.Equalf(t, "5m", eff.Schedule, "the fields this build does know must still apply: schedule %q", eff.Schedule)
 
-	if _, err := config.ParseDocument([]byte(body)); err == nil {
-		t.Fatal("the strict local parse accepted a field this build does not know")
-	}
+	_, parseDocumentErr := config.ParseDocument([]byte(body))
+	require.Error(t, parseDocumentErr, "the strict local parse accepted a field this build does not know")
 }
 
 // A config push touching only a redaction rule and the run budget must invalidate no fingerprints.

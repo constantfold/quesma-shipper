@@ -120,9 +120,8 @@ func TestStatusBeforeAndAfterLocalDevSetup(t *testing.T) {
 
 	after := run(t, "status")
 	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
-	if _, err := identity.Load(statePath(w)); err != nil {
-		t.Fatal(err)
-	}
+	_, loadErr := identity.Load(statePath(w))
+	require.NoError(t, loadErr)
 }
 
 func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {

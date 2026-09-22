@@ -69,9 +69,8 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "uninstall asks first") || !strings.Contains(out.String(), "Homebrew command") {
 				t.Fatalf("uninstall confirmation: %v, %s", err, &out)
 			}
-			if _, err := os.Stat(marker); err != nil {
-				t.Fatal("state changed before confirmation:", err)
-			}
+			_, statErr := os.Stat(marker)
+			require.NoError(t, statErr, "state changed before confirmation:")
 			cmd = Root(build, &out, &out)
 			cmd.SetArgs(append(args, "--yes"))
 			if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), packaging.BrewUninstall) {
@@ -99,7 +98,6 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cask subprocess: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(installed); err != nil {
-		t.Fatal("Brew payload was removed:", err)
-	}
+	_, payloadErr := os.Stat(installed)
+	require.NoError(t, payloadErr, "Brew payload was removed:")
 }

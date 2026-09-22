@@ -53,12 +53,10 @@ func TestResetLifecycle(t *testing.T) {
 func TestResetReplacesAnUnloadableDocument(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte("not a document\n"), 0o600))
-	if _, err := engine.Reset(dir, installID, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Peek(dir); err != nil {
-		t.Fatalf("the document was not replaced: %v", err)
-	}
+	_, resetErr := engine.Reset(dir, installID, false)
+	require.NoError(t, resetErr)
+	_, peekErr := engine.Peek(dir)
+	require.NoErrorf(t, peekErr, "the document was not replaced: %v", peekErr)
 }
 
 // Re-enrolling replaces identity.json and leaves the old install's document behind. Its entries

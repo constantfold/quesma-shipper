@@ -48,9 +48,8 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	}
 
 	// The replacement document loads, and the next run trusts it: nothing to send.
-	if _, err := engine.Peek(statePath(w)); err != nil {
-		t.Fatalf("the replacement document does not load: %v", err)
-	}
+	_, peekErr := engine.Peek(statePath(w))
+	require.NoErrorf(t, peekErr, "the replacement document does not load: %v", peekErr)
 	out := runOneShot(t)
 	assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource))
 	assert.NotEqual(t, 0, summary(t, out)["unchanged"])

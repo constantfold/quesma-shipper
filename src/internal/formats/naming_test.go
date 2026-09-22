@@ -121,10 +121,9 @@ func TestKeySegmentsAreValidated(t *testing.T) {
 }
 
 func TestMirrorKeyRejectsWrongKeySize(t *testing.T) {
-	if _, err := formats.MirrorKey("default", "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "s",
-		[]byte("too short"), "a.jsonl"); err == nil {
-		t.Fatal("a name_key of the wrong size must be refused")
-	}
+	_, mirrorKeyErr := formats.MirrorKey("default", "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "s",
+		[]byte("too short"), "a.jsonl")
+	require.Error(t, mirrorKeyErr, "a name_key of the wrong size must be refused")
 }
 
 // The heartbeat lives under the same install prefix, so one sweep erases it too.
@@ -136,9 +135,8 @@ func TestStateKeySharesTheInstallPrefix(t *testing.T) {
 	require.NoError(t, err)
 	prefix := "v1/organization=default/install=" + install + "/"
 	assert.Truef(t, strings.HasPrefix(state, prefix) && strings.HasPrefix(mirror, prefix), "state and mirror keys must share the install prefix:\n %s\n %s", state, mirror)
-	if _, err := formats.StateKey("default", install, "nested/name"); err == nil {
-		t.Error("a state object name containing a slash must be refused")
-	}
+	_, stateKeyErr := formats.StateKey("default", install, "nested/name")
+	assert.Error(t, stateKeyErr, "a state object name containing a slash must be refused")
 }
 
 // Nothing about the path may be legible in the key itself.

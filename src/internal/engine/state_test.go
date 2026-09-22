@@ -28,9 +28,8 @@ func seedForeignDoc(t *testing.T, dir string, entries int) {
 	s, err := engine.Open(dir, otherInstall)
 	require.NoError(t, err)
 	defer s.Close()
-	if _, err := s.EnsureSpec("claude-code-transcripts", strings.Repeat("a", 64)); err != nil {
-		t.Fatal(err)
-	}
+	_, ensureSpecErr := s.EnsureSpec("claude-code-transcripts", strings.Repeat("a", 64))
+	require.NoError(t, ensureSpecErr)
 	for i := 0; i < entries; i++ {
 		require.NoError(t, commit(s, key(fmt.Sprintf("/x/%d.jsonl", i)), fingerprint()))
 	}
@@ -135,9 +134,8 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 	s := open(t, dir)
 
 	for _, id := range []string{"claude-code-transcripts", "codex-rollouts"} {
-		if _, err := s.EnsureSpec(id, sha); err != nil {
-			t.Fatal(err)
-		}
+		_, ensureSpecErr := s.EnsureSpec(id, sha)
+		require.NoError(t, ensureSpecErr)
 	}
 	entries := []engine.Key{
 		{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"},

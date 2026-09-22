@@ -36,9 +36,8 @@ func TestTheLogRotatesInsteadOfGrowingForever(t *testing.T) {
 	require.NotEqual(t, int64(0), previous, "nothing rotated; the log grows without bound")
 	assert.Truef(t, current <= 16<<20, "the current log is %d bytes, well past the rotation threshold", current)
 	// Two generations, no more: the disk cost is bounded and the most recent history survives a rotation.
-	if _, err := os.Stat(filepath.Join(dir, auditlog.FileName+".2")); err == nil {
-		t.Error("a third generation exists; two is the whole design")
-	}
+	_, statErr := os.Stat(filepath.Join(dir, auditlog.FileName+".2"))
+	assert.Error(t, statErr, "a third generation exists; two is the whole design")
 }
 
 // A tail that spans a rotation must still answer, or the rotation creates a blind window exactly when someone looks.

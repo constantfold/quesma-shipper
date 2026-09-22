@@ -99,9 +99,8 @@ func TestTornLastLineTolerated(t *testing.T) {
 	deadRun(t, dir, "run-a", func(l *Log) { l.Phase("engine") })
 	f, err := os.OpenFile(filepath.Join(dir, fileName), os.O_WRONLY|os.O_APPEND, 0o600)
 	require.NoError(t, err)
-	if _, err := f.WriteString(`{"at":"2026-01-01T00:00:00Z","run_id":"run-a","ev":"re`); err != nil {
-		t.Fatal(err)
-	}
+	_, writeStringErr := f.WriteString(`{"at":"2026-01-01T00:00:00Z","run_id":"run-a","ev":"re`)
+	require.NoError(t, writeStringErr)
 	f.Close()
 
 	s := LastRun(dir)
@@ -112,12 +111,10 @@ func TestOpenRotatesALargeJournal(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, fileName)
 	require.NoError(t, os.WriteFile(path, make([]byte, maxLogBytes), 0o600))
-	if _, err := Open(dir, "run-a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(path + ".1"); err != nil {
-		t.Fatalf("want a rotated generation: %v", err)
-	}
+	_, openErr := Open(dir, "run-a")
+	require.NoError(t, openErr)
+	_, statErr := os.Stat(path + ".1")
+	require.NoErrorf(t, statErr, "want a rotated generation: %v", statErr)
 	if info, err := os.Stat(path); err == nil && info.Size() >= maxLogBytes {
 		t.Fatal("current file was not reset")
 	}

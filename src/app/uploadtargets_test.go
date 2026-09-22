@@ -21,12 +21,10 @@ func TestUploadTargetsBuildsTheAllowlist(t *testing.T) {
 	require.NoErrorf(t, err, "uploadTargets: %v", err)
 	require.Lenf(t, list, 2, "built %d targets, want 2", len(list))
 	assert.Equal(t, "https://acme.s3.example.com:443", list[0].Origin())
-	if _, err := list.Match("https://acme.s3.example.com/organization%3Dacme/object.age"); err != nil {
-		t.Errorf("allowlist does not match its own origin: %v", err)
-	}
-	if _, err := list.Match("https://elsewhere.example.com/object.age"); err == nil {
-		t.Error("an unlisted origin matched")
-	}
+	_, matchErr := list.Match("https://acme.s3.example.com/organization%3Dacme/object.age")
+	assert.NoErrorf(t, matchErr, "allowlist does not match its own origin: %v", matchErr)
+	_, unlistedErr := list.Match("https://elsewhere.example.com/object.age")
+	assert.Error(t, unlistedErr, "an unlisted origin matched")
 }
 
 func TestUploadTargetsRefusesTheWholeListOnOneBadEntry(t *testing.T) {

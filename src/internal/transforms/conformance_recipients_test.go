@@ -59,13 +59,11 @@ func TestConformanceRecipients(t *testing.T) {
 	}
 
 	// And an identity outside the set must not.
-	if _, _, err := transforms.Open(obj, identity(t)); err == nil {
-		t.Error("an identity that is not a recipient opened the object")
-	}
+	_, _, openErr := transforms.Open(obj, identity(t))
+	assert.Error(t, openErr, "an identity that is not a recipient opened the object")
 
 	// min_recipients: encryption is not optional, so zero recipients is a refusal.
 	require.Equalf(t, 1, v.MinRecipients, "min_recipients drifted: %d", v.MinRecipients)
-	if _, _, err := transforms.Seal(manifest(), payload, nil); err == nil {
-		t.Error("sealing to no recipients must be refused")
-	}
+	_, _, sealErr := transforms.Seal(manifest(), payload, nil)
+	assert.Error(t, sealErr, "sealing to no recipients must be refused")
 }

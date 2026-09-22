@@ -169,15 +169,12 @@ func TestObjectIsOpaqueWithoutTheIdentity(t *testing.T) {
 	} {
 		assert.NotContainsf(t, string(obj), needle, "ciphertext leaks %q in plaintext", needle)
 	}
-	if _, _, err := transforms.Open(obj, stranger); err == nil {
-		t.Fatal("an object must not open with an unrelated identity")
-	}
-	if _, err := transforms.ReadManifestPrefix(obj, stranger); err == nil {
-		t.Fatal("a manifest must not be readable with an unrelated identity")
-	}
-	if _, _, err := transforms.Open(obj); err == nil {
-		t.Fatal("opening with no identity must fail")
-	}
+	_, _, openErr := transforms.Open(obj, stranger)
+	require.Error(t, openErr, "an object must not open with an unrelated identity")
+	_, readManifestPrefixErr := transforms.ReadManifestPrefix(obj, stranger)
+	require.Error(t, readManifestPrefixErr, "a manifest must not be readable with an unrelated identity")
+	_, _, excludedIdentityErr := transforms.Open(obj)
+	require.Error(t, excludedIdentityErr, "opening with no identity must fail")
 }
 
 // Archival-only versus archival-plus-analysis recipients: who can read is decided at encryption
@@ -193,16 +190,13 @@ func TestRecipientSetsDecideWhoCanRead(t *testing.T) {
 		[]age.Recipient{archival.Recipient(), analysis.Recipient()})
 	require.NoError(t, err)
 
-	if _, _, err := transforms.Open(archivalOnly, archival); err != nil {
-		t.Errorf("the archival identity must read an archival object: %v", err)
-	}
-	if _, _, err := transforms.Open(archivalOnly, analysis); err == nil {
-		t.Error("the analysis identity must NOT read an archival-only object")
-	}
+	_, _, openErr := transforms.Open(archivalOnly, archival)
+	assert.NoErrorf(t, openErr, "the archival identity must read an archival object: %v", openErr)
+	_, _, excludedIdentityErr := transforms.Open(archivalOnly, analysis)
+	assert.Error(t, excludedIdentityErr, "the analysis identity must NOT read an archival-only object")
 	for _, id := range []age.Identity{archival, analysis} {
-		if _, _, err := transforms.Open(both, id); err != nil {
-			t.Errorf("both recipients must read a two-recipient object: %v", err)
-		}
+		_, _, recipientErr := transforms.Open(both, id)
+		assert.NoErrorf(t, recipientErr, "both recipients must read a two-recipient object: %v", recipientErr)
 	}
 
 	// Recipient key IDs are recorded, public only, so a rotation can find what to rewrap.
@@ -215,9 +209,8 @@ func TestRecipientSetsDecideWhoCanRead(t *testing.T) {
 }
 
 func TestSealRefusesWithNoRecipients(t *testing.T) {
-	if _, _, err := transforms.Seal(manifest(), []byte("x"), nil); err == nil {
-		t.Fatal("sealing with no recipients must fail: encryption is not optional")
-	}
+	_, _, sealErr := transforms.Seal(manifest(), []byte("x"), nil)
+	require.Error(t, sealErr, "sealing with no recipients must fail: encryption is not optional")
 }
 
 // A manifest that would fail downstream validation must not reach a bucket.
@@ -260,9 +253,8 @@ func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 			Typeflag: tar.TypeReg, Name: e.name, Size: int64(len(e.body)),
 			Mode: 0o600, ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatUSTAR,
 		}))
-		if _, err := tw.Write(e.body); err != nil {
-			t.Fatal(err)
-		}
+		_, writeErr := tw.Write(e.body)
+		require.NoError(t, writeErr)
 	}
 	require.NoError(t, tw.Close())
 
@@ -271,15 +263,13 @@ func TestOpenRejectsPayloadHashMismatch(t *testing.T) {
 	require.NoError(t, err)
 	zw, err := zstd.NewWriter(encW, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(transforms.ZstdLevel)))
 	require.NoError(t, err)
-	if _, err := zw.Write(tarBuf.Bytes()); err != nil {
-		t.Fatal(err)
-	}
+	_, compressedWriteErr := zw.Write(tarBuf.Bytes())
+	require.NoError(t, compressedWriteErr)
 	zw.Close()
 	encW.Close()
 
-	if _, _, err := transforms.Open(objBuf.Bytes(), id); err == nil {
-		t.Fatal("a payload that does not match shipped_hash must be refused")
-	}
+	_, _, openErr := transforms.Open(objBuf.Bytes(), id)
+	require.Error(t, openErr, "a payload that does not match shipped_hash must be refused")
 }
 
 // Plaintext object metadata carries the hashes and versions a listing-side consumer dedupes

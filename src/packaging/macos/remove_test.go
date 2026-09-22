@@ -32,10 +32,8 @@ func TestRemoveProgramRemovesAppAndItsCLILink(t *testing.T) {
 func TestRemoveProgramRefusesAnUnrelatedApp(t *testing.T) {
 	app := filepath.Join(t.TempDir(), "Other.app")
 	executable := writeTestApp(t, app, "com.example.other", executableName)
-	if _, err := RemoveProgram(executable); err == nil {
-		t.Fatal("uninstall accepted an unrelated app")
-	}
-	if _, err := os.Stat(app); err != nil {
-		t.Fatalf("uninstall damaged the unrelated app: %v", err)
-	}
+	_, removeProgramErr := RemoveProgram(executable)
+	require.Error(t, removeProgramErr, "uninstall accepted an unrelated app")
+	_, statErr := os.Stat(app)
+	require.NoErrorf(t, statErr, "uninstall damaged the unrelated app: %v", statErr)
 }

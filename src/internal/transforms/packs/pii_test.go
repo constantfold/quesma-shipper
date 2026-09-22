@@ -115,14 +115,12 @@ func TestPIIScannersAgreeWithTheirRegexOnFuzz(t *testing.T) {
 // The one combination that would redact a different span than the pattern must not compile.
 func TestPIIScannerRejectsACaptureGroup(t *testing.T) {
 	spec := ruleSpec{ID: "x", Regex: `\b[0-9]{11}\b`, Scanner: "pesel", Capture: 1}
-	if _, err := compileSpec("test", spec); err == nil {
-		t.Fatal("a scanner paired with a capture group must not compile")
-	}
+	_, compileSpecErr := compileSpec("test", spec)
+	require.Error(t, compileSpecErr, "a scanner paired with a capture group must not compile")
 	spec.Scanner = "nope"
 	spec.Capture = 0
-	if _, err := compileSpec("test", spec); err == nil {
-		t.Fatal("an unknown scanner must not compile")
-	}
+	_, unknownScannerErr := compileSpec("test", spec)
+	require.Error(t, unknownScannerErr, "an unknown scanner must not compile")
 }
 
 var piiFragments = []string{
