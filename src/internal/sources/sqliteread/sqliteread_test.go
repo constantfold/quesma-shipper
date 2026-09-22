@@ -20,28 +20,22 @@ import (
 // newStore builds a state.vscdb-shaped fixture: two key/value tables as Cursor has, planting the rows the filter must catch.
 func newStore(t *testing.T, rows map[string]string) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.vscdb")
-
+	path := filepath.Join(t.TempDir(), "state.vscdb")
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 	defer db.Close()
 
-	for _, stmt := range []string{
-		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
-		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
-	} {
-		_, execErr := db.Exec(stmt)
-		require.NoError(t, execErr)
-	}
+	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+		CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`)
+	require.NoError(t, err)
 	for k, v := range rows {
+		// Auth keys go where Cursor keeps them, the table the enricher does NOT declare.
 		table := "cursorDiskKV"
 		if strings.HasPrefix(k, "cursorAuth/") {
-			// Planted in the table the enricher does NOT declare, and again below in the one it does.
 			table = "ItemTable"
 		}
-		_, insertErr := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v)
-		require.NoError(t, insertErr)
+		_, err := db.Exec(`INSERT INTO `+table+` (key, value) VALUES (?, ?)`, k, v)
+		require.NoError(t, err)
 	}
 	require.NoError(t, db.Close())
 	return path
@@ -128,28 +122,22 @@ func TestTheAuthNamespaceExceptionsAreExactKeysOnly(t *testing.T) {
 		o.Table = "ItemTable" // where Cursor keeps the cursorAuth namespace
 		o.KeyPrefixes = []string{"cursorAuth/"}
 	})
-	got := map[string]string{}
-	for _, r := range res.Rows {
-		got[r.Key] = string(r.Value)
-	}
-	assert.Equal(t, map[string]string{
-		"cursorAuth/stripeMembershipType": "enterprise",
-		"cursorAuth/cachedEmail":          "dev@example.com",
-		"cursorAuth/cachedSignUpType":     "Google",
-		"cursorAuth/cachedTeam":           `{"teamId": 1, "name": "Quesma"}`,
-	}, got)
+	assert.Equal(t, []sqliteread.Row{
+		{Key: "cursorAuth/cachedEmail", Value: []byte("dev@example.com")},
+		{Key: "cursorAuth/cachedSignUpType", Value: []byte("Google")},
+		{Key: "cursorAuth/cachedTeam", Value: []byte(`{"teamId": 1, "name": "Quesma"}`)},
+		{Key: "cursorAuth/stripeMembershipType", Value: []byte("enterprise")},
+	}, res.Rows)
 }
 
 // THE FILTER TEST. Auth material lives in the same database as the trajectories.
 func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	const token = "SUPER-SECRET-CURSOR-SESSION-TOKEN"
 	path := newStore(t, map[string]string{
-		// In ItemTable, where Cursor keeps it.
+		// cursorAuth/ lands in ItemTable, CursorAuth/ in the declared table: the filter must pass
+		// neither by table split nor by one spelling.
 		"cursorAuth/accessToken": token,
-		// And in the declared table, spelled two ways, so the filter is not passing by table split or by one spelling.
-		"cursorAuth/refreshToken": token,
-		"CursorAuth/cased":        token,
-
+		"CursorAuth/cased":       token,
 		// The encryption-key fields, nested where they really appear.
 		"composerData:c1": `{"composerId":"c1","blobEncryptionKey":"` + token + `",` +
 			`"speculativeSummarizationEncryptionKey":"` + token + `",` +
@@ -161,20 +149,13 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 		// Deliberately declaring the auth namespace too: the filter is compiled, not something a declaration overrides.
 		o.KeyPrefixes = []string{"composerData:", "bubbleId:", "cursorAuth/", "CursorAuth/"}
 	})
-
-	want := map[string]string{
-		"composerData:c1": `{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`,
-		"bubbleId:c1:b1":  `{"type":1,"text":"hi","nested":{}}`,
-	}
-	require.Len(t, res.Rows, len(want), "only the two trajectory rows may survive")
-	for _, r := range res.Rows {
-		require.Contains(t, want, r.Key)
-		assert.JSONEq(t, want[r.Key], string(r.Value))
-		delete(want, r.Key)
-	}
-	assert.Empty(t, want)
-	assert.NotZero(t, res.DeniedKeys, "denied keys must be reported")
-	assert.NotZero(t, res.StrippedFields, "stripped fields must be reported")
+	// Only the two trajectory rows survive, re-encoded where a field was stripped.
+	assert.Equal(t, []sqliteread.Row{
+		{Key: "bubbleId:c1:b1", Value: []byte(`{"nested":{},"text":"hi","type":1}`)},
+		{Key: "composerData:c1", Value: []byte(`{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`)},
+	}, res.Rows)
+	assert.Equal(t, 1, res.DeniedKeys, "CursorAuth/cased, the one auth key in the declared table")
+	assert.Equal(t, 3, res.StrippedFields)
 }
 
 // Unreadable databases fail through every fallback; a live database must also refuse raw copying.
