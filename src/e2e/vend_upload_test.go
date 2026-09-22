@@ -1,5 +1,4 @@
-// The vend upload path end to end, hermetically: the tests whose subject is the path itself (the
-// headers, the refusals, the expiries) rather than the collection behaviour it carries. What no
+// The vend upload path end to end, hermetically: the headers, the refusals, the expiries. What no
 // unit test can show is the command tree, config layering, engine loop and uploader agreeing on
 // one object's key, headers and bytes.
 package e2e
@@ -33,8 +32,7 @@ func TestVendPathShipsAuthorizedObjectsToTheStore(t *testing.T) {
 		manifest, _, err := seal.Open(put.Body, v.Identity)
 		require.NoError(t, err)
 		assert.Truef(t, strings.HasPrefix(put.Key, v.KeyRoot+"/mirror/"), "%s landed outside this install's mirror root %s", put.Key, v.KeyRoot)
-		// A header disagreeing with the manifest sealed inside would mean the two halves
-		// describe different files.
+		// A header disagreeing with the sealed manifest would mean the two describe different files.
 		want := map[string]string{
 			"x-amz-meta-source-hash":      manifest.SourceHash,
 			"x-amz-meta-source-id":        manifest.SourceID,
@@ -57,11 +55,10 @@ func TestVendPathShipsAuthorizedObjectsToTheStore(t *testing.T) {
 	openHeartbeat(t, v, beats[0])
 }
 
-// Progress lives in the local fingerprint document and nowhere else: a second run with nothing
-// changed must authorize no trajectory object, or every tick versions every file.
+// Progress lives in the local fingerprint document: a second run with nothing changed must
+// authorize no trajectory object, or every tick versions every file.
 func TestVendPathShipsNothingOnASecondRun(t *testing.T) {
 	v := stageClaudeWorld(t)
-	// Generated observations change each run; this check covers unchanged files.
 	writeConfig(t, v, withoutGeneratedSources)
 
 	runOneShot(t)
@@ -93,8 +90,7 @@ func TestVendPathRefusalStopsTheRunAndTheHeartbeat(t *testing.T) {
 	assert.NotEmpty(t, v.store.mirrorPuts(), "the run after the refusal was lifted shipped nothing")
 }
 
-// Preview makes no network call: an authorization from it would tell the control plane about
-// files this machine deliberately did not ship.
+// Preview makes no network call: an authorization would tell the plane about files it did not ship.
 func TestVendPathPreviewAuthorizesNothing(t *testing.T) {
 	v := stageClaudeWorld(t)
 
@@ -104,8 +100,7 @@ func TestVendPathPreviewAuthorizesNothing(t *testing.T) {
 	assert.Len(t, v.store.stored(), 0)
 }
 
-// A ticket that ran out between issue and PUT costs one fresh authorization and nothing else: an
-// expiry is a slow upload, not a reason to leave the file for the next tick.
+// A ticket that ran out between issue and PUT costs one fresh authorization and nothing else.
 func TestVendPathReauthorizesOnceForAnExpiredTicket(t *testing.T) {
 	v := stageClaudeWorld(t)
 	v.plane.set(func(p *fakePlane) { p.staleBatches = 1 })
@@ -134,8 +129,7 @@ func TestVendPathReauthorizesOnceForAnExpiredTicket(t *testing.T) {
 	}
 }
 
-// doctor has nothing to read back here, so its write probe is a real write of the one state
-// object the protocol authorizes.
+// doctor's write probe is a real write of the one state object the protocol authorizes.
 func TestVendPathDoctorProbesByWritingTheHeartbeat(t *testing.T) {
 	v := stageClaudeWorld(t)
 
@@ -143,9 +137,8 @@ func TestVendPathDoctorProbesByWritingTheHeartbeat(t *testing.T) {
 	// No conditional-write preflight exists on a write-only path.
 	require.Containsf(t, out, "one test file sent", "doctor's upload probe did not report a successful heartbeat write:\n%s", out)
 	assert.NotContainsf(t, out, "preflight", "doctor ran the conditional-write preflight against a write-only path:\n%s", out)
-	// Named by origin and never by a ticket URL, which anyone holding it could spend. Both
-	// printing paths answer: doctor holds a live runtime, status the configuration alone. The one
-	// write path is compiled in, so no config names it, and `config` must still report it.
+	// Named by origin, never by a spendable ticket URL, from doctor's live runtime and status's
+	// configuration alike. The write path is compiled in, and `config` must still report it.
 	assert.Containsf(t, out, v.store.server.URL, "doctor did not name the upload destination:\n%s", out)
 	assert.Contains(t, run(t, "status"), v.store.server.URL)
 	assert.Contains(t, run(t, "config"), "vend")
@@ -165,8 +158,6 @@ func TestAnUnlistedOriginIsRefusedAndTheFailureRidesTheNextHeartbeat(t *testing.
 	elsewhere := startFakeStore(t)
 	v.plane.store = elsewhere
 
-	// Non-zero: exiting clean having sent none of what it prepared is the outage shape this exit
-	// code exists to surface.
 	out, err := runExpectingFailure(t, "run", "--once")
 	assert.Error(t, err, "a run whose every upload was refused must not exit zero")
 	require.Lenf(t, elsewhere.stored(), 0, "%d objects were sent to an origin no upload_targets entry names", len(elsewhere.stored()))
@@ -184,9 +175,8 @@ func TestAnUnlistedOriginIsRefusedAndTheFailureRidesTheNextHeartbeat(t *testing.
 	assert.Containsf(t, payload, "shipped nothing", "the recorded failure does not say what went wrong:\n%s", payload)
 }
 
-// doctor reads the local heartbeat mirror to answer "did anything leave this machine", and its
-// own probe writes a heartbeat with every file counter zeroed. If the probe mirrored that, the next
-// doctor would report a shipping install as one with nothing to ship.
+// doctor reads the local heartbeat mirror to answer "did anything leave this machine", and its own
+// probe's heartbeat has every file counter zeroed, so the probe must not overwrite the mirror.
 func TestDoctorsProbeDoesNotOverwriteTheLastFlushMirror(t *testing.T) {
 	v := stageClaudeWorld(t)
 
@@ -205,7 +195,8 @@ func TestDoctorsProbeDoesNotOverwriteTheLastFlushMirror(t *testing.T) {
 
 // The stranded-fleet regression: an enrolled install with no upload_targets must still run the
 // flush rather than abort before the first network call. Nothing lands in this world because the
-// store is plaintext http, which unpinned mode refuses per object.
+// store is plaintext http, which unpinned mode refuses per object, and doctor's refusal must name
+// upload_targets as the way to admit one.
 func TestVendPathRunsUnpinnedWithNoUploadTargets(t *testing.T) {
 	v := stageClaudeWorld(t)
 	writeConfigWithoutUploadTargets(t, v)
@@ -214,17 +205,9 @@ func TestVendPathRunsUnpinnedWithNoUploadTargets(t *testing.T) {
 	out, err := runExpectingFailure(t, "run", "--once")
 	assert.Error(t, err, "a run that shipped none of what it prepared must not exit zero")
 	require.NotEmptyf(t, v.plane.authorizeBatches(), "the flush aborted before authorizing anything:\n%s", out)
-	assert.Len(t, v.store.stored(), 0)
 	assertEveryObjectFailed(t, out)
-}
 
-// The unpinned probe fails only on this world's plaintext store, and the refusal must name
-// upload_targets as the way to admit one.
-func TestVendPathDoctorReportsAnInstallWithNoUploadTargets(t *testing.T) {
-	v := stageClaudeWorld(t)
-	writeConfigWithoutUploadTargets(t, v)
-
-	out, err := runExpectingFailure(t, "doctor")
+	out, err = runExpectingFailure(t, "doctor")
 	assert.Errorf(t, err, "doctor exited zero on an install whose probe cannot land:\n%s", out)
 	assert.Truef(t, strings.Contains(out, "upload check failed") && strings.Contains(out, "upload_targets"), "the destination row must name upload_targets:\n%s", out)
 	assert.Len(t, v.store.stored(), 0)
@@ -232,8 +215,8 @@ func TestVendPathDoctorReportsAnInstallWithNoUploadTargets(t *testing.T) {
 	assert.Contains(t, run(t, "preview"), claudeSource)
 }
 
-// A ticket for the right origin and another install's key is refused before any byte is sent: the
-// store would accept it, so the exact-key check is the whole defence against overwrites.
+// A ticket for another install's key is refused before any byte is sent: the store would accept
+// it, so the exact-key check is the whole defence against overwrites.
 func TestVendPathRefusesATicketNamingAnotherInstallsKey(t *testing.T) {
 	v := stageClaudeWorld(t)
 	v.plane.set(func(p *fakePlane) { p.misdirect = "00000000-0000-4000-8000-0000000000ff" })

@@ -31,12 +31,10 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Captured before anything overrides HOME: a `go build` under a synthetic HOME re-downloads the
-// module cache into a temp directory the test framework then cannot delete.
+// Captured before anything overrides HOME: a `go build` under a synthetic HOME re-downloads the module cache.
 var realHome = os.Getenv("HOME")
 
-// Fixed, so object keys (HMACs under name_key) match across worlds and two runs stay comparable key
-// by key. Published in a public repository: it protects nothing and must never be used elsewhere.
+// Fixed, so object keys match across worlds. Published: it protects nothing and must never be used elsewhere.
 const (
 	testAgeIdentity = "AGE-SECRET-KEY-1JF0Y36Z2RMJNJNN2AYUUF6HMHZVK3FCGK4GUADGRF9M3R57S2UCSDMJWD7"
 	testNameKey     = "0101010101010101010101010101010101010101010101010101010101010101"
@@ -45,8 +43,7 @@ const (
 // The pre-filter compares size and mtime, so staged files cannot carry a wall-clock stamp.
 var fixtureMTime = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 
-// Pins the child's view of the machine: the engine sizes its pools off GOMAXPROCS, so unpinned, every
-// bound would have to be written for the weakest box. A scenario that changes it writes its own bounds.
+// The child's view of the machine: the engine sizes its pools off GOMAXPROCS, and the bounds follow it.
 const childGOMAXPROCS = 8
 
 // Generous on purpose: a deadlock catcher, not a performance bound.
@@ -58,24 +55,17 @@ type world struct {
 	Config string // XDG_CONFIG_HOME
 	State  string // XDG_STATE_HOME
 
-	// installID changes with every staging and reset; keyRoot is the subtree it gives this world.
-	installID string
+	installID string // changes with every reset, and keyRoot with it
 	org       string
 	keyRoot   string
 
-	// The store the tickets this world accepts may name, and the prefix under it.
-	origin string
-	bucket string
+	origin, bucket string // what the tickets this world accepts may name
 
 	binary     string
 	gomaxprocs int
 
-	// Appended last, so a scenario can hand the child a limit of its own without a launcher.
-	extraEnv []string
-
-	// Goes in front of the binary when the child must run inside a cap. A launcher that resets the
-	// environment carries childVars itself.
-	launcher []string
+	extraEnv []string // appended last, so a scenario's own limit wins
+	launcher []string // in front of the binary for a capped run; one that resets the environment carries childVars
 }
 
 func stageWorld(t *testing.T) *world {
@@ -111,8 +101,8 @@ func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
 	return w
 }
 
-// Everything a run remembers lives in the state directory, so emptying it and enrolling again is a
-// first sync. A new install id, not the old one: the fingerprint document is refused under another.
+// Empties the state directory and enrolls again, making the next run a first sync. A new install id,
+// because the fingerprint document is refused under another.
 func (w *world) reset(t *testing.T) {
 	t.Helper()
 	stateDir := filepath.Join(w.State, "trajectory-shipper")
@@ -145,9 +135,8 @@ func (w *world) reset(t *testing.T) {
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
 	})
 
-	// No send block: the destination arrives in the signed document. The upload target is the
-	// machine owner's half of the presigned path, and the proxy serves plain HTTP, which the client
-	// refuses unless opted into. The 64-file default would truncate the corpus.
+	// No send block: the destination arrives in the signed document. The proxy serves plain HTTP,
+	// which needs the opt-in, and the 64-file default would truncate the corpus.
 	configDir := filepath.Join(w.Config, "trajectory-shipper")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	body := "config_version: 1\n" +
@@ -201,8 +190,7 @@ func removeBinaries() {
 	}
 }
 
-// Everything this world tells the child about itself, and nothing inherited; separate from childEnv
-// because a launcher such as sudo resets what it was called with. It names no store and no credential.
+// What this world tells the child, and nothing inherited: a launcher such as sudo resets the rest.
 func (w *world) childVars() []string {
 	return append([]string{
 		"HOME=" + w.Home,
@@ -212,8 +200,7 @@ func (w *world) childVars() []string {
 	}, w.extraEnv...)
 }
 
-// This process's environment minus anything that would move the measurement: an exported GOMEMLIMIT
-// or SHIPPER_* would retune the run with nothing to show it.
+// This environment minus what would silently retune the run, such as an exported GOMEMLIMIT or SHIPPER_*.
 func (w *world) childEnv() []string {
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		name, _, _ := strings.Cut(kv, "=")
@@ -238,9 +225,8 @@ func (w *world) mustSync(t *testing.T) childObservation {
 // The whole row, in the order the client prints it.
 var summaryWords = []string{"shipped", "unchanged", "skipped", "parked", "failed"}
 
-// The run's own counters, read from its summary row; counting objects in the store cannot answer
-// "did this run ship anything", because an overwritten key leaves the listing unchanged. Only a
-// single line carrying all five words, each with a whole number, counts.
+// The run's own counters: an overwritten key leaves the store's listing unchanged. Only a line
+// carrying all five words, each with a whole number, counts.
 func summary(t *testing.T, out string) map[string]int {
 	t.Helper()
 lines:
@@ -266,7 +252,7 @@ lines:
 	return nil
 }
 
-// Relative to the install root, which changes with every reset; the key under it is what two runs share.
+// Relative to the install root, which changes with every reset.
 func (w *world) currentKeys(t *testing.T) []string {
 	t.Helper()
 	var keys []string

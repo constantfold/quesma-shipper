@@ -25,9 +25,8 @@ type storedPut struct {
 	Body    []byte
 }
 
-// fakeStore accepts presigned PUTs, signed with a shared HMAC over the key rather than SigV4: an
-// HMAC the client cannot compute proves the issued URL reached the store unaltered. It versions
-// like a real deployment must: every PUT is kept and the newest write under a key is what is read.
+// fakeStore accepts PUTs presigned with an HMAC over the key the client cannot compute, proving the
+// issued URL arrived unaltered. Every PUT is kept; the newest under a key is what is read.
 type fakeStore struct {
 	server *httptest.Server
 	secret []byte
@@ -116,14 +115,12 @@ func (s *fakeStore) heartbeats() []storedPut {
 	return s.storedWhere(func(key string) bool { return strings.HasSuffix(key, heartbeatKey) })
 }
 
-// The write count under one key, which is the only thing making "the same file shipped twice"
-// observable: the newest version alone cannot tell the two cases apart.
+// The write count under one key: the newest version alone cannot show a file shipped twice.
 func (s *fakeStore) versions(key string) int {
 	return len(s.storedWhere(func(k string) bool { return k == key }))
 }
 
-// The source hash the newest version under a key was stored with: what a real plane's HEAD reads
-// back, and the only thing that tells "already holds these bytes" from "holds older ones".
+// The source hash of the newest version under a key: what a real plane's HEAD reads back.
 func (s *fakeStore) sourceHash(key string) (string, bool) {
 	puts := s.storedWhere(func(k string) bool { return k == key })
 	if len(puts) == 0 {

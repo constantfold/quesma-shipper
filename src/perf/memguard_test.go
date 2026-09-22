@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,7 @@ import (
 // The harness consumes a binary; assertInFlightCapIsWired checks this literal reaches it.
 const envMaxInFlightBytes = "SHIPPER_MAX_IN_FLIGHT_BYTES"
 
-// S3's acceptance gate: the requirement, not a measurement; see smokeBigFileAcceptance.
+// S3's acceptance bound: the requirement, not a measurement; see smokeBigFileAcceptance.
 const (
 	acceptanceFileBytes int64 = 500 << 20
 	acceptanceBudget    int64 = 200 << 20
@@ -36,11 +35,11 @@ const (
 	inFlightFileBytes int64 = 8 << 20
 	inFlightFiles           = 4
 
-	// Between the serial and concurrent peaks, so a broken gate fails this budget.
+	// Between the serial and concurrent peaks, so broken admission fails this budget.
 	inFlightBudget int64 = 208 << 20
 )
 
-// PROVISIONAL on the same terms as bigFileBudget, and gating for the first time where VmHWM exists.
+// PROVISIONAL on the same terms as bigFileBudget, and enforced for the first time where VmHWM exists.
 const (
 	singleLineFileBytes int64 = 50 << 20
 	singleLineBudget    int64 = 250 << 20
@@ -135,10 +134,8 @@ func smokeSingleLineSecrets(t *testing.T) {
 
 // Zero leaves a dimension unmonitored.
 type resourceBudget struct {
-	memory int64 // bytes of peak RSS, gated on every run
-
-	// The scenario judges its chosen repetition; gating each run would select the noisiest one.
-	cpu float64
+	memory int64   // bytes of peak RSS, checked on every run
+	cpu    float64 // judged by the scenario over its repetitions, not per run
 }
 
 // Judge both resource cost and actual wire bytes; compressible fixtures could pass vacuously.
@@ -149,19 +146,12 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 	c := aroundStore(t, func() { obs = w.observedSync(t) })
 	objects := len(w.currentKeys(t))
 
-	t.Logf("%s: %d files, %d logical bytes, budget %d: %s in %v, peak %d bytes (%s), "+
-		"%.2f cpu seconds, %d up and %d down (%.3f wire ratio), %d S3 requests, %d objects",
-		scenario, files, logical, budget.memory, obs.exitStatus(), obs.Elapsed.Round(time.Millisecond),
-		obs.PeakRSS, obs.PeakRSSSource, obs.CPUSeconds, c.up, c.down,
-		float64(c.up+c.down)/float64(logical), c.requests, objects)
-
 	// Recorded before anything is judged: a breach with no row is one nobody can calibrate against.
 	recordResult(t, perfResult{
-		Scenario:        scenario,
-		CorpusFiles:     files,
-		CorpusBytes:     logical,
-		ChildGOMAXPROCS: w.gomaxprocs,
-		// Record shaping even when the scenario does not judge latency.
+		Scenario:          scenario,
+		CorpusFiles:       files,
+		CorpusBytes:       logical,
+		ChildGOMAXPROCS:   w.gomaxprocs,
 		ShapedRTTMillis:   smokeRTT.Milliseconds(),
 		RepSeconds:        []float64{obs.Elapsed.Seconds()},
 		BestSeconds:       obs.Elapsed.Seconds(),

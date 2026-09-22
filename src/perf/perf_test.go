@@ -31,8 +31,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// Pinned: a floating MinIO changes what the store does under concurrency and a floating toxiproxy
-// renames the metrics this file parses, either without a line of shipper code changing.
+// Fixed versions: a floating MinIO changes concurrency behaviour, a floating toxiproxy its metric names.
 const (
 	minioImage     = "pgsty/silo:RELEASE.2026-09-03T13-18-01Z"
 	toxiproxyImage = "ghcr.io/shopify/toxiproxy:2.12.0"
@@ -53,7 +52,6 @@ const (
 )
 
 var (
-	// Kept for the isolation assertions, which ask the container what it published.
 	minioCtr *tcminio.MinioContainer
 
 	// Lists over the unshaped admin proxy, so its traffic never lands on the shipper's counters.
@@ -97,8 +95,7 @@ func run(m *testing.M) int {
 	defer removeCorpusMaster()
 	defer removeBinaries()
 
-	// Two networks, not one: internalNet has no NAT and no default route, and toxiproxy is the
-	// only container on both.
+	// internalNet has no NAT and no default route; toxiproxy is the only container on both.
 	edgeNet, err := network.New(ctx)
 	if err != nil {
 		return fail("create the edge network", err)
@@ -112,9 +109,7 @@ func run(m *testing.M) int {
 
 	minio, err := tcminio.Run(ctx, minioImage,
 		network.WithNetwork([]string{"minio"}, internalNet),
-		// Public scrape auth because the S3 request count is read off a metrics page, which
-		// otherwise answers 403. CI_CD drops MinIO's preallocation, keeping the store out of the
-		// way of the memory budgets the scenarios next door run under.
+		// Public scrape auth for the S3 request count; CI_CD drops preallocation that would crowd the memory budgets.
 		testcontainers.WithEnv(map[string]string{"MINIO_PROMETHEUS_AUTH_TYPE": "public", "CI_CD": "true"}),
 		// The internal-only store has no host port, so wait on its ready log.
 		testcontainers.WithWaitStrategy(wait.ForLog("API:").WithStartupTimeout(2*time.Minute)),
@@ -125,11 +120,9 @@ func run(m *testing.M) int {
 	}
 	minioCtr = minio
 
-	// Plain testcontainers.Run rather than modules/toxiproxy: that module's own -config cannot be
-	// combined with the -proxy-metrics these byte counters come from.
+	// Not modules/toxiproxy: its own -config cannot be combined with -proxy-metrics.
 	proxyCtr, err := testcontainers.Run(ctx, toxiproxyImage,
-		// The ordinary network first: testcontainers attaches the first at create time, and a
-		// container created on an internal network gets no port bindings at all (moby #36174).
+		// The edge network first: a container created on an internal one gets no port bindings (moby #36174).
 		network.WithNetwork([]string{"toxiproxy"}, edgeNet),
 		network.WithNetwork([]string{"toxiproxy"}, internalNet),
 		testcontainers.WithExposedPorts(
@@ -153,8 +146,7 @@ func run(m *testing.M) int {
 	toxiAPIURL = "http://" + apiAddr
 	metricsURL = toxiAPIURL + "/metrics"
 	storeEndpoint = "http://" + addrs[1]
-	// The v3 page, not the v2 cluster one: v2 serves a ten-second cached snapshot, so a count read
-	// either side of a sub-second run would read the same number twice.
+	// v3, not v2: v2 serves a ten-second cached snapshot, too stale to read around a sub-second run.
 	minioMetricsURL = adminEndpoint + "/minio/metrics/v3/api/requests"
 
 	toxi = toxiproxy.NewClient(apiAddr)
@@ -192,8 +184,7 @@ func run(m *testing.M) int {
 	return code
 }
 
-// Versioning matters here: mirror objects are overwritten in place, so "the steady-state run added
-// no versions" can only be asked of a versioned bucket.
+// Mirror objects are overwritten in place, so "the steady-state run added no versions" needs versioning.
 func createVersionedBucket(ctx context.Context, name string) (string, error) {
 	if _, err := adminS3.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
 		return "", err
@@ -205,8 +196,7 @@ func createVersionedBucket(ctx context.Context, name string) (string, error) {
 	return name, err
 }
 
-// Whether a timing scenario failed on slower code or on a toxic that was never attached is the first
-// question, and the API that answers it dies with the container. Failure path only.
+// On failure, whether a toxic was attached is the first question, and its answer dies with the container.
 func dumpProxyState() {
 	path := filepath.Join(resultsDir(), "toxiproxy-state.json")
 	err := func() error {
@@ -258,16 +248,13 @@ func withLatency(t *testing.T, rtt time.Duration) {
 		}
 	})
 
-	// Proves the toxic is on the wire before a test spends minutes measuring under it. A full
-	// request, not a dial: the toxic delays data, so a connect-only probe would pass with no shaping.
+	// A full request, not a dial: the toxic delays data, so a connect-only probe would pass unshaped.
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 30 * time.Second}
 	start := time.Now()
 	resp, err := client.Get(storeEndpoint + "/minio/health/live")
 	require.NoError(t, err, "probe the shaped link")
 	resp.Body.Close()
 	elapsed := time.Since(start)
-	// Three quarters of the injected rtt: slack for the handshake and the scheduler, not for a
-	// missing toxic.
 	if elapsed < rtt*3/4 {
 		t.Fatalf("a round trip through the proxy took %v with %v of latency configured; "+
 			"the toxic is not on the wire and every timing below would be meaningless", elapsed, rtt)

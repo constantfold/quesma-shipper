@@ -22,16 +22,14 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/cli"
 )
 
-// Fixed, because object keys derive from these: a minted-per-run unit would give a different key
-// for the same file every time. The published key protects nothing and must never be used for real.
+// Fixed, because object keys derive from these. Published: it protects nothing and must never be used for real.
 const (
 	testInstallID   = "00000000-0000-4000-8000-000000000001"
 	testAgeIdentity = "AGE-SECRET-KEY-1JF0Y36Z2RMJNJNN2AYUUF6HMHZVK3FCGK4GUADGRF9M3R57S2UCSDMJWD7"
 	testNameKey     = "0101010101010101010101010101010101010101010101010101010101010101"
 )
 
-// A manifest carries payload_mtime and a checkout stamps whatever time it happened at, so every
-// staged file gets this instead.
+// A manifest carries payload_mtime, so every staged file gets this rather than checkout time.
 var fixtureMTime = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 
 const heartbeatKey = "state/heartbeat.json.age"
@@ -82,8 +80,7 @@ func stageWorld(t *testing.T) *world {
 	return w
 }
 
-// 0600: the client refuses identity and enrollment files any wider, and that refusal is exercised
-// here on purpose.
+// 0600: the client refuses identity and enrollment files any wider.
 func writeJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	raw, err := json.MarshalIndent(v, "", "  ")
@@ -122,15 +119,13 @@ func userConfigPath(w *world) string {
 	return filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
 }
 
-// The client's own config; extra is appended verbatim, which is how a test says "and this source is
-// disabled" without a second helper.
+// The client's own config; extra is appended verbatim, such as a disabled source.
 func writeConfig(t *testing.T, w *world, extra string) {
 	t.Helper()
 	body := "config_version: 1\n" +
-		// Deliberately a block an older build wrote: it selects nothing now, and every verb has to
-		// keep working over it rather than failing to parse after an update.
+		// A block an older build wrote: it selects nothing now, and every verb must still parse it.
 		"send:\n  sink: file\n  path: /var/tmp/trajectory-archive\n" +
-		// Pinned because the store speaks loopback HTTP, which only a configured entry may admit.
+		// Listed because the store speaks loopback HTTP, which only a configured entry may admit.
 		"upload_targets:\n" +
 		"  - origin: " + w.store.server.URL + "\n" +
 		"    addressing: path-style\n" +
@@ -143,8 +138,7 @@ func writeConfig(t *testing.T, w *world, extra string) {
 	require.NoError(t, os.WriteFile(userConfigPath(w), []byte(body), 0o600))
 }
 
-// The install that enrolled and never configured upload_targets, running unpinned: tickets decide
-// the destination, https only.
+// An install that never configured upload_targets runs unpinned: tickets decide the destination, https only.
 func writeConfigWithoutUploadTargets(t *testing.T, w *world) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(userConfigPath(w), []byte("config_version: 1\nmax_files_per_run: 10000\n"), 0o600))
@@ -194,8 +188,7 @@ func stageFile(t *testing.T, w *world, rel, content string) string {
 	return full
 }
 
-// Later than the fixture's on purpose: keeping the old timestamp would test the content hash alone,
-// and the mtime pre-filter is part of what runs.
+// A later mtime, so the mtime pre-filter runs rather than the content hash alone.
 func appendLine(t *testing.T, path, line string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -207,8 +200,7 @@ func appendLine(t *testing.T, path, line string) {
 	require.NoError(t, os.Chtimes(path, later, later))
 }
 
-// A new mtime on every staged file without changing a byte: the case that decides whether change
-// detection is correct.
+// A new mtime on every staged file without changing a byte.
 func touchEverything(t *testing.T, w *world) {
 	t.Helper()
 	later := fixtureMTime.Add(2 * time.Hour)

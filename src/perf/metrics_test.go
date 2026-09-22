@@ -91,7 +91,7 @@ func scrapeStoreBytes(t *testing.T) storeBytes {
 	return b
 }
 
-// Named here because a pinned MinIO that renamed it would report every run as zero requests.
+// Named here because a MinIO upgrade that renamed it would report every run as zero requests.
 const s3RequestCountMetric = "minio_api_requests_total"
 
 // A running total like the byte counters, read either side of a child run. Unlike them it counts the

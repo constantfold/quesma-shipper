@@ -112,8 +112,7 @@ func stageCorpus(t *testing.T, w *world) int {
 	return corpusFiles
 }
 
-// A UUID-shaped id with a letter planted in every group: an all-digit id gets its first sixteen
-// characters eaten by the card rule, quietly changing the sealed size of those files.
+// A letter in every group: the card rule eats an all-digit id, changing the sealed size.
 func corpusSessionID(i int) string {
 	return fmt.Sprintf("d%07x-a%03x-4b%02x-8c%02x-e%011x", i, i, i%256, i%256, i)
 }
@@ -140,9 +139,7 @@ func corpusTranscript(rng *rand.Rand, session, slug string) string {
 	return b.String()
 }
 
-// Word-shaped fill of lowercase words up to 12 letters, not random characters: a run of 24+
-// base64-alphabet characters trips the scrubber's entropy backstop, and the tier would then
-// measure redaction instead of shipping.
+// Short words, not random characters: 24+ base64-alphabet characters trip the entropy backstop.
 func randomText(rng *rand.Rand, n int) string {
 	const alphabet, maxWordLen = "abcdefghijklmnopqrstuvwxyz", 12
 	var b strings.Builder

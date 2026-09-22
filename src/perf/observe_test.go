@@ -28,8 +28,7 @@ import (
 // Not a sampling rate: VmHWM only ever grows, so this decides how likely a read lands before exit.
 const vmHWMInterval = 20 * time.Millisecond
 
-// Without it the deadline is not one: Wait blocks on the output pipe copy, and cancelling the
-// context kills only the direct child, which for a capped run is sudo rather than the shipper.
+// Without it Wait blocks on the pipe copy: cancelling kills only the direct child, sudo for a capped run.
 const waitDelay = 30 * time.Second
 
 // One run of the shipper, measured rather than judged; nothing here fails a test.
@@ -37,21 +36,13 @@ type childObservation struct {
 	Output  string
 	Elapsed time.Duration
 
-	// The larger of the two readings and which one it was; VmHWM is zero where /proc is not.
-	PeakRSS       int64
-	PeakRSSSource string
-
-	// User plus system time: the "did it hang or did it work" figure.
-	CPUSeconds float64
-
-	ExitCode int
-	Signal   syscall.Signal
-
-	// Separates a syncTimeout kill from the SIGKILL a scenario was expecting.
-	TimedOut bool
-
-	// What Wait returned: nil for a clean exit, non-nil for anything else.
-	Err error
+	PeakRSS       int64  // the larger of the two readings
+	PeakRSSSource string // which one it was
+	CPUSeconds    float64
+	ExitCode      int
+	Signal        syscall.Signal
+	TimedOut      bool  // separates a syncTimeout kill from the SIGKILL a scenario expected
+	Err           error // what Wait returned
 }
 
 // The one-word form that goes into the results file.
@@ -72,8 +63,7 @@ func (o childObservation) Killed() bool {
 	return o.Signal == syscall.SIGKILL || o.ExitCode == 128+int(syscall.SIGKILL)
 }
 
-// The wall clock covers the whole process, startup included: skipping it would flatter every
-// steady-state result.
+// The wall clock covers the whole process, startup included, or it would flatter every steady state.
 func (w *world) observedSync(t *testing.T) childObservation {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
@@ -121,8 +111,8 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	return obs
 }
 
-// Returns a function, called once, that stops the watch and reports it; zero where /proc is not.
-// Nothing may be read after the stop: a reaped pid's numbers are gone or belong to someone else.
+// The returned function, called once after Wait, stops the watch: a reaped pid's numbers belong to
+// someone else. Zero where /proc is not.
 func watchPeakRSS(pid int) func() int64 {
 	if runtime.GOOS != "linux" {
 		return func() int64 { return 0 }
@@ -149,9 +139,7 @@ func watchPeakRSS(pid int) func() int64 {
 	}
 }
 
-// The subtree and not the process: a capped run has wrappers in between, and the reading worth
-// having is the deepest one, which is also the largest by orders of magnitude. Zero once the
-// process is gone, which is expected rather than an error.
+// The subtree, since a capped run has wrappers above the shipper; zero once the process is gone.
 func peakVmHWM(pid int) int64 {
 	var peak int64
 	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status"); err == nil {
@@ -182,12 +170,11 @@ func peakVmHWM(pid int) int64 {
 	return peak
 }
 
-// Touching the budget is a failure, killed or not. Enforced only on Linux, where VmHWM does not
-// depend on when the harness looked; elsewhere the log says the check did not run.
+// Touching the budget is a failure. Enforced only on Linux, where VmHWM does not depend on when the
+// harness looked; elsewhere the log says the check did not run.
 func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, budget int64) {
 	t.Helper()
 	require.Falsef(t, budget <= 0, "%s declared a memory budget of %d bytes; a budget is a positive number of bytes", scenario, budget)
-	// A reading of zero is under every budget there is: a broken instrument must not pass.
 	switch {
 	case obs.PeakRSS <= 0:
 		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this check would "+
@@ -205,8 +192,7 @@ func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, 
 	}
 }
 
-// A zero budget is a scenario that made no CPU claim. Unlike the memory check this runs on every
-// platform, so the budget has to hold on the slowest machine that runs it.
+// A zero budget makes no CPU claim. This runs on every platform, so it must hold on the slowest one.
 func assertCPUUnderBudget(t *testing.T, scenario string, obs childObservation, budget float64) {
 	t.Helper()
 	switch {
@@ -223,8 +209,7 @@ func assertCPUUnderBudget(t *testing.T, scenario string, obs childObservation, b
 	}
 }
 
-// Every durable local write is temp-then-rename, so a temp file that outlived the process is a
-// write that never committed.
+// Every durable local write is temp-then-rename, so a leftover temp file is a write that never committed.
 func assertNoResidualScratch(t *testing.T, w *world) {
 	t.Helper()
 	var leftover []string
@@ -250,12 +235,10 @@ func assertNoResidualScratch(t *testing.T, w *world) {
 	}
 }
 
-// Deliberately loose: this proves the check reads a real number, so a tight bound here would only
-// make the harness's own smoke check the flakiest thing in the tier.
+// Deliberately loose: this proves the check reads a real number, not that the run is small.
 const selfTestMemoryBudget = 512 << 20
 
-// The tier's own smoke check: a helper nothing calls stops working quietly, and the scenarios that
-// call these cost minutes each. One cheap sync exercises the whole chain.
+// The instruments, checked against one cheap sync: the scenarios that rely on them cost minutes each.
 func TestTheHarnessObservesAChildRun(t *testing.T) {
 	w := stageWorld(t)
 	files := smallCorpusFiles

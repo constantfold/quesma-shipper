@@ -21,40 +21,27 @@ const shapedRTT = 50 * time.Millisecond
 // Selects only what came off the machine; the heartbeat and project map change every run by design.
 const transcriptPrefix = "mirror/source=claude-code-transcripts/"
 
-// The claim the upload pool exists for: a backlog against a store 50ms away must not cost one
-// round trip per file. Structure is compared first, since a "faster" run that shipped fewer files
-// is not faster.
+// A backlog against a far store must not cost one round trip per file, and a "faster" run that did
+// different work is not faster. One rtt could be a coincidence; -short keeps only the first row.
 func TestBacklogFirstSyncOverlapsRoundTrips(t *testing.T) {
 	base, files, baseObs := backlogSync(t)
-	baseElapsed := min(baseObs.Elapsed, timingRun(t))
-
-	withLatency(t, shapedRTT)
-
-	shaped, _, shapedObs := backlogSync(t)
-	shapedElapsed := min(shapedObs.Elapsed, timingRun(t))
-
-	baseKeys, shapedKeys := base.currentKeys(t), shaped.currentKeys(t)
+	baseline := min(baseObs.Elapsed, timingRun(t))
+	baseKeys := base.currentKeys(t)
 	slices.Sort(baseKeys)
-	slices.Sort(shapedKeys)
-	require.Equal(t, baseKeys, shapedKeys, "the two runs landed different object keys")
-	assert.Equal(t, summary(t, baseObs.Output), summary(t, shapedObs.Output), "the two runs did different work")
 
-	assertOverlapsRoundTrips(t, files, shapedRTT, baseElapsed, shapedElapsed)
-}
-
-// Walks the bound up the latency scale: one rtt could be a coincidence, the curve is the evidence.
-// Skipped under -short: it is the whole tier again, once per row.
-func TestLatencySensitivity(t *testing.T) {
+	rtts := []time.Duration{shapedRTT, 200 * time.Millisecond}
 	if testing.Short() {
-		t.Skip("-short: the sensitivity table runs a full backlog per row")
+		rtts = rtts[:1]
 	}
-	baseline := min(timingRun(t), timingRun(t))
-	t.Logf("unshaped baseline: %v for %d files", baseline.Round(time.Millisecond), corpusFiles)
-
-	for _, rtt := range []time.Duration{50 * time.Millisecond, 200 * time.Millisecond} {
+	for _, rtt := range rtts {
 		t.Run(fmt.Sprintf("rtt=%v", rtt), func(t *testing.T) {
 			withLatency(t, rtt)
-			assertOverlapsRoundTrips(t, corpusFiles, rtt, baseline, min(timingRun(t), timingRun(t)))
+			shaped, _, shapedObs := backlogSync(t)
+			shapedKeys := shaped.currentKeys(t)
+			slices.Sort(shapedKeys)
+			require.Equal(t, baseKeys, shapedKeys, "the two runs landed different object keys")
+			assert.Equal(t, summary(t, baseObs.Output), summary(t, shapedObs.Output), "the two runs did different work")
+			assertOverlapsRoundTrips(t, files, rtt, baseline, min(shapedObs.Elapsed, timingRun(t)))
 		})
 	}
 }
@@ -89,16 +76,14 @@ func backlogSync(t *testing.T) (*world, int, childObservation) {
 	return w, files, obs
 }
 
-// A second sample, so no bound ever rests on a single wall clock; callers take the minimum of two,
-// because noise only ever adds.
+// A second sample: callers take the minimum of two, because noise only ever adds.
 func timingRun(t *testing.T) time.Duration {
 	t.Helper()
 	_, _, obs := backlogSync(t)
 	return obs.Elapsed
 }
 
-// One round trip per file over half the compute pool: slack for a loaded machine, still far under
-// the serial cost. The logged overlap ratio is the sharper statement.
+// One round trip per file over half the compute pool: slack for a loaded machine, far under serial.
 func assertOverlapsRoundTrips(t *testing.T, files int, rtt, baseline, shaped time.Duration) {
 	t.Helper()
 	added := shaped - baseline
@@ -113,8 +98,7 @@ func assertOverlapsRoundTrips(t *testing.T, files int, rtt, baseline, shaped tim
 	}
 }
 
-// The floor of a sync with nothing to do is not zero (config fetch, heartbeat, project map), so the
-// claims are ratios against the backlog that preceded it.
+// A sync with nothing to do still fetches config and writes sidecars, so the claims are ratios.
 func assertSteadyState(t *testing.T, files, unchanged int, moved, backlogBytes int64, elapsed, backlogElapsed time.Duration) {
 	t.Helper()
 	t.Logf("steady state: backlog %v / %d bytes, second run %v / %d bytes",

@@ -28,8 +28,7 @@ const (
 	// The memory controller must exist before systemd-run can enforce a cap.
 	cgroupControllers = "/sys/fs/cgroup/cgroup.controllers"
 
-	// Above runtime startup cost, but cheap enough for the hog probe, which touches memoryHogOvershoot
-	// times as much so it stays bounded even where a cap is accepted and not enforced.
+	// The hog probe's cap; it touches memoryHogOvershoot times as much, bounded even where unenforced.
 	memoryCapProbeBytes   int64 = 128 << 20
 	memoryHogOvershoot          = 4
 	memoryCapProbeTimeout       = 2 * time.Minute

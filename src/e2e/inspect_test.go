@@ -20,9 +20,8 @@ type object struct {
 	Payload  []byte
 }
 
-// summary parses the run's own counters ("shipped 4 unchanged 0 ..."). Never count objects in the
-// store instead: a re-shipped file lands under the same key, so the key set is identical whether
-// the run sent everything or nothing, which is exactly what change detection is about.
+// The run's own counters ("shipped 4 unchanged 0 ..."). Never count objects in the store instead: a
+// re-shipped file lands under the same key.
 func summary(t *testing.T, out string) map[string]int {
 	t.Helper()
 	counts := map[string]int{}
@@ -40,10 +39,8 @@ func summary(t *testing.T, out string) map[string]int {
 	return counts
 }
 
-// The source id of everything the run actually sent, per file. A global "shipped 0" would be both
-// too strict and too vague, because the generated project-map sidecar can legitimately change when
-// nothing was collected. Change-detection assertions must feed this the run log via shippedFromLog:
-// the console truncates to 32 per-file lines, so parsing it directly is only for console tests.
+// The source id of everything the run sent, per file; a global "shipped 0" would count the sidecars.
+// The console truncates to 32 per-file lines, so change detection reads the log via shippedFromLog.
 func shippedSources(out string) []string {
 	var sources []string
 	for line := range strings.SplitSeq(out, "\n") {
@@ -55,8 +52,7 @@ func shippedSources(out string) []string {
 	return sources
 }
 
-// The log is the complete record, bounded by neither the console budget nor --quiet. A missing
-// file fails rather than returning empty, because that is what the tests using it check.
+// The log is the complete record, bounded by neither the console budget nor --quiet.
 func runLogLines(t *testing.T, w *world) []string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(statePath(w), "last-sync.log"))
@@ -64,8 +60,6 @@ func runLogLines(t *testing.T, w *world) []string {
 	return slices.DeleteFunc(strings.Split(string(raw), "\n"), func(line string) bool { return line == "" })
 }
 
-// shippedSources over the untruncated run log, so growing a fixture past the console's 32-line
-// budget can never turn "nothing re-shipped" into "nothing was printed".
 func shippedFromLog(t *testing.T, w *world) []string {
 	t.Helper()
 	return shippedSources(strings.Join(runLogLines(t, w), "\n"))
@@ -77,8 +71,7 @@ func shippedClaude(t *testing.T, w *world) int {
 	return len(slices.DeleteFunc(shippedFromLog(t, w), func(id string) bool { return id != claudeSource }))
 }
 
-// collect opens the current version of every object, sorted by key; the write history behind it is
-// fakeStore.versions. Age is nondeterministic, so only the manifest and payload inside are stable.
+// The current version of every object, opened and sorted by key; the history is fakeStore.versions.
 func collect(t *testing.T, w *world) []object {
 	t.Helper()
 	current := map[string]storedPut{}

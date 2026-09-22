@@ -41,8 +41,7 @@ const (
 	shaEnv = "SHIPPER_PERF_GIT_SHA"
 )
 
-// One scenario's row. Fields a scenario does not measure stay zero, and names are append-only:
-// a renamed field silently resets the history for whatever reads this later.
+// One scenario's row; unmeasured fields stay zero, and a renamed field silently resets the history.
 type perfResult struct {
 	Scenario   string    `json:"scenario"`
 	RecordedAt time.Time `json:"recorded_at"`
@@ -125,8 +124,7 @@ func resultsDir() string {
 	return filepath.Join(os.TempDir(), "trajectory-shipper-perf")
 }
 
-// What CI named, else GITHUB_SHA, else git. "unknown" rather than a failed tier, said out loud
-// once: such a row is still forensics, but it is worthless as a trend point.
+// What CI named, else GITHUB_SHA, else git; "unknown" rather than a failed tier.
 func gitSHA(t *testing.T) string {
 	t.Helper()
 	shaOnce.Do(func() {

@@ -38,8 +38,8 @@ const (
 	singleLineChunk = 390 * (memguardRun + 1)
 )
 
-// A transcript file under slug, and the call that commits it. Write errors are sticky in the
-// bufio.Writer, so the loops check one write each and the finishing Flush reports any of them.
+// A transcript under slug and the call that commits it. bufio write errors are sticky, so the loops
+// check one write each and Flush reports the rest.
 func createFixture(t *testing.T, w *world, slug, session string) (bw *bufio.Writer, cwd string, finish func()) {
 	t.Helper()
 	cwd = "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
@@ -56,8 +56,7 @@ func createFixture(t *testing.T, w *world, slug, session string) (bw *bufio.Writ
 	}
 }
 
-// One ordinary line per memguardLineFill bytes of fill; every secretEvery-th line (none if zero)
-// also carries the corpus's two secrets. Returns the bytes written and the lines carrying secrets.
+// One line per memguardLineFill of fill; every secretEvery-th (none if zero) also carries two secrets.
 func stageIncompressibleFile(t *testing.T, w *world, index int, target int64, secretEvery int) (int, int) {
 	t.Helper()
 	session := corpusSessionID(index)
@@ -66,7 +65,6 @@ func stageIncompressibleFile(t *testing.T, w *world, index int, target int64, se
 
 	src := rand.NewChaCha8(memguardStreamSeed(index))
 	fill := make([]byte, memguardLineFill)
-	// Space-delimited bare secrets preserve filler alignment and avoid key-name rules or string-edge matches.
 	secretTail := []byte(" " + corpusGitHubToken + " " + corpusAWSKey + " end of line")
 	text := make([]byte, 0, memguardLineFill+len(secretTail))
 	secretLines := 0
@@ -86,8 +84,7 @@ func stageIncompressibleFile(t *testing.T, w *world, index int, target int64, se
 	return written, secretLines
 }
 
-// The whole target in one JSON string; a non-empty secret precedes every chunk of fill. Returns the
-// bytes written and how many secrets went in.
+// The whole target in one JSON string; a non-empty secret precedes every chunk of fill.
 func stageSingleLineFile(t *testing.T, w *world, slug string, target int64, secret string) (int, int) {
 	t.Helper()
 	session := corpusSessionID(0)

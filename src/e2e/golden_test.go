@@ -15,14 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Goldens for the fields where the exact value is the point. What is pinned stays narrow, because a
-// golden nobody reads is worse than none: the object key is pinned and can be, being an HMAC over
-// the home-relative path, while the source digest is not, being taken before redaction over bytes
-// carrying the OS username. Only collected transcripts are recorded; the sidecar and heartbeat would
-// pin the environment rather than the behaviour.
-//
-// A golden diff is a claim that the output SHOULD have changed, and -update on a red test is how a
-// regression becomes a committed expectation. Read the diff before running `go test ./e2e -update`.
+// Goldens for collected transcripts, narrow on purpose: the key (an HMAC over the home-relative path)
+// is recorded, the source digest (over bytes carrying the OS username) is not. A golden diff claims
+// the output SHOULD change: read it before running `go test ./e2e -update`.
 var update = flag.Bool("update", false, "rewrite the golden files from this run")
 
 // The recorded layout of one object, in reading order.
@@ -49,8 +44,7 @@ type goldenObject struct {
 	EnrichStatus     string   `json:"enrich_status,omitempty"`
 	EnrichMismatches int      `json:"enrich_mismatches,omitempty"`
 
-	// enrich_status stays "ok" for the explained shortfalls, so without these an object short
-	// of some enrichment is indistinguishable here from one carrying all of it.
+	// enrich_status stays "ok" for the explained shortfalls; these tell them apart.
 	EnrichRepeats          int `json:"enrich_repeats,omitempty"`
 	EnrichTail             int `json:"enrich_tail,omitempty"`
 	EnrichAmbiguous        int `json:"enrich_ambiguous,omitempty"`
@@ -80,9 +74,8 @@ func TestGolden(t *testing.T) {
 			},
 		},
 		{
-			// On the record as a finding, not an endorsement: a session id with no hex letters is
-			// digits and dashes, which the card-pan rule eats, destroying the join key while the
-			// object still ships looking fine. Recording it makes a fix show up here as a diff.
+			// A finding, not an endorsement: the card-pan rule eats an all-digit session id, and a
+			// fix will show up here as a diff.
 			name: "claude-2026-07-numeric-session",
 			stage: func(t *testing.T, w *world, username string) {
 				stageClaudeSession(t, w, username, numericSessionID)
@@ -102,8 +95,7 @@ func TestGolden(t *testing.T) {
 			},
 		},
 		{
-			// A store that deduplicated a re-run: the derived object ships, and the count of
-			// what it could not enrich ships with it.
+			// A store that deduplicated a re-run: the derived object ships with what it could not enrich.
 			name: "cursor-2026-07-repeat",
 			stage: func(t *testing.T, w *world, username string) {
 				stageCursor(t, w, username, cursorConversationRepeat(), true)
@@ -158,8 +150,7 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 		EnrichAmbiguous:        o.Manifest.EnrichAmbiguous,
 		EnrichLineDecodeErrors: o.Manifest.EnrichLineDecodeErrors,
 	}
-	// The digest is over raw pre-redaction bytes that deliberately carry this machine's username,
-	// so only its presence can be pinned; that it moves with the source is the invariants' business.
+	// Over pre-redaction bytes carrying this machine's username, so only its presence is recorded.
 	if o.Manifest.SourceHash != "" {
 		g.SourceHash = "<SOURCE-HASH>"
 	}
@@ -178,8 +169,7 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 	if e := o.Manifest.Encryption; e != nil {
 		g.Recipients = e.RecipientKeyIDs
 	}
-	// One file per object, named for its source and key so a listing is readable and stable, with
-	// the payload's real extension so a reader can open it with ordinary transcript tools.
+	// One file per object, named for its source and key, with the payload's real extension.
 	stem := g.SourceID + "-" + keyStem(o.Key)[:12]
 	if g.Derived {
 		stem = g.SourceID + "-derived-" + keyStem(o.Key)[:12]
@@ -188,8 +178,7 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 	return g, payload
 }
 
-// The harness's temp directories and the account the tests run as; without this a golden records
-// the runner.
+// The harness's temp directories and the account the tests run as, which a golden must not record.
 func scrubEnvironment(b []byte, w *world, username string) []byte {
 	s := string(b)
 	for from, to := range map[string]string{w.Home: "<HOME>", w.State: "<STATE>", w.Config: "<CONFIG>"} {
@@ -206,8 +195,7 @@ func keyStem(key string) string {
 	return strings.TrimSuffix(name, ".age")
 }
 
-// Payloads live beside the manifest record as their own files, so a redaction change reads as a
-// text diff rather than a hash that moved.
+// Payloads are files of their own, so a redaction change reads as a text diff.
 func compareGolden(t *testing.T, name string, got []goldenObject, payloads map[string][]byte) {
 	t.Helper()
 	dir := filepath.Join("testdata", "golden", name)

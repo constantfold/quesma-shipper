@@ -1,8 +1,7 @@
 //go:build perf
 
-// The scrub guard: what a sync burns in CPU. Scrubbing is the largest term, and the transforms
-// benchmarks only prove the transform in isolation; this proves the shipped binary end to end. The
-// gate is CPU seconds, not wall clock: CPU excludes the waiting where a shared runner's noise lives.
+// The scrub guard: what a sync burns in CPU, of which scrubbing is the largest term, end to end in
+// the shipped binary. CPU seconds, not wall clock: CPU excludes the waiting where runner noise lives.
 package perf
 
 import (
@@ -20,26 +19,21 @@ import (
 // Big enough that scrubbing dominates the CPU; the same size as the memory guard's fixture.
 const scrubGuardBytes int64 = 32 << 20
 
-// Density chosen in bytes, not lines: at 8 KiB a line, the corpus's every-twentieth cadence would
-// leave this fixture twenty times thinner in secrets. Half the values stay clean, so one run
-// exercises both the gated verification path and the prefilter's fast path.
+// Every other 8 KiB line, so one run exercises both the verification path and the prefilter's fast path.
 const scrubGuardSecretEveryLines = 2
 
-// Cold repetitions the CPU minimum is taken over; see smokeScrubGuard for why the minimum.
+// Cold repetitions the CPU minimum is taken over.
 const scrubGuardReps = 3
 
-// Both budgets are PROVISIONAL. 1.3x over the observed ceiling is only safe because the judged CPU
-// number is a minimum of cold repetitions, and the memory budget is measured for this scenario, which
-// runs under neither GOMEMLIMIT nor a cgroup, rather than borrowed from the memory guard. A machine
-// slower than the whole sample extends the sample; loosening either budget to pass is not an option.
+// PROVISIONAL, and 1.3x the observed ceiling only because the CPU figure is a minimum of cold runs and
+// the memory one is measured for this uncapped scenario. Loosening either to pass is not an option.
 const (
 	scrubGuardCPUBudget       = 0.95      // seconds: 1.3x the 0.699 s runner ceiling
 	scrubGuardBudget    int64 = 272 << 20 // bytes: 1.3x the 218 MB worst
 )
 
-// One secret-dense payload and a ceiling on what the child burned. No cgroup and no GOMEMLIMIT,
-// deliberately: a soft memory limit buys collector CPU, which is the number this scenario reads,
-// and a capped run's rusage would describe the sudo and systemd-run wrapper chain.
+// No cgroup and no GOMEMLIMIT: a soft limit buys collector CPU, the number read here, and a capped
+// run's rusage would describe the sudo and systemd-run wrappers.
 func smokeScrubGuard(t *testing.T) {
 	t.Run("S5-scrub-cpu-guard", func(t *testing.T) {
 		w := stageSmokeWorld(t)
@@ -48,8 +42,7 @@ func smokeScrubGuard(t *testing.T) {
 		t.Logf("%s: %d logical bytes carrying %d planted secret pairs, one per %d bytes of fill",
 			scrubGuardScenario, staged, secrets, scrubGuardSecretEveryLines*memguardLineFill)
 
-		// The CPU gate judges the minimum, since interference on a shared runner only ever adds
-		// CPU. The memory gate stays per-repetition: a peak in any of them is the finding.
+		// CPU is judged on the minimum, since interference only ever adds; memory on every repetition.
 		var best childObservation
 		reps := make([]time.Duration, 0, scrubGuardReps)
 		for rep := range scrubGuardReps {
@@ -70,19 +63,15 @@ func smokeScrubGuard(t *testing.T) {
 		assertRuleHits(t, w, corpusSessionID(0), map[string]int{
 			"github-pat":        secrets,
 			"aws-access-key-id": secrets,
-			// The fixture's own guard: a filler that drifted past memguardRun would be redacted
-			// wholesale and the scenario would stop measuring what it claims to.
+			// A filler run past the entropy floor would be redacted wholesale.
 			"generic-entropy": 0,
 		})
 	})
 }
 
-// Scoped to the shipped entries for this transcript: a sync also scrubs derived objects, and a sum
-// over every entry would fold their hits into a count the fixture is supposed to predict exactly.
+// Scoped to the shipped entries for this transcript, since a sync also scrubs derived objects.
 func assertRuleHits(t *testing.T, w *world, session string, want map[string]int) {
 	t.Helper()
-	// This tier is its own module and cannot import the shipper's internal auditlog package, so it
-	// decodes the two fields it judges directly.
 	raw, err := os.ReadFile(filepath.Join(w.State, "trajectory-shipper", "audit.log"))
 	require.NoError(t, err)
 	got := map[string]int{}

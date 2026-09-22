@@ -15,8 +15,11 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
+// status points a virgin machine at login, and describes the local install once local-dev ran.
 func TestLocalDevMintsIdentityAndWritesNoConfig(t *testing.T) {
 	w := stageBareWorld(t)
+	before, err := runExpectingFailure(t, "status")
+	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
 
 	out := run(t, "local-dev")
 
@@ -25,6 +28,8 @@ func TestLocalDevMintsIdentityAndWritesNoConfig(t *testing.T) {
 	assert.Containsf(t, out, unit.InstallID.String(), "output does not name the identity:\n%s", out)
 	assert.NoFileExistsf(t, userConfigPath(w), "local-dev must not write a config file")
 	assert.NoFileExistsf(t, filepath.Join(statePath(w), backend.EnrollmentFile), "local-dev must not write an enrollment record")
+	after := run(t, "status")
+	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
 }
 
 func TestLocalDevRerunKeepsIdentityAndConfig(t *testing.T) {
@@ -90,20 +95,6 @@ func TestRunOnceOnVirginMachineWaitsForLogin(t *testing.T) {
 	stageBareWorld(t)
 
 	assertWaitsForEnrollment(t)
-}
-
-func TestStatusBeforeAndAfterLocalDevSetup(t *testing.T) {
-	w := stageBareWorld(t)
-
-	before, err := runExpectingFailure(t, "status")
-	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
-
-	run(t, "local-dev")
-
-	after := run(t, "status")
-	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
-	_, loadErr := identity.Load(statePath(w))
-	require.NoError(t, loadErr)
 }
 
 func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
