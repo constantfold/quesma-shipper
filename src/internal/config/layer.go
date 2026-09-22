@@ -12,7 +12,7 @@ const (
 	LayerRemote                            // the org's served document, present only when enrolled
 )
 
-// IsLocal reports whether a layer is under the machine owner's control: where a deny beats a remote allow.
+// IsLocal is a layer under the machine owner's control, where a deny beats a remote allow.
 func (l Layer) IsLocal() bool {
 	return l >= LayerCompiledDefaults && l <= LayerUser
 }

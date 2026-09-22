@@ -12,13 +12,13 @@ import (
 // maxConfigBytes bounds a config file; anything larger is a mistake or an attempt to exhaust memory.
 const maxConfigBytes = 1 << 20
 
-// Paths locates the one config file and the state directory. The remote layer is absent on purpose: it needs enrollment.
+// Paths locates the one config file and the state directory; the remote layer needs enrollment instead.
 type Paths struct {
 	User     string
 	StateDir string
 }
 
-// DefaultPaths returns the standard locations, honouring XDG where it applies.
+// DefaultPaths honours XDG where it applies.
 func DefaultPaths(home string, lookup func(string) (string, bool)) Paths {
 	xdg := func(name string, fallback ...string) string {
 		if v, ok := lookup(name); ok && v != "" {
@@ -32,8 +32,8 @@ func DefaultPaths(home string, lookup func(string) (string, bool)) Paths {
 	}
 }
 
-// LoadLayers reads the user's config file. Missing is not an error (clone-and-run); present but unreadable or unparseable is,
-// since skipping it would silently drop the whole layer.
+// LoadLayers reads the user's config file. Missing is clone-and-run; unreadable or unparseable is an
+// error, since skipping it would silently drop the whole layer.
 func LoadLayers(p Paths) ([]LayeredDocument, error) {
 	raw, _, err := platform.ReadWhole(p.User, maxConfigBytes)
 	switch {
@@ -51,7 +51,6 @@ func LoadLayers(p Paths) ([]LayeredDocument, error) {
 	return []LayeredDocument{{Layer: LayerUser, Doc: doc}}, nil
 }
 
-// UserConfigFound reports whether the user's config file exists, for `config show` and the startup log line.
 func UserConfigFound(p Paths) (string, bool) {
 	_, err := os.Stat(p.User)
 	return p.User, err == nil

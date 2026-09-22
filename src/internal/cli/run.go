@@ -3,6 +3,8 @@ package cli
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os/signal"
@@ -288,4 +290,32 @@ func runLoop(cmd *cobra.Command, ctx context.Context, build app.Build, f runFlag
 		case <-time.After(app.NextDelay(rep, err, tick)):
 		}
 	}
+}
+
+// startCrashJournal reports how the previous run died, then marks this one's start. Best-effort:
+// a broken journal, or none found (dirErr), leaves the run unjournaled rather than unstarted.
+func startCrashJournal(errOut io.Writer, dir string, dirErr error) (*crashjournal.Log, string, *formats.LastCrash) {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	runID := hex.EncodeToString(b)
+	if dirErr != nil {
+		return nil, runID, nil
+	}
+	prev := crashjournal.LastRun(dir) // before Open, which may rotate the file this reads
+
+	fl, err := crashjournal.Open(dir, runID)
+	if err != nil {
+		fmt.Fprintf(errOut, "warning: crash journal unavailable: %v\n", err)
+		return nil, runID, nil
+	}
+	fl.Start()
+
+	if prev == nil {
+		return fl, runID, nil
+	}
+	crash := &formats.LastCrash{RunID: prev.RunID, Phase: prev.Phase, Consecutive: prev.Crashes}
+	fmt.Fprintf(errOut, "previous run %s never exited: last step %q; %d consecutive unclean run(s)\n",
+		prev.RunID, prev.Phase, prev.Crashes)
+	app.RecordCrash(crash)
+	return fl, runID, crash
 }

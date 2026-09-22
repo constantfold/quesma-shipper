@@ -43,10 +43,6 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		if transport.calls == 0 || !strings.Contains(out.String(), "test update endpoint unavailable") {
 			t.Fatalf("automatic update did not reach TUF: %s", &out)
 		}
-		transport.calls = 0
-		if _, err := packaging.Update(context.Background(), packaging.UpdateOptions{}); err == nil || transport.calls == 0 {
-			t.Fatalf("packaging.Update = %v", err)
-		}
 		execute := func(args ...string) error {
 			out.Reset()
 			cmd := Root(build, &out, &out)

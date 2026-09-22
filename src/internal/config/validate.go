@@ -24,11 +24,6 @@ func checkConfigVersion(eff *Effective) error {
 	return nil
 }
 
-func isLoopback(host string) bool {
-	ip := net.ParseIP(host)
-	return host == "localhost" || ip != nil && ip.IsLoopback()
-}
-
 // checkUploadTargets refuses an entry that could not pin a destination, so a typo fails at `config show`, not at the first upload.
 func checkUploadTargets(eff *Effective) error {
 	seen := map[string]bool{}
@@ -50,9 +45,10 @@ func checkUploadTargets(eff *Effective) error {
 		case strings.Contains(u.Hostname(), "*"):
 			return reject(": %q is a wildcard host: a target is pinned or it is not a target", t.Origin)
 		}
-		switch {
+		ip := net.ParseIP(u.Hostname())
+		switch loopback := u.Hostname() == "localhost" || ip != nil && ip.IsLoopback(); {
 		case u.Scheme == "https":
-		case u.Scheme == "http" && t.AllowLoopbackHTTP && isLoopback(u.Hostname()):
+		case u.Scheme == "http" && t.AllowLoopbackHTTP && loopback:
 		case u.Scheme == "http" && t.AllowLoopbackHTTP:
 			return reject(": %q is http but %q is not loopback", t.Origin, u.Hostname())
 		case u.Scheme == "http":

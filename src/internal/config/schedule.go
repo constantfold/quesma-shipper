@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-// DefaultTick is the cadence nobody configured: the design's loss-window bound.
-const DefaultTick = 15 * time.Minute
-
-// MinTick floors the cadence: a poll loop at seconds is a hot loop.
-const MinTick = time.Minute
+const (
+	DefaultTick = 15 * time.Minute // the design's loss-window bound
+	MinTick     = time.Minute      // a poll loop at seconds is a hot loop
+)
 
 // TickInterval turns `mode.schedule` into the tick interval; a bad value is refused with a warning and the default, never approximated.
 func TickInterval(schedule string) (time.Duration, string) {

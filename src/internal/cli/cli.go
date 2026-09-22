@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
+	"github.com/QuesmaOrg/quesma-shipper/internal/legal"
 )
 
 const (
@@ -62,7 +63,9 @@ func Root(b app.Build, out, errOut io.Writer) *cobra.Command {
 
 	cobra.EnableCommandSorting = false
 	for _, c := range []*cobra.Command{
-		trackingCmd(), pauseCmd(), resumeCmd(), statusCmd(b), doctorCmd(b), updateCmd(b), uninstallCmd(b), licensesCmd(),
+		trackingCmd(), pauseCmd(), resumeCmd(), statusCmd(b), doctorCmd(b), updateCmd(b), uninstallCmd(b),
+		verb("licenses", "Print the license and the third-party notices",
+			func(cmd *cobra.Command) error { return legal.Write(cmd.OutOrStdout()) }),
 	} {
 		c.GroupID = groupUser
 		root.AddCommand(c)
