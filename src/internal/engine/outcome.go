@@ -61,16 +61,14 @@ func (p *sourcePass) fold(r fileResult) {
 		p.unchangedElided++
 		return
 	}
-	_ = p.o.Log.Append(auditlog.Entry{
+	p.o.auditSource(r.outcome.SourceID, auditlog.Entry{
 		Decision:         r.outcome.Decision,
-		SourceID:         r.outcome.SourceID,
 		File:             r.outcome.NativePath,
 		BytesIn:          r.outcome.BytesIn,
 		BytesOut:         r.outcome.BytesOut,
 		RedactionDensity: r.outcome.Density,
 		RuleHits:         r.outcome.RuleHits,
 		ObjectKey:        r.outcome.ObjectKey,
-		ConfigVersion:    p.o.Plan.ConfigVersion,
 		Reason:           r.outcome.Reason,
 	})
 }
@@ -115,4 +113,9 @@ func (p *sourcePass) stagedUnits() []transforms.RawUnit {
 		}
 	}
 	return staged
+}
+
+func (o Options) auditSource(sourceID string, entry auditlog.Entry) {
+	entry.SourceID, entry.ConfigVersion = sourceID, o.Plan.ConfigVersion
+	_ = o.Log.Append(entry)
 }

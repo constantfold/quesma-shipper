@@ -68,11 +68,9 @@ func (o Options) enrichSource(
 	// counter. Notes only — an info describes an object that ships, so stamping it "skipped"
 	// would record loss that did not happen.
 	for _, note := range res.Notes {
-		_ = o.Log.Append(auditlog.Entry{
-			Decision:      auditlog.DecisionSkipped,
-			SourceID:      src.ID,
-			ConfigVersion: o.Plan.ConfigVersion,
-			Reason:        "enrich: " + note,
+		o.auditSource(src.ID, auditlog.Entry{
+			Decision: auditlog.DecisionSkipped,
+			Reason:   "enrich: " + note,
 		})
 	}
 
@@ -82,11 +80,9 @@ func (o Options) enrichSource(
 	if halted != nil {
 		// The same line the raw pass records, so the outcome itself says why the run stopped.
 		out.Reason = "uploads stopped: " + halted.Error()
-		_ = o.Log.Append(auditlog.Entry{
-			Decision:      auditlog.DecisionFailed,
-			SourceID:      src.ID,
-			ConfigVersion: o.Plan.ConfigVersion,
-			Reason:        out.Reason,
+		o.auditSource(src.ID, auditlog.Entry{
+			Decision: auditlog.DecisionFailed,
+			Reason:   out.Reason,
 		})
 		return fmt.Errorf("enricher %s stopped: %w", e.ID(), halted)
 	}

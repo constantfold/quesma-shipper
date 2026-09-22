@@ -132,13 +132,16 @@ func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []e
 	for i, it := range items {
 		batch[i] = preparedFrom(i, it.pending.objectKey, it.pending.obj, it.pending.md)
 	}
-	outcomes := o.Upload.AuthorizeAndUpload(ctx, batch)
-	if len(outcomes) != len(batch) {
-		// One verdict for the whole group: a port-contract violation carries no per-object detail.
-		return slices.Repeat([]error{fmt.Errorf(
-			"engine: the upload port answered %d outcomes for %d objects", len(outcomes), len(batch))},
-			len(batch))
+	upload := func(objects []PreparedObject, description string) []error {
+		outcomes := o.Upload.AuthorizeAndUpload(ctx, objects)
+		if len(outcomes) != len(objects) {
+			// A port-contract violation has one verdict for the whole group.
+			return slices.Repeat([]error{fmt.Errorf("engine: the upload port answered %d outcomes for %d %s",
+				len(outcomes), len(objects), description)}, len(objects))
+		}
+		return outcomes
 	}
+	outcomes := upload(batch, "objects")
 
 	var expired []int
 	for i, oc := range outcomes {
@@ -155,15 +158,7 @@ func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []e
 		again[i] = batch[at]
 		again[i].ObjectID = strconv.Itoa(i)
 	}
-	second := o.Upload.AuthorizeAndUpload(ctx, again)
-	if len(second) != len(again) {
-		err := fmt.Errorf("engine: the upload port answered %d outcomes for %d reauthorized objects",
-			len(second), len(again))
-		for _, at := range expired {
-			outcomes[at] = err
-		}
-		return outcomes
-	}
+	second := upload(again, "reauthorized objects")
 	// Whatever the second attempt says is final, expiry included: there is no third.
 	for i, at := range expired {
 		outcomes[at] = second[i]

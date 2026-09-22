@@ -199,11 +199,9 @@ func (p *sourcePass) run(ctx context.Context) error {
 		if p.unchangedElided == 1 {
 			noun = "file"
 		}
-		_ = p.o.Log.Append(auditlog.Entry{
-			Decision:      auditlog.DecisionUnchanged,
-			SourceID:      p.src.ID,
-			ConfigVersion: p.o.Plan.ConfigVersion,
-			Reason:        fmt.Sprintf("%d %s unchanged by size and mtime, not opened; per-file entries elided", p.unchangedElided, noun),
+		p.o.auditSource(p.src.ID, auditlog.Entry{
+			Decision: auditlog.DecisionUnchanged,
+			Reason:   fmt.Sprintf("%d %s unchanged by size and mtime, not opened; per-file entries elided", p.unchangedElided, noun),
 		})
 	}
 
