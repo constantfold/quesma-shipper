@@ -117,4 +117,12 @@ func TestBackoffCommitFailurePreservesReadError(t *testing.T) {
 	buffer.applyIntent(&result)
 	assert.Equal(t, "parked", string(result.outcome.Decision))
 	assert.Contains(t, result.outcome.Reason, "read denied (and the backoff could not be recorded: ")
+
+	// A confirmed upload whose record cannot be written must not count as shipped.
+	for _, derived := range []bool{false, true} {
+		shipped := fileResult{outcome: FileOutcome{SourceID: "s", NativePath: "/other", Decision: "shipped", Derived: derived}, commit: &Fingerprint{}}
+		buffer.applyIntent(&shipped)
+		assert.Equal(t, "failed", string(shipped.outcome.Decision))
+		assert.Contains(t, shipped.outcome.Reason, map[bool]string{false: "upload succeeded but commit failed: ", true: "derived upload succeeded but commit failed: "}[derived])
+	}
 }
