@@ -63,8 +63,7 @@ func humanSigned(b int64) string {
 
 // --- the soft ceiling ---------------------------------------------------------
 
-// DefaultSoftLimit: raw bytes in flight are capped at 512 MiB across all files and held a few times over
-// (staged, scrubbed, sealed, zstd/age buffers), about 2 GiB; the rest is error buffer. Soft, so nearing it costs CPU, but set below what one file needs it GCs the daemon to a standstill.
+// DefaultSoftLimit: 512 MiB in flight, held a few times over through the pipeline, is about 2 GiB; the rest is headroom.
 const DefaultSoftLimit = 3072 << 20
 
 // DefaultMaxInFlightBytes caps concurrent raw bytes at the per-file figure, so the soft limit's derivation holds at any worker count.
@@ -73,7 +72,7 @@ const DefaultMaxInFlightBytes = 512 << 20
 // EnvMaxInFlightBytes overrides that cap in whole bytes; it exists for the perf tier, production leaves it unset.
 const EnvMaxInFlightBytes = "SHIPPER_MAX_IN_FLIGHT_BYTES"
 
-// Written once before any verb runs, then read by the admission gate for the rest of the process.
+// Written once before any verb runs, then read by admission for the rest of the process.
 var maxInFlightBytes int64 = DefaultMaxInFlightBytes
 
 // MaxInFlightBytes is the cap in force for this process.
@@ -94,9 +93,7 @@ func ApplyMaxInFlightBytesFromEnv() error {
 	return nil
 }
 
-// SoftLimit reports the ceiling in force, or zero when none is held: -1 reads the current value
-// without changing it, and Go's unset default reads as MaxInt64, which as a figure would make
-// "heap against the limit" read as 0% forever.
+// SoftLimit reports the ceiling in force, or zero for Go's unset MaxInt64, which would read as 0% used forever.
 func SoftLimit() int64 {
 	if l := debug.SetMemoryLimit(-1); l != math.MaxInt64 {
 		return l

@@ -7,16 +7,11 @@ package formats
 import (
 	"bytes"
 	"embed"
-	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
-
-// ErrNotJSON marks a document the parser refused, as distinct from one the schema refused, so a
-// caller can name the document its own way in front of it.
-var ErrNotJSON = errors.New("not valid JSON")
 
 //go:embed *.schema.json
 var FS embed.FS
@@ -66,7 +61,7 @@ func Compile(name string) (*jsonschema.Schema, error) {
 func ValidateRaw(name string, raw []byte, label string) error {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("%s is %w", label, fmt.Errorf("%w: %w", ErrNotJSON, err))
+		return fmt.Errorf("%s is not valid JSON: %w", label, err)
 	}
 	if err := Validate(name, doc); err != nil {
 		return fmt.Errorf("%s does not satisfy its schema: %w", label, err)

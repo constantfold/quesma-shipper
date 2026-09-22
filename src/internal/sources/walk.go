@@ -26,8 +26,7 @@ func (u unreadable) reason() string {
 	return fmt.Sprintf("%d paths unreadable, first %s: %v", u.count, u.example, u.err)
 }
 
-// walkGlobs walks the root once against the globs, the deny list and the ignore list (the last return says
-// whether ignore dropped anything); symlinks below the root are never followed, pairing with O_NOFOLLOW at open.
+// walkGlobs never follows symlinks below the root, pairing with O_NOFOLLOW at open; the bool says ignore dropped something.
 func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Oversize, unreadable, bool) {
 	var out []Candidate
 	var oversize []Oversize
@@ -38,8 +37,7 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		deny = &List{}
 	}
 
-	// A candidate is never a symlink, so resolving its parent once answers for every file in it; "" means
-	// the parent resolves to itself or not at all.
+	// Candidates are never symlinks, so one parent resolution serves every file in it; "" means nothing to add.
 	resolvedDirs := map[string]string{}
 	resolveName := func(p string) string {
 		dir := filepath.Dir(p)
@@ -61,9 +59,7 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		}
 	}
 
-	// The ROOT may be a symlink, and only the root: ~/.claude -> ~/dotfiles/claude is what stow and chezmoi
-	// produce, and WalkDir would lstat it and descend into nothing. Entries inside are still not followed, and
-	// the resolved root is re-checked against the deny list.
+	// Only the root may be a symlink (stow and chezmoi make ~/.claude one); its target is re-checked against the deny list.
 	root := src.Root
 	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != root {
 		if denied, pattern := deny.Match(resolved); denied {
@@ -102,8 +98,7 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 		// The path as the operator spells it: what downstream records, and what the deny list is written against.
 		named := filepath.Join(src.Root, rel)
 
-		// BOTH spellings: the walk may run under a resolved root (~/.claude -> ~/dotfiles/claude, /var -> /private/var),
-		// so a rule written against one does not match a string built from the other. A file is denied if EITHER name is.
+		// Under a resolved root a rule may match only one spelling, so a file is denied if EITHER name is.
 		if denied, _ := deny.MatchPair(path, resolveName(path)); denied {
 			return nil
 		}
@@ -132,8 +127,7 @@ func walkGlobs(src Resolved, deny *List, ignore *RepoFilter) ([]Candidate, []Ove
 			return nil
 		}
 
-		// Reported under the CONFIGURED root, not the resolved one: native_path, the audit log and the state key must
-		// keep the operator's spelling, or resolving a symlink orphans every fingerprint in the archive.
+		// Reported under the CONFIGURED root: resolving a symlink here would orphan every fingerprint in the archive.
 		out = append(out, Candidate{
 			Load:    fileLoader(named, src.MaxFileBytes),
 			Path:    named,

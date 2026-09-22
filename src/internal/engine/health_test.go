@@ -11,7 +11,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
-	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
 // The heartbeat answers "is this source still findable", never "what did you send": it carries
@@ -23,7 +22,7 @@ func TestHeartbeat(t *testing.T) {
 		Sources: []formats.SourceOutcome{
 			{
 				SourceID: "claude-code-transcripts", Family: "claude-code",
-				Health: sources.Collected, Sniff: sources.SniffOK, AgentVersion: "2.1.220",
+				Health: formats.Collected, Sniff: formats.SniffOK, AgentVersion: "2.1.220",
 				Files: []formats.FileOutcome{
 					{Decision: auditlog.DecisionShipped, Density: 0.02,
 						NativePath: "/Users/__USER__/.claude/projects/p/a.jsonl",
@@ -31,8 +30,8 @@ func TestHeartbeat(t *testing.T) {
 					{Decision: auditlog.DecisionUnchanged},
 				},
 			},
-			{SourceID: "cursor-transcripts", Family: "cursor", Health: sources.RootPresentNoMatch, Reason: "root exists but no file matched"},
-			{SourceID: "codex-rollouts", Family: "codex", Health: sources.AgentAbsent, Reason: "not installed"},
+			{SourceID: "cursor-transcripts", Family: "cursor", Health: formats.RootPresentNoMatch, Reason: "root exists but no file matched"},
+			{SourceID: "codex-rollouts", Family: "codex", Health: formats.AgentAbsent, Reason: "not installed"},
 		},
 	}
 	hb := (engine.Heartbeat{
@@ -60,8 +59,8 @@ func TestHeartbeat(t *testing.T) {
 		byID[s.SourceID] = s
 	}
 	// Expected silence and drift look alike from a distance and must stay distinct.
-	assert.Equal(t, string(sources.AgentAbsent), byID["codex-rollouts"].State)
-	assert.Equal(t, string(sources.RootPresentNoMatch), byID["cursor-transcripts"].State)
+	assert.Equal(t, string(formats.AgentAbsent), byID["codex-rollouts"].State)
+	assert.Equal(t, string(formats.RootPresentNoMatch), byID["cursor-transcripts"].State)
 	cc := byID["claude-code-transcripts"]
 	assert.Truef(t, cc.Shipped == 1 && cc.Unchanged == 1, "counts: shipped %d unchanged %d", cc.Shipped, cc.Unchanged)
 	assert.Positive(t, cc.RedactionDensity, "redaction density is the rule-drift alarm")

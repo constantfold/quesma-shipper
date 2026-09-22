@@ -48,13 +48,6 @@ func capFromEnv(t *testing.T, value string) {
 	t.Setenv(platform.EnvMaxInFlightBytes, value)
 }
 
-func TestTheInFlightCapTakesTheEnvironmentOverride(t *testing.T) {
-	capFromEnv(t, "4194304")
-
-	require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
-	assert.Equal(t, int64(4<<20), platform.MaxInFlightBytes())
-}
-
 // Unset is the production path; blank is what a cleared shell variable leaves behind and must read the same.
 func TestTheInFlightCapDefaultsWithoutTheEnvironment(t *testing.T) {
 	// Each case leaves the variable in a state that has to read as "no cap was asked for".
@@ -66,6 +59,7 @@ func TestTheInFlightCapDefaultsWithoutTheEnvironment(t *testing.T) {
 			// Moved off the default first, so the call below reports a cap it restored rather than one it never touched.
 			capFromEnv(t, "4194304")
 			require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
+			require.Equal(t, int64(4<<20), platform.MaxInFlightBytes())
 
 			clearIt(t)
 			require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())

@@ -42,10 +42,6 @@ type Result struct {
 
 	// A flag, not an error: an error would send the read to the next fallback.
 	Truncated bool
-
-	// What the compiled filter removed, so its operation is observable rather than assumed.
-	DeniedKeys     int
-	StrippedFields int
 }
 
 type Options struct {
@@ -185,8 +181,7 @@ func readColdCopy(o Options) (result Result, err error) {
 	return readAt(o, copied, ReadColdCopy)
 }
 
-// CopyCold copies a database and its sidecars into dir. The sidecars must keep matching basenames, or the copy
-// opens without the WAL and silently shows data from before the last checkpoint.
+// CopyCold keeps sidecar basenames, or the copy opens without its WAL and shows pre-checkpoint data.
 func CopyCold(src, dir string) (string, error) {
 	dst := filepath.Join(dir, filepath.Base(src))
 	if err := copyFile(src, dst); err != nil {

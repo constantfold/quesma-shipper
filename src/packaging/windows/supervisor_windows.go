@@ -15,8 +15,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
 
-// RunSupervisor keeps the replaceable shipper binary under a stable, windowless Task Scheduler
-// action. The caller is built with -H windowsgui; CREATE_NO_WINDOW keeps its child windowless too.
+// RunSupervisor keeps the replaceable binary under a stable, windowless Task Scheduler action (-H windowsgui).
 func RunSupervisor() {
 	logDir := ""
 	if len(os.Args) > 1 {

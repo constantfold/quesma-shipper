@@ -27,7 +27,7 @@ type Info struct {
 	OS        string
 	Arch      string
 
-	// Release reports a corroborated release stamp; it gates self-update, so a build that cannot prove which release it is stays put.
+	// Release reports a corroborated release stamp; self-update requires it, so a build that cannot prove which release it is stays put.
 	Release bool
 }
 

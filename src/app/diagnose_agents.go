@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
-	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 const sidecarFamily = "project-map"
@@ -66,27 +66,27 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 			continue
 		}
 		switch d.Health {
-		case sources.Collected:
+		case formats.Collected:
 			collecting = true
 			files += len(d.Candidates)
 			parts = append(parts, part)
 			if d.AgentVersion != "" {
 				sniffed = d.AgentVersion
 			}
-			if d.Sniff != "" && d.Sniff != sources.SniffOK {
+			if d.Sniff != "" && d.Sniff != formats.SniffOK {
 				issues = append(issues, warn(part, "unexpected format",
 					"content does not look like the expected format",
 					"the agent may have changed formats, `quesma-shipper preview` shows what would ship"))
 			}
-		case sources.AgentAbsent:
+		case formats.AgentAbsent:
 			absent++
-		case sources.RootPresentNoMatch:
+		case formats.RootPresentNoMatch:
 			if d.Ignored {
 				disabled = append(disabled, Row{Sev: SevDim, Label: "  " + part, Detail: d.Reason})
 				break
 			}
 			noMatch = append(noMatch, src)
-		case sources.MatchPresentUnreadable:
+		case formats.MatchPresentUnreadable:
 			issues = append(issues, warn(part, "unreadable",
 				"found but unreadable, "+d.Reason,
 				"fix permissions on the store"))
@@ -95,7 +95,7 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 				string(d.Health)+", "+d.Reason, ""))
 		}
 
-		if d.Unreadable > 0 && d.Health != sources.MatchPresentUnreadable {
+		if d.Unreadable > 0 && d.Health != formats.MatchPresentUnreadable {
 			issues = append(issues, warn(part, "some files unreadable",
 				fmt.Sprintf("%d files could not be read - %s", d.Unreadable, d.UnreadableReason),
 				"first failing path: "+d.UnreadableExample))
@@ -172,7 +172,7 @@ func claudeHeadline(probes []sourceProbe, verbose bool) string {
 		if pr.src.Family != "claude-code" {
 			return ""
 		}
-		if !pr.src.Enabled || pr.err != nil || pr.d.Health != sources.Collected {
+		if !pr.src.Enabled || pr.err != nil || pr.d.Health != formats.Collected {
 			continue
 		}
 		if pr.src.ID != "claude-code-transcripts" {

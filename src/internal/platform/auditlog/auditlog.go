@@ -50,8 +50,7 @@ type Entry struct {
 	ObjectKey     string `json:"object_key,omitempty"`
 	ConfigVersion int    `json:"config_version,omitempty"`
 
-	// Reason explains a skip, a park, a failure or a rejection, and marks a shipped entry that sent
-	// no bytes because the control plane answered that the archive already held the object.
+	// Reason explains a skip, park, failure or rejection, or a shipped entry the archive already held.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -62,8 +61,7 @@ type Log struct {
 	runID string
 }
 
-// SetRunID makes every later append carry the process's run id, correlating audit entries with
-// the crash journal and the heartbeat.
+// SetRunID correlates later entries with the crash journal and the heartbeat.
 func (l *Log) SetRunID(id string) { l.runID = id }
 
 // Open prepares the log. The directory is created if needed.

@@ -11,8 +11,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// CompiledDeny is the floor for paths, overridable by no layer: a config whose include globs reach one of these is
-// refused, not applied. Matched against expanded, symlink-resolved absolute paths, never against the glob template.
+// CompiledDeny is the path floor no layer overrides, matched against expanded, symlink-resolved paths, never glob templates.
 var CompiledDeny = []string{
 	// Cloud and SSH credential stores.
 	"~/.aws/**", "~/.ssh/**", "~/.gnupg/**", "~/.kube/**", "~/.azure/**", "~/.docker/config.json",
@@ -101,8 +100,7 @@ func (d *List) CheckRoot(root string) error {
 	return nil
 }
 
-// CheckIncludes refuses a config whose include globs actually reach a denied file on this machine now. Glob
-// subsumption is deliberately not computed: the read-time Match call stays the authority.
+// CheckIncludes refuses include globs that reach a denied file here now; glob subsumption is not computed, read-time Match decides.
 func (d *List) CheckIncludes(root string, includes []string) error {
 	fsys := os.DirFS(root)
 	for _, glob := range includes {
@@ -122,8 +120,7 @@ func (d *List) CheckIncludes(root string, includes []string) error {
 	return nil
 }
 
-// normalize converts a path to forward slashes and, on Windows, to lower case: doublestar matching is
-// slash-separated and case-sensitive.
+// normalize slashes (and on Windows lower-cases) a path, since doublestar matching is slash-separated and case-sensitive.
 func normalize(p string) string {
 	p = filepath.ToSlash(filepath.Clean(p))
 	if runtime.GOOS == "windows" {

@@ -46,8 +46,7 @@ func Clear(stateDir string) error {
 	return nil
 }
 
-// Read fails closed: a flag that exists but cannot be parsed reads as paused. A flag past its
-// end reads as not paused; the file stays until the next Set or Clear.
+// Read fails closed: an unparseable flag reads as paused, and one past its end as not paused.
 func Read(stateDir string) State {
 	raw, _, err := ReadWhole(filepath.Join(stateDir, File), 64<<10)
 	if err != nil {

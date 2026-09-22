@@ -17,7 +17,7 @@ quesma-shipper/
     cmd/quesma-shipper/   main
     app/                  the facade: resolve config into a run, flush it — the one public package
     packaging/            install, update, service lifecycle; thin current-OS dispatch
-      common/             TUF verification, re-exec, shared service types and run markers
+      common/             TUF verification, re-exec, shared service types
       macos/              app/pkg assets, launchd, app-bundle update and removal
       linux/              systemd user service
       windows/            Inno Setup assets and per-user Task Scheduler integration
@@ -110,7 +110,7 @@ would compile, so the table is the reference for what direction is intended.
 | `src/internal/transforms/cursorjoin` | `src/internal/sources/sqliteread`, `src/internal/transforms` |
 | `src/internal/transforms/packs` | — |
 | `src/internal/upload` | — |
-| `src/packaging` | `src/packaging/common`, and the current OS package (`src/packaging/macos` or `src/packaging/linux`) |
+| `src/packaging` | `src/internal/platform`, `src/packaging/common`, and the current OS package (`src/packaging/macos` or `src/packaging/linux`) |
 | `src/packaging/common` | `src/internal/platform` |
 | `src/packaging/macos` | `src/internal/platform`, `src/packaging/common` |
 | `src/packaging/linux` | `src/internal/platform`, `src/packaging/common` |

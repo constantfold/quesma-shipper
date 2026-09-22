@@ -8,17 +8,15 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
 
-type ServiceSpec = common.Spec
-
 var ErrCronManual = common.ErrCronManual
 
 // NewServiceSpec describes an agent run from this binary, resolved behind any installed symlink.
-func NewServiceSpec(stateDir string, stopTimeout, tick time.Duration) (ServiceSpec, error) {
+func NewServiceSpec(stateDir string, stopTimeout, tick time.Duration) (common.Spec, error) {
 	exe, err := common.CurrentExecutable()
 	if err != nil {
-		return ServiceSpec{}, err
+		return common.Spec{}, err
 	}
 	return common.ServiceSpecFor(exe, stateDir, stopTimeout, tick)
 }
 
-func CronHint(spec ServiceSpec) string { return common.CronHint(spec) }
+func CronHint(spec common.Spec) string { return common.CronHint(spec) }

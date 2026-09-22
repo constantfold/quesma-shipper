@@ -21,8 +21,7 @@ func keyA() []byte {
 	return k
 }
 
-// Keyed, not a bare hash (a plaintext path hash in a listable key is an oracle), fixed length
-// however long the path, and stable, so a re-ship after state loss is an overwrite.
+// Keyed, fixed length however long the path, and stable, so a re-ship after state loss is an overwrite.
 func TestMirrorName(t *testing.T) {
 	const p = "projects/proj/a.jsonl"
 	assert.NotEqual(t, formats.MirrorName(bytes.Repeat([]byte{0xff}, formats.NameKeySize), p), formats.MirrorName(keyA(), p))
@@ -60,8 +59,7 @@ func TestSegmentEncodingIsInjective(t *testing.T) {
 	}
 }
 
-// Keys are identity-first and one depth for every deployment, with state objects under the
-// same install prefix, so erasure is one sweep; nothing about the path is legible in the leaf.
+// Keys are identity-first at one depth, state included, so erasure is one sweep; the leaf reveals nothing of the path.
 func TestKeyLayout(t *testing.T) {
 	got, err := formats.MirrorKey("default", install, "claude-code-transcripts", keyA(), "projects/proj/a.jsonl")
 	require.NoError(t, err)

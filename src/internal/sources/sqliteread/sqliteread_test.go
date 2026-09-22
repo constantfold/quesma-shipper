@@ -57,7 +57,7 @@ func read(t *testing.T, path string, opts ...func(*sqliteread.Options)) sqlitere
 	return res
 }
 
-// One store pins scope, exact values, ordering, and the rule against writes beside the source.
+// One store checks scope, exact values, ordering, and the rule against writes beside the source.
 func TestDeclaredReadContract(t *testing.T) {
 	const verbatim = `{"z":1,"a":2,"m":{"y":3,"b":4}}`
 	path := newStore(t, map[string]string{
@@ -134,8 +134,7 @@ func TestTheAuthNamespaceExceptionsAreExactKeysOnly(t *testing.T) {
 func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 	const token = "SUPER-SECRET-CURSOR-SESSION-TOKEN"
 	path := newStore(t, map[string]string{
-		// cursorAuth/ lands in ItemTable, CursorAuth/ in the declared table: the filter must pass
-		// neither by table split nor by one spelling.
+		// One auth key per table and spelling: neither the table split nor the case may let one through.
 		"cursorAuth/accessToken": token,
 		"CursorAuth/cased":       token,
 		// The encryption-key fields, nested where they really appear.
@@ -154,8 +153,6 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 		{Key: "bubbleId:c1:b1", Value: []byte(`{"nested":{},"text":"hi","type":1}`)},
 		{Key: "composerData:c1", Value: []byte(`{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`)},
 	}, res.Rows)
-	assert.Equal(t, 1, res.DeniedKeys, "CursorAuth/cased, the one auth key in the declared table")
-	assert.Equal(t, 3, res.StrippedFields)
 }
 
 // Unreadable databases fail through every fallback; a live database must also refuse raw copying.
@@ -233,8 +230,7 @@ func listDir(t *testing.T, dir string) []string {
 	return out
 }
 
-// Every read method returns identical row values, which is why hashes come from values and not bytes. Each
-// method leaves the source directory alone; a snapshot replaces crash debris and removes its own copy.
+// Every read method returns identical rows and leaves the source alone; a snapshot replaces crash debris and cleans up.
 func TestEveryReadMethodReturnsIdenticalRowsAndCleansUp(t *testing.T) {
 	path := newStore(t, map[string]string{
 		"composerData:c1": `{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`,

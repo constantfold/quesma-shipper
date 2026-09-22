@@ -58,8 +58,7 @@ func (u Unit) Format(f fmt.State, verb rune) {
 	fmt.Fprint(f, u.String())
 }
 
-// Mint generates a new identity unit and writes it to stateDir, refusing to overwrite an existing
-// one: that would orphan every object the previous unit named and every archive it could decrypt.
+// Mint refuses to overwrite a unit: that would orphan every object it named and every archive it could decrypt.
 func Mint(stateDir string) (*Unit, error) {
 	if err := platform.EnsureDir(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("identity: %w", err)

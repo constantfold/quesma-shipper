@@ -36,13 +36,9 @@ func query(db *sql.DB, o Options) (Result, error) {
 			return Result{}, err
 		}
 		// Applied to every row of every read: auth material lives in the same database as the trajectories.
-		if keyDenied(key) {
-			res.DeniedKeys++
-			continue
+		if !keyDenied(key) {
+			res.Rows = append(res.Rows, Row{Key: key, Value: scrubValue(value)})
 		}
-		cleaned, stripped := scrubValue(value)
-		res.StrippedFields += stripped
-		res.Rows = append(res.Rows, Row{Key: key, Value: cleaned})
 	}
 	if err := rows.Err(); err != nil {
 		return Result{}, err

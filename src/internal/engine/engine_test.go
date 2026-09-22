@@ -13,7 +13,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
-	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
 // Every collection preserves graph identifiers, sealed integrity, classification and install ownership.
@@ -86,6 +85,6 @@ func TestHealthIsReportedPerSource(t *testing.T) {
 
 	rep := f.run()
 	require.Lenf(t, rep.Sources, 1, "expected 1 source, got %d", len(rep.Sources))
-	assert.Equalf(t, sources.RootPresentNoMatch, rep.Sources[0].Health, "health %q, want root_present_no_match", rep.Sources[0].Health)
+	assert.Equalf(t, formats.RootPresentNoMatch, rep.Sources[0].Health, "health %q, want root_present_no_match", rep.Sources[0].Health)
 	assert.NotEqual(t, "", rep.Sources[0].Reason, "a non-collected health state must carry a reason")
 }

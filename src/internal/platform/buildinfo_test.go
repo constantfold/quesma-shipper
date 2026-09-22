@@ -27,7 +27,7 @@ func TestTheVersionStringIsOneSpelling(t *testing.T) {
 // A release stamp is believed only when the toolchain corroborates it; a stamp that could lie would ship wrong provenance.
 func TestAReleaseStampMustBeCorroborated(t *testing.T) {
 	rev := "031a7faa8c1652f68ec214225df6657989113a1a"
-	dev := Info{Version: "0.0.0-031a7faa8c16", Revision: rev}
+	dev := Info{Version: "0.0.0-031a7faa8c16", Revision: rev, Time: "2026-08-06T08:31:31Z", GoVersion: "go1.25.0", OS: "linux", Arch: "amd64"}
 
 	for _, tc := range []struct {
 		name        string
@@ -50,16 +50,12 @@ func TestAReleaseStampMustBeCorroborated(t *testing.T) {
 			got := applyStamp(tc.in, tc.stamp)
 			assert.Equalf(t, tc.wantVersion, got.String(), "String() = %q, want %q", got.String(), tc.wantVersion)
 			assert.Equalf(t, tc.wantRelease, got.Release, "Release = %v, want %v", got.Release, tc.wantRelease)
+			// The stamp must not erase revision, commit time and platform: they are what corroborated it.
+			untouched := tc.in
+			untouched.Version, untouched.Release = got.Version, got.Release
+			assert.Equal(t, untouched, got)
 		})
 	}
-}
-
-// The stamp must not erase revision, commit time and platform: they are what corroborated it.
-func TestAnHonoredStampKeepsTheToolchainRecord(t *testing.T) {
-	in := Info{Version: "0.0.0-031a7faa8c16", Revision: "031a7faa8c1652f68ec214225df6657989113a1a",
-		Time: "2026-08-06T08:31:31Z", GoVersion: "go1.25.0", OS: "linux", Arch: "amd64"}
-	got := applyStamp(in, "0.0.1-123.031a7faa8c16")
-	assert.Truef(t, got.Revision == in.Revision && got.Time == in.Time && got.OS == in.OS && got.Arch == in.Arch, "stamp rewrote the toolchain record: %+v", got)
 }
 
 // "unknown" is an acceptable answer; an empty string would reach a manifest as an absent client version.

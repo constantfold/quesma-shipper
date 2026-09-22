@@ -18,8 +18,7 @@ import (
 type Spec = common.Spec
 type Status = common.Status
 
-// unitName is the systemd --user unit. A service, not a timer: the loop owns its own ticker,
-// and a fresh process per tick would contend for the flock and drop the backoff state.
+// unitName is a service, not a timer: a process per tick would contend for the flock and drop backoff state.
 const unitName = "trajectory-shipper.service"
 
 func systemdPath(home string) string {
@@ -40,11 +39,9 @@ func Available() bool {
 	return true
 }
 
-// renderUnit builds the service unit: Restart=always so a death is not a stop, and
-// WantedBy=default.target so it starts on login.
+// renderUnit: Restart=always so a death is not a stop, WantedBy=default.target so it starts on login.
 func renderUnit(spec Spec) string {
-	// Quoted per argument: systemd splits ExecStart on whitespace, so a path with a space would
-	// become two arguments. The escaping it wants is C-style inside double quotes.
+	// Quoted per argument: systemd splits ExecStart on whitespace.
 	parts := make([]string, 0, len(spec.Args)+1)
 	for _, a := range append([]string{spec.Executable}, spec.Args...) {
 		parts = append(parts, systemdQuote(a))
@@ -109,8 +106,7 @@ func InstallService(spec Spec) error {
 	return nil
 }
 
-// lingerHint is the session-less-box caveat: without linger a --user service stops with the
-// last session and never starts at boot. A hint, not enabled here; linger is the owner's call.
+// lingerHint warns that without linger a --user service stops with the last session; enabling it is the owner's call.
 func lingerHint(ctx context.Context) string {
 	user := cmp.Or(os.Getenv("USER"), "$USER")
 	out, err := exec.CommandContext(ctx, "loginctl", "show-user", user, "--property=Linger").Output()
@@ -196,8 +192,7 @@ func RestartCommand() string {
 	return "systemctl --user restart " + unitName
 }
 
-// systemdQuote renders one ExecStart argument, bare when plainly safe. The risk is the percent
-// sign: systemd expands specifiers in unit files, so a path containing one has to double it.
+// systemdQuote C-quotes an unsafe argument and doubles "%", which systemd expands as a specifier.
 func systemdQuote(a string) string {
 	if a != "" && strings.IndexFunc(a, func(r rune) bool {
 		return !(r == '/' || r == '.' || r == '-' || r == '_' ||

@@ -51,8 +51,7 @@ func gitRepo(t *testing.T, home, rel string) string {
 	return dir
 }
 
-// writeWorktree lays out a linked worktree the way git does: the pointer file in the
-// worktree, the per-worktree admin dir under the main .git, and commondir pointing back.
+// writeWorktree lays out a linked worktree as git does: pointer file, admin dir under the main .git, commondir.
 func writeWorktree(t *testing.T, main, at, name string) string {
 	t.Helper()
 	adminDir := filepath.Join(main, ".git", "worktrees", name)
@@ -67,9 +66,7 @@ func TestRepoNameIsTheLastSegment(t *testing.T) {
 	assert.Empty(t, RepoName(""))
 }
 
-// A marker in the repository drops its sessions; a sibling with no cwd inherits its project
-// directory's answer; an unmarked repository, an unattributable file and a separate Codex
-// rollout in the same date directory ship.
+// A marker drops its repository's sessions, and a sibling with no cwd inherits its project directory's answer.
 func TestMarkerDropsARepositorysSessions(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	acme := repoDir(t, home, "work/acme", true)
@@ -116,8 +113,7 @@ func TestAMarkerCreatedLaterIsSeen(t *testing.T) {
 	assert.NoError(t, f.Track(acme))
 }
 
-// A session run in a worktree belongs to the repository's main checkout, whether the filter
-// comes from the test or the catalog; a cwd outside git, or with no git rules, keeps its own directory.
+// A worktree session belongs to the main checkout; a cwd outside git, or with no git rules, keeps its own directory.
 func TestRepoDirIsTheMainWorktree(t *testing.T) {
 	catalog, err := Load()
 	require.NoError(t, err)
@@ -214,9 +210,7 @@ func TestACheckoutAtHomeDoesNotClaimEverything(t *testing.T) {
 	}
 }
 
-// A source emptied by markers says so, and is not the drift state, whether the session ran in
-// the repository or one of its worktrees; an oversized file in an untracked repository is not
-// reported by name either.
+// A source emptied by markers says so instead of reporting drift, and names no oversized file of an untracked repository.
 func TestDiscoveryDistinguishesIgnoredFromDrift(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	repo := gitRepo(t, home, "work/acme")

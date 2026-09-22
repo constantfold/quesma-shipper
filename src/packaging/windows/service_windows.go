@@ -32,8 +32,7 @@ func InstallService(spec Spec) error {
 	if err := verifyInstallDir(filepath.Dir(spec.Executable), current.Uid); err != nil {
 		return err
 	}
-	// Retired before the new task is registered: the two would otherwise both be live, and the
-	// second shipper would spend its life failing to take the state lock.
+	// Retired first, or both tasks would be live and the second would never take the state lock.
 	if err := retireLegacyTask(current.Uid); err != nil {
 		return err
 	}
@@ -64,13 +63,13 @@ func InstallService(spec Spec) error {
 }
 
 func UninstallService() error {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return err
 	}
-	name := taskName(sid)
+	name := taskName(current.Uid)
 	// An install that predates per-user names is removed too, or uninstalling would leave it live.
-	legacyErr := retireLegacyTask(sid)
+	legacyErr := retireLegacyTask(current.Uid)
 
 	_, _ = schtasks("/End", "/TN", name)
 	out, err := schtasks("/Delete", "/TN", name, "/F")
@@ -83,13 +82,12 @@ func UninstallService() error {
 	}
 	if verifyErr != nil {
 		return fmt.Errorf("%w: %s (could not verify absence: %v)",
-			ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
+			common.ErrTaskDeleteUnverified, commandError(err, out), verifyErr)
 	}
 	return fmt.Errorf("supervise: delete scheduled task: %s", commandError(err, out))
 }
 
-// ownLegacyTask reads the pre-rename task when this user owns it. A failure to read it is not an
-// error: it is either absent, or another user's and therefore invisible to us.
+// ownLegacyTask reads the pre-rename task if this user owns it; unreadable means absent or another user's.
 func ownLegacyTask(ctx context.Context, userSID string) ([]byte, bool) {
 	out, err := schtasksContext(ctx, "/Query", "/TN", legacyTaskName, "/XML")
 	if err != nil {
@@ -122,17 +120,7 @@ func currentUser() (*user.User, error) {
 	return current, nil
 }
 
-func currentUserSID() (string, error) {
-	current, err := currentUser()
-	if err != nil {
-		return "", err
-	}
-	return current.Uid, nil
-}
-
-// queryOwnTask prefers this user's own task and falls back to the pre-rename one, so an install
-// made before the rename still reports as installed until its next upgrade migrates it. The
-// per-user name comes back even when nothing is registered: it is what a fresh install will use.
+// queryOwnTask falls back to this user's pre-rename task, and returns the per-user name even when nothing is registered.
 func queryOwnTask(ctx context.Context, userSID string) (string, []byte, error) {
 	name := taskName(userSID)
 	out, err := schtasksContext(ctx, "/Query", "/TN", name, "/XML")
@@ -145,16 +133,12 @@ func queryOwnTask(ctx context.Context, userSID string) (string, []byte, error) {
 	return name, out, err
 }
 
-// ErrTaskDeleteUnverified marks a delete whose outcome could not be confirmed either way. Removal
-// must not be blocked by it: a user who wants the software gone has to be able to get there.
-var ErrTaskDeleteUnverified = errors.New("supervise: delete scheduled task, outcome unverified")
-
 func ServiceState(ctx context.Context) Status {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return Status{Kind: common.KindWindowsTask, Detail: err.Error()}
 	}
-	name, out, err := queryOwnTask(ctx, sid)
+	name, out, err := queryOwnTask(ctx, current.Uid)
 	st := Status{Kind: common.KindWindowsTask, Path: name}
 	if err != nil {
 		exists, verifyErr := taskExists(ctx, name)
@@ -186,11 +170,11 @@ func ServiceState(ctx context.Context) Status {
 }
 
 func RestartService(ctx context.Context) error {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return err
 	}
-	name, _, _ := queryOwnTask(ctx, sid)
+	name, _, _ := queryOwnTask(ctx, current.Uid)
 	_, _ = schtasksContext(ctx, "/End", "/TN", name)
 	out, err := schtasksContext(ctx, "/Run", "/TN", name)
 	if err != nil {
@@ -201,11 +185,11 @@ func RestartService(ctx context.Context) error {
 
 // RestartCommand is a hint printed for the user; the caller drops it when it is empty.
 func RestartCommand() string {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return ""
 	}
-	name, _, _ := queryOwnTask(context.Background(), sid)
+	name, _, _ := queryOwnTask(context.Background(), current.Uid)
 	return `schtasks /Run /TN "` + name + `"`
 }
 
@@ -221,12 +205,6 @@ func RemoveProgram(executable string) (string, error) {
 	return executable, errors.New("this is a portable executable; remove it after this command exits")
 }
 
-func SameProgram(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
-}
-
-func ProgramRemovalDeferred() bool { return true }
-
 func schtasks(args ...string) ([]byte, error) {
 	return exec.Command("schtasks.exe", args...).CombinedOutput()
 }
@@ -235,14 +213,12 @@ func schtasksContext(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "schtasks.exe", args...).CombinedOutput()
 }
 
-// schtasksStdout keeps a machine-readable listing clear of the per-task warnings schtasks writes
-// to stderr when it meets a task it cannot read.
+// schtasksStdout keeps listings clear of the warnings schtasks writes to stderr for tasks it cannot read.
 func schtasksStdout(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "schtasks.exe", args...).Output()
 }
 
-// taskExists enumerates all tasks after a targeted operation failed. A successful enumeration can
-// prove absence without interpreting schtasks' localized text or its catch-all exit code 1.
+// taskExists proves absence by enumeration, without parsing schtasks' localized text or catch-all exit code.
 func taskExists(ctx context.Context, name string) (bool, error) {
 	out, err := schtasksStdout(ctx, "/Query", "/FO", "CSV", "/NH")
 	if err != nil {

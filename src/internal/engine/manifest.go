@@ -27,7 +27,7 @@ func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash strin
 		Client:          o.Client,
 		RunID:           o.RunID,
 		SourceHash:      sourceHash,
-		ShapeSniff:      string(sources.SniffOK),
+		ShapeSniff:      string(formats.SniffOK),
 	}
 	if src.Scrub == nil || *src.Scrub {
 		m.Redaction = &transforms.RedactionSummary{Density: res.Density(), RuleHits: res.RuleHits}

@@ -14,8 +14,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// ProjectRecord is one directory-to-repository mapping. An empty Remote or Project is a legal
-// outcome, since not every session is tied to a repository; GaveUp then explains the gap.
+// ProjectRecord maps one project directory to a repository; GaveUp explains an empty Remote.
 type ProjectRecord struct {
 	At   string `json:"at"`
 	Kind string `json:"kind"`
@@ -32,7 +31,7 @@ type ProjectRecord struct {
 // discoverSidecar records repository mappings before the sessions that reveal them are reaped.
 func discoverSidecar(req Request) (Discovery, error) {
 	src := req.Source
-	d := Discovery{Health: AgentAbsent, Sniff: SniffOK}
+	d := Discovery{Health: formats.AgentAbsent, Sniff: formats.SniffOK}
 
 	probe := src.CWDProbe
 	if probe == nil {
@@ -44,8 +43,7 @@ func discoverSidecar(req Request) (Discovery, error) {
 		now = req.Now()
 	}
 
-	// Inputs are the candidate files of the sources this probe names, one record per project
-	// directory: the mapping is a property of the directory, not of a file.
+	// One record per project directory of the probed sources: the mapping belongs to the directory, not a file.
 	anyInput := false
 	seen := map[string]bool{}
 	var records []ProjectRecord
@@ -107,15 +105,14 @@ func discoverSidecar(req Request) (Discovery, error) {
 		return d, err
 	}
 
-	d.Health = Collected
+	d.Health = formats.Collected
 	d.Candidates = []Candidate{{Path: path, RelPath: name, Size: info.Size(), MTime: info.ModTime().UTC(),
 		Load: fileLoader(path, src.MaxFileBytes)}}
 	d.Reason = fmt.Sprintf("%d project directories mapped", len(records))
 	return d, nil
 }
 
-// projectDirOf takes the agent's encoded project directory out of a relative path. Only a real
-// projects/<encoded-cwd> segment counts: a bogus join key is worse than no record at all.
+// projectDirOf needs a real projects/<encoded-cwd> segment: a bogus join key is worse than no record.
 func projectDirOf(rel string) string {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	for i, seg := range parts {

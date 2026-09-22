@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 const fixtureToken = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
@@ -52,7 +54,7 @@ func sidecarBody(t *testing.T, home string, input, sidecar Resolved) string {
 	t.Helper()
 	d, err := Discover(Request{Source: sidecar, All: []Resolved{input, sidecar}, Deny: New(home), StateDir: t.TempDir(), Username: "jane"})
 	require.NoError(t, err)
-	require.Equal(t, Collected, d.Health, d.Reason)
+	require.Equal(t, formats.Collected, d.Health, d.Reason)
 	require.Len(t, d.Candidates, 1, "one inventory per source")
 	body, err := os.ReadFile(d.Candidates[0].Path)
 	require.NoError(t, err)

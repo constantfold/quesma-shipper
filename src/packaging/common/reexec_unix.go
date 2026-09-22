@@ -7,8 +7,7 @@ import (
 	"syscall"
 )
 
-// ReExec replaces this process with the binary now on disk at this executable's path, keeping argv
-// and the environment; it never returns on success. No loop protection: the caller sets its guard.
+// ReExec execs the binary now at this path with the same argv and environment; the caller guards against loops.
 func ReExec() error {
 	exe, err := os.Executable()
 	if err != nil {

@@ -31,13 +31,13 @@ func TestDiscoveryRowsSeverity(t *testing.T) {
 		wantSev Severity
 		wantFix string // substring of the first row's fix; empty means no fix expected
 	}{
-		{"collected", sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK}, SevOK, ""},
+		{"collected", sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK}, SevOK, ""},
 		{"collected_bad_sniff",
-			sources.Discovery{Health: sources.Collected, Sniff: sources.SniffUnexpectedShape},
+			sources.Discovery{Health: formats.Collected, Sniff: formats.SniffUnexpectedShape},
 			SevWarn, "quesma-shipper preview"},
-		{"agent_absent", sources.Discovery{Health: sources.AgentAbsent, Reason: "no root"}, SevDim, ""},
-		{"moved", sources.Discovery{Health: sources.RootPresentNoMatch, Reason: "root exists"}, SevWarn, "moved"},
-		{"unreadable", sources.Discovery{Health: sources.MatchPresentUnreadable, Reason: "denied"},
+		{"agent_absent", sources.Discovery{Health: formats.AgentAbsent, Reason: "no root"}, SevDim, ""},
+		{"moved", sources.Discovery{Health: formats.RootPresentNoMatch, Reason: "root exists"}, SevWarn, "moved"},
+		{"unreadable", sources.Discovery{Health: formats.MatchPresentUnreadable, Reason: "denied"},
 			SevWarn, "permissions"},
 	}
 	for _, c := range cases {
@@ -55,7 +55,7 @@ func TestDiscoveryRowsSeverity(t *testing.T) {
 func TestDiscoveryRowsLossSubRows(t *testing.T) {
 	src := config.ResolvedSource{Source: sources.Source{ID: "claude"}}
 	rows := discoveryRows(src, sources.Discovery{
-		Health: sources.Collected, Sniff: sources.SniffOK,
+		Health: formats.Collected, Sniff: formats.SniffOK,
 		Unreadable: 2, UnreadableReason: "permission denied", UnreadableExample: "/x/y",
 		Oversize: []sources.Oversize{{RelPath: "big", Size: 200, Limit: 100}},
 	})
@@ -131,10 +131,10 @@ func TestFamilyRows(t *testing.T) {
 	t.Run("healthy multi-source agent is one line", func(t *testing.T) {
 		rows, collecting, files := familyRows("Claude Code", []sourceProbe{
 			probe("claude-code-transcripts", "claude-code", true,
-				sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK,
+				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
 					Candidates: make([]sources.Candidate, 1200)}),
 			probe("claude-code-context", "claude-code", true,
-				sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK,
+				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
 					Candidates: make([]sources.Candidate, 34)}),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, collecting && files == 1234, "collecting=%v files=%d", collecting, files)
@@ -148,7 +148,7 @@ func TestFamilyRows(t *testing.T) {
 	t.Run("headline version tag comes from the sniffed store, not an exec", func(t *testing.T) {
 		rows, _, _ := familyRows("Claude Code", []sourceProbe{
 			probe("claude-code-transcripts", "claude-code", true,
-				sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK,
+				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
 					AgentVersion: "2.1.245", Candidates: make([]sources.Candidate, 3)}),
 		}, familyUpload{}, time.Now(), false)
 		assert.Equalf(t, "2.1.245", rows[0].Tag, "headline tag %q, want the sniffed version 2.1.245", rows[0].Tag)
@@ -157,9 +157,9 @@ func TestFamilyRows(t *testing.T) {
 	t.Run("a sibling source with no files is a note, not a finding", func(t *testing.T) {
 		probes := []sourceProbe{
 			probe("codex-rollouts", "codex", true,
-				sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK}),
+				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK}),
 			probe("codex-rollouts-compressed", "codex", true,
-				sources.Discovery{Health: sources.RootPresentNoMatch, Reason: "nothing matched"}),
+				sources.Discovery{Health: formats.RootPresentNoMatch, Reason: "nothing matched"}),
 		}
 		rows, _, _ := familyRows("Codex", probes, familyUpload{}, time.Now(), false)
 		require.Truef(t, len(rows) == 1 && rows[0].Sev == SevOK, "default view: headline ✓ and nothing else, got %+v", rows)
@@ -168,7 +168,7 @@ func TestFamilyRows(t *testing.T) {
 	})
 
 	t.Run("an agent whose only folder has nothing is a finding that names the folder", func(t *testing.T) {
-		src := probe("codex-rollouts", "codex", true, sources.Discovery{Health: sources.RootPresentNoMatch})
+		src := probe("codex-rollouts", "codex", true, sources.Discovery{Health: formats.RootPresentNoMatch})
 		src.src.Root = "/home/x/.codex/sessions"
 		rows, _, _ := familyRows("Codex", []sourceProbe{src}, familyUpload{}, time.Now(), false)
 		require.Truef(t, len(rows) == 2 && rows[0].Sev == SevWarn && rows[1].Sub, "want a ! headline and one Sub finding, got %+v", rows)
@@ -189,7 +189,7 @@ func TestFamilyRows(t *testing.T) {
 	t.Run("absent agent is one dim line", func(t *testing.T) {
 		rows, collecting, _ := familyRows("Wire-capture proxy", []sourceProbe{
 			probe("wire-proxy-flows", "wire-proxy", true,
-				sources.Discovery{Health: sources.AgentAbsent, Reason: "no root"}),
+				sources.Discovery{Health: formats.AgentAbsent, Reason: "no root"}),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, !collecting && len(rows) == 1 && rows[0].Sev == SevDim, "absence must be one dim row: %+v", rows)
 		assert.Containsf(t, rows[0].Detail, "not installed", "detail %q should say not installed", rows[0].Detail)
@@ -199,7 +199,7 @@ func TestFamilyRows(t *testing.T) {
 // The per-agent upload answer, with failures escalating to a warning.
 func TestFamilyUploadRow(t *testing.T) {
 	probes := []sourceProbe{probe("x", "f", true,
-		sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK, Candidates: make([]sources.Candidate, 5)})}
+		sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK, Candidates: make([]sources.Candidate, 5)})}
 	now := time.Now()
 
 	rows, _, _ := familyRows("F", probes,
@@ -221,7 +221,7 @@ func TestFamilyUploadRow(t *testing.T) {
 func TestClaudeHeadline(t *testing.T) {
 	cand := func(rel string) sources.Candidate { return sources.Candidate{RelPath: rel} }
 	probes := []sourceProbe{
-		probe("claude-code-transcripts", "claude-code", true, sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK,
+		probe("claude-code-transcripts", "claude-code", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
 			Candidates: []sources.Candidate{
 				cand("projects/alpha/a.jsonl"),
 				cand("projects/alpha/b.jsonl"),
@@ -229,7 +229,7 @@ func TestClaudeHeadline(t *testing.T) {
 				cand("projects/beta/c.meta.json"), // join metadata, not a session
 			}}),
 		probe("claude-code-settings", "claude-code", true,
-			sources.Discovery{Health: sources.Collected, Sniff: sources.SniffOK, Candidates: make([]sources.Candidate, 2)}),
+			sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK, Candidates: make([]sources.Candidate, 2)}),
 	}
 	got := claudeHeadline(probes, true)
 	want := "3 sessions in 2 projects, plus settings"

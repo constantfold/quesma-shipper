@@ -11,7 +11,6 @@ import (
 
 	"github.com/QuesmaOrg/quesma-shipper/app"
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
-	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
 func printPreview(out io.Writer, rep formats.Report, env *app.Runtime) {
@@ -56,7 +55,7 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		fmt.Fprintln(out, line)
 	}
 	for _, s := range rep.Sources {
-		if s.Health != sources.Collected {
+		if s.Health != formats.Collected {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", s.SourceID, s.Health, s.Reason)
 		}
 	}
@@ -71,7 +70,7 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 	}
 	for _, s := range rep.Sources {
-		if s.Unreadable > 0 && s.Health == sources.Collected {
+		if s.Unreadable > 0 && s.Health == formats.Collected {
 			fmt.Fprintf(w, "  %s\t%d %s not readable during discovery, skipped\n",
 				s.SourceID, s.Unreadable, app.Plural(s.Unreadable, "path"))
 			fmt.Fprintf(w, "  \t%s\n", s.UnreadableReason)

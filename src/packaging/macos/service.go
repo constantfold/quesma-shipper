@@ -30,8 +30,7 @@ func installedExecutable(home string) string {
 	return filepath.Join(installedApp(home), "Contents", "MacOS", executableName)
 }
 
-// renderPlist builds the LaunchAgent. KeepAlive and RunAtLoad together are what survive both a
-// dying process and a reboot; ProcessType Background keeps a poller off the interactive share.
+// renderPlist: KeepAlive and RunAtLoad survive a dying process and a reboot; Background keeps off the interactive share.
 func renderPlist(spec Spec) string {
 	args := append([]string{spec.Executable}, spec.Args...)
 	var argXML strings.Builder
@@ -157,8 +156,7 @@ func checkInstallOwner(exe, plist string) error {
 	return nil
 }
 
-// supervise registers exe as the LaunchAgent with the default state directory: packaging cannot
-// import the config layer, and the Installer environment carries no override.
+// supervise uses the default state directory: packaging cannot import config, and Installer carries no override.
 func supervise(exe, home string) error {
 	stateDir := filepath.Join(home, ".local", "state", "trajectory-shipper")
 	spec, err := common.ServiceSpecFor(exe, stateDir, 0, 0)
