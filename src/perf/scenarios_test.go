@@ -69,9 +69,7 @@ func backlogSync(t *testing.T) (*world, int, childObservation) {
 	w := stageWorld(t)
 	files := stageCorpus(t, w)
 	obs := w.mustSync(t)
-	if got := summary(t, obs.Output)["shipped"]; got < files {
-		t.Fatalf("the backlog run shipped %d of %d files", got, files)
-	}
+	require.GreaterOrEqual(t, summary(t, obs.Output)["shipped"], files, "the backlog run shipped too few files")
 	return w, files, obs
 }
 
@@ -91,10 +89,7 @@ func assertOverlapsRoundTrips(t *testing.T, files int, rtt, baseline, shaped tim
 	t.Logf("backlog %d files: unshaped %v, shaped at %v rtt %v, added %v (bound %v, overlap %.1fx on a serial %v)",
 		files, baseline.Round(time.Millisecond), rtt, shaped.Round(time.Millisecond),
 		added.Round(time.Millisecond), bound, float64(serial)/float64(max(added, time.Millisecond)), serial)
-	if added >= bound {
-		t.Errorf("%v of latency on %d files added %v, over the %v bound: "+
-			"the run is paying round trips one at a time", rtt, files, added, bound)
-	}
+	assert.Lessf(t, added, bound, "%v of latency on %d files: the run is paying round trips one at a time", rtt, files)
 }
 
 // A sync with nothing to do still fetches config and writes sidecars, so the claims are ratios.
@@ -102,16 +97,8 @@ func assertSteadyState(t *testing.T, files, unchanged int, moved, backlogBytes i
 	t.Helper()
 	t.Logf("steady state: backlog %v / %d bytes, second run %v / %d bytes",
 		backlogElapsed.Round(time.Millisecond), backlogBytes, elapsed.Round(time.Millisecond), moved)
-	if unchanged < files {
-		t.Errorf("the second run called %d files unchanged, want at least %d: "+
-			"the pre-filter is opening files it does not need to", unchanged, files)
-	}
-	if moved*20 >= backlogBytes {
-		t.Errorf("the second run moved %d bytes against the backlog's %d, over a twentieth: "+
-			"an unchanged machine is still talking to the store", moved, backlogBytes)
-	}
-	if elapsed*3 >= backlogElapsed {
-		t.Errorf("the second run took %v against the backlog's %v, over a third: "+
-			"discovery is costing what shipping cost", elapsed, backlogElapsed)
-	}
+	assert.GreaterOrEqualf(t, unchanged, files, "files the second run called unchanged: the pre-filter is opening files it does not need to")
+	assert.Lessf(t, moved*20, backlogBytes, "twenty times the second run's bytes against the backlog's: "+
+		"an unchanged machine is still talking to the store")
+	assert.Lessf(t, elapsed*3, backlogElapsed, "three times the second run against the backlog: discovery is costing what shipping cost")
 }

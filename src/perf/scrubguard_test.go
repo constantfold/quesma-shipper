@@ -83,9 +83,7 @@ func assertRuleHits(t *testing.T, w *world, session string, want map[string]int)
 			File     string         `json:"file"`
 			RuleHits map[string]int `json:"rule_hits"`
 		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Fatalf("audit log line is not JSON: %v", err)
-		}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry), "audit log line is not JSON")
 		if entry.Decision != "shipped" || !strings.HasSuffix(entry.File, session+".jsonl") {
 			continue
 		}
@@ -94,8 +92,8 @@ func assertRuleHits(t *testing.T, w *world, session string, want map[string]int)
 			got[rule] += n
 		}
 	}
-	require.Falsef(t, !found, "no shipped audit entry for %s.jsonl: the ledger this gate reads is not the run's", session)
+	require.Truef(t, found, "no shipped audit entry for %s.jsonl: the ledger this gate reads is not the run's", session)
 	for rule, n := range want {
-		assert.Falsef(t, got[rule] != n, "rule %q recorded %d hits, want %d (whole ledger for this file: %v)", rule, got[rule], n, got)
+		assert.Equalf(t, n, got[rule], "rule %q hits (whole ledger for this file: %v)", rule, got)
 	}
 }

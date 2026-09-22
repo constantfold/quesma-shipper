@@ -182,11 +182,7 @@ func shipperBinary(t *testing.T) string {
 }
 
 // Package level, so there is no t.TempDir to do it: every run would otherwise leak the binary.
-func removeBinaries() {
-	if buildDir != "" {
-		_ = os.RemoveAll(buildDir)
-	}
-}
+func removeBinaries() { _ = os.RemoveAll(buildDir) }
 
 // What this world tells the child, and nothing inherited: a launcher such as sudo resets the rest.
 func (w *world) childVars() []string {
@@ -216,7 +212,7 @@ func (w *world) childEnv() []string {
 func (w *world) mustSync(t *testing.T) childObservation {
 	t.Helper()
 	obs := w.observedSync(t)
-	require.Falsef(t, obs.Err != nil, "quesma-shipper run --once: %v\n%s", obs.Err, obs.Output)
+	require.NoErrorf(t, obs.Err, "quesma-shipper run --once:\n%s", obs.Output)
 	return obs
 }
 

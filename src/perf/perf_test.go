@@ -246,9 +246,7 @@ func withLatency(t *testing.T, rtt time.Duration) {
 	require.NoError(t, err, "probe the shaped link")
 	resp.Body.Close()
 	elapsed := time.Since(start)
-	if elapsed < rtt*3/4 {
-		t.Fatalf("a round trip through the proxy took %v with %v of latency configured; "+
-			"the toxic is not on the wire and every timing below would be meaningless", elapsed, rtt)
-	}
+	require.GreaterOrEqualf(t, elapsed, rtt*3/4, "a round trip through the proxy with %v of latency configured; "+
+		"the toxic is not on the wire and every timing below would be meaningless", rtt)
 	t.Logf("shaping live: %v round trip at %v configured rtt", elapsed.Round(time.Millisecond), rtt)
 }
