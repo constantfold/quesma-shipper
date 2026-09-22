@@ -3,11 +3,10 @@
 [![version](https://img.shields.io/badge/version-0.0.3-blue)](#install)
 
 Quesma Shipper collects the session files and related artifacts that AI coding agents write on a
-developer machine. See [What is collected](#what-is-collected). It removes secrets and personal
-data from each file, encrypts the file with
-[age](https://age-encryption.org/), and uploads the ciphertext to your organisation's object
-storage. It runs in the background. It is written in Go and ships as one static binary. A central
-control plane manages every install.
+developer machine ([what is collected](#what-is-collected)). It removes secrets and personal data
+from each file, encrypts the file with [age](https://age-encryption.org/), and uploads the
+ciphertext to your organisation's object storage. It runs in the background as one static Go
+binary, and a central control plane manages every install.
 
 Supported agents: Claude Code, Codex, Cursor.
 
@@ -18,16 +17,14 @@ service), Windows 10 1809 or newer (per-user installer, scheduled task).
 
 Every installer below is per-user and needs no administrator rights. Released builds, Homebrew
 included, keep themselves current from the signed [TUF](https://theupdateframework.io/) update
-channel; run `quesma-shipper update` to update immediately. The endpoints and their trust boundary
-are described in [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md).
+channel; run `quesma-shipper update` to update immediately. [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md)
+describes the endpoints and their trust boundary.
 
 | Platform | Download |
 |---|---|
 | macOS 13+ | [quesma-shipper-macos-universal.pkg](https://updates.quesma.dev/download/quesma-shipper-macos-universal.pkg), or with Homebrew `brew install --cask quesmaorg/tap/quesma-shipper` |
 | Windows 10 1809+ | [QuesmaShipperSetup-amd64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-amd64.exe) for x64, [QuesmaShipperSetup-arm64.exe](https://updates.quesma.dev/download/QuesmaShipperSetup-arm64.exe) for Arm |
 | Linux | `curl -fsSLO https://raw.githubusercontent.com/QuesmaOrg/quesma-shipper/main/src/packaging/linux/install.sh && sh install.sh` |
-
-Collection, scrubbing, and preview work straight away. Uploading needs [enrollment](#enroll).
 
 **macOS.** The signed `.pkg` installs `Quesma Shipper.app` for the current user and registers a
 launchd agent. The Homebrew cask puts the command on your Homebrew `PATH` and starts the same
@@ -46,24 +43,22 @@ service. Plain binaries are also available for
 **Windows.** Run the setup as your normal user. It installs the command under `%LOCALAPPDATA%`,
 adds it to your user `PATH`, and registers a scheduled task that starts immediately and at login.
 Re-running setup repairs that integration without changing enrollment. Release signing is
-temporarily disabled while the publisher identity is validated, so Microsoft Defender SmartScreen
-may warn about the download, and managed devices whose application-control policy requires a
-trusted publisher may block it. The raw `quesma-shipper-windows-<arch>.exe` files remain available
-for portable use and are the payloads the self-updater installs; a portable copy has no scheduled
-task or uninstaller.
+temporarily disabled while the publisher identity is validated, so SmartScreen may warn about the
+download and application-control policies that require a trusted publisher may block it. The raw
+`quesma-shipper-windows-<arch>.exe` files are the payloads the self-updater installs; run
+portably, they have no scheduled task or uninstaller.
 
 ## Status
 
 The project is pre-1.0. The wire protocol, the configuration format, and the object naming are
-versioned and pinned by tests. They can still change between minor releases.
+versioned and tested, but can still change between minor releases.
 
 <!-- TODO(control-plane-oss): link the control-plane repository here.  https://github.com/QuesmaOrg/quesma-shipper/issues/1 -->
-The shipper needs a control plane to send data. The control plane is not part of this repository
-and is not published yet. Without a control plane the shipper runs in local development mode.
-Collection, scrubbing, and preview work. Upload is disabled.
+Uploading needs a control plane, which is not part of this repository and is not published yet.
+Without one the shipper runs in local development mode: collection, scrubbing, and preview work;
+upload is disabled.
 
-`trajectory-shipper` remains the wire identifier and on-disk configuration/state namespace.
-Those protocol-facing names are separate from the user-facing Quesma Shipper package and command.
+`trajectory-shipper` remains the wire identifier and the on-disk configuration and state namespace.
 
 ## How it works
 
@@ -89,10 +84,10 @@ agent session files ──► discover ──► detect change ──► read �
 - **Update.** Release builds replace themselves when the TUF repository has a newer signed
   release. Development builds do not self-update.
 
-The design rules are in [CONSTITUTION.md](CONSTITUTION.md). The code layout is in
+The design rules are in [CONSTITUTION.md](CONSTITUTION.md), the code layout in
 [ARCHITECTURE.md](ARCHITECTURE.md). The wire contract is the public
-[shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol) module. This repository imports its schemas and
-fixtures. Protocol changes are reviewed and released there.
+[shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol) module, whose schemas and fixtures
+this repository imports; protocol changes are reviewed and released there.
 
 ## What is collected
 
@@ -129,24 +124,16 @@ the data they need from these stores:
 
 Everything derived this way passes through the scrub stage like any other file.
 
-`quesma-shipper tracking` shows what is collected on this machine, per agent and repository.
-`quesma-shipper preview` shows what the next run would send, after scrubbing, without sending it.
-
 ## Enroll
 
-Every new shipper must be enrolled with the control plane selected by your administrator. The
-command is the same on every platform:
+Enroll every new shipper with the control plane your administrator selected, on any platform:
 
 ```sh
 quesma-shipper login <enrollment-token> --server https://cp.example.com
 ```
 
-To run the pipeline without a control plane:
-
-```sh
-bin/quesma-shipper local-dev      # create a local identity and state directory
-bin/quesma-shipper preview        # show what would be collected and how it would be scrubbed
-```
+Without a control plane, `quesma-shipper local-dev` creates a local identity and state directory,
+and `quesma-shipper preview` shows what would be collected and how it would be scrubbed.
 
 ## Usage
 
@@ -180,10 +167,9 @@ Configuration is resolved from four layers, in this order: compiled defaults, th
 the user file, the document served by the control plane. `quesma-shipper config --with-provenance` prints
 each effective value and the layer that set it.
 
-The served document has limited authority. A rulebook in the
-[shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol) module states, field by field, what the control plane
-can change. For example, it can add scrub rule packs. It cannot remove them. It cannot turn off
-scrub or encryption. Contract tests here and in the control plane enforce the rulebook.
+The served document has limited authority: a rulebook in the shipper-protocol module states, field
+by field, what the control plane can change. It can add scrub rule packs but not remove them, and
+it cannot turn off scrub or encryption. Contract tests here and in the control plane enforce it.
 
 File locations. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured.
 
@@ -211,8 +197,7 @@ binary. Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## Build and test
 
-You need Go 1.27 or newer. No other tool is required; `make doctor` lists the optional ones. The
-code layout is described in [ARCHITECTURE.md](ARCHITECTURE.md).
+You need Go 1.27 or newer. No other tool is required; `make doctor` lists the optional ones.
 
 ```sh
 make build       # bin/quesma-shipper
@@ -225,10 +210,9 @@ make perf        # full performance suite, needs Docker
 make help        # every target
 ```
 
-<!-- TODO(control-plane-oss): link the control-plane repository here. https://github.com/QuesmaOrg/quesma-shipper/issues/1 -->
-CI runs `make check` and `make perf-smoke`. `make perf` runs the full performance tier against a
-local MinIO and Toxiproxy. Both perf targets are skipped without Docker. Cross-service tests that
-need the control plane are not part of this repository.
+CI runs `make check` and `make perf-smoke`. Both perf targets run against a local MinIO and
+Toxiproxy and are skipped without Docker. Cross-service tests that need the control plane are not
+part of this repository.
 
 Packaging a local build:
 
@@ -240,11 +224,10 @@ Packaging a local build:
 
 ## Versions and releases
 
-`VERSION` contains the reviewed `MAJOR.MINOR.PATCH` release line. Change it only to start a new
+`VERSION` contains the reviewed `MAJOR.MINOR.PATCH` release line; change it only to start a new
 line. `make version-check` validates it. Release builds are stamped
-`<VERSION>-<commit count>.<short sha>` by `scripts/release-version.sh`. `make release-version`
-prints the stamp. Development builds are not stamped. They report their commit and do not
-self-update.
+`<VERSION>-<commit count>.<short sha>` by `scripts/release-version.sh` (`make release-version`
+prints it). Development builds are not stamped, report their commit, and do not self-update.
 
 A push to `main` that touches the shipper builds six platform binaries and the macOS package, signs
 TUF metadata, and publishes to `https://updates.quesma.dev`. It then creates a
@@ -264,9 +247,9 @@ real trajectories, agent databases, logs, or credentials to issues or pull reque
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). `quesma-shipper licenses` prints the
 license and every bundled dependency's license text; the same texts ship inside the macOS app
-bundle and are kept in `src/internal/legal/third_party/` with an inventory in `licenses.csv` that
-covers Linux, macOS, and Windows builds. `make licenses` regenerates them after a dependency change.
-`make check` fails when they are stale or when a dependency is not under a permissive license.
+bundle and live in `src/internal/legal/third_party/`, with a `licenses.csv` inventory covering
+all three platforms. `make licenses` regenerates them; `make check` fails when they are stale or a
+dependency is not permissively licensed.
 
 Quesma, Quesma Shipper, and the Quesma logo are trademarks of Quesma Inc. The license does not
 grant trademark rights. If you distribute a modified build, read [TRADEMARKS.md](TRADEMARKS.md)
