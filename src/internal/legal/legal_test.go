@@ -3,6 +3,7 @@ package legal
 import (
 	"bytes"
 	"os"
+	"path"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestInventoryMatchesTexts(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSpace(string(csv)), "\n") {
 		pkg := strings.SplitN(line, ",", 2)[0]
 		found := false
-		for p := pkg; p != "." && p != ""; p = parent(p) {
+		for p := pkg; p != "." && p != ""; p = path.Dir(p) {
 			if entries, err := FS.ReadDir("third_party/licenses/" + p); err == nil && len(entries) > 0 {
 				found = true
 				break
@@ -41,11 +42,4 @@ func TestInventoryMatchesTexts(t *testing.T) {
 	for _, must := range []string{"Copyright 2026 Quesma Inc.", "Apache License", "The Update Framework Authors", "mousetrap", "Zachary Rice"} {
 		assert.Containsf(t, out.String(), must, "licenses output lacks %q", must)
 	}
-}
-
-func parent(p string) string {
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[:i]
-	}
-	return ""
 }

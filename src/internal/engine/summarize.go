@@ -25,14 +25,9 @@ func summarize(rep *Report) {
 			}
 		}
 	}
-	rep.MedianFileBytes = median(shippedIn)
-}
-
-func median(v []int64) int64 {
-	if len(v) == 0 {
-		return 0
+	rep.MedianFileBytes = 0
+	if len(shippedIn) > 0 {
+		slices.Sort(shippedIn)
+		rep.MedianFileBytes = shippedIn[len(shippedIn)/2]
 	}
-	sorted := slices.Clone(v)
-	slices.Sort(sorted)
-	return sorted[len(sorted)/2]
 }
