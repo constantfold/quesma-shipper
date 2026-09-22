@@ -117,3 +117,9 @@ func TestTheBootGateKeepsItsPromises(t *testing.T) {
 		assert.Equal(t, tc.loud, why != "", "%s: why = %q", tc.name, why)
 	}
 }
+
+func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) {
+	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: true}))
+	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: false}))
+	assert.False(t, restartWanted(packaging.ServiceStatus{}), "no service entry, nothing to restart")
+}

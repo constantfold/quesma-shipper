@@ -54,8 +54,7 @@ func restartService(ctx context.Context, w io.Writer) error {
 	if err := stateCtx.Err(); err != nil {
 		return serviceStateTimeoutError(err)
 	}
-	// Installed, not Loaded: detection can be wrong, and an unloaded or unparseable service still needs restarting.
-	if !state.Installed {
+	if !restartWanted(state) {
 		return nil
 	}
 
@@ -163,3 +162,6 @@ func maybeSelfUpdate(ctx context.Context, build app.Build, autoupdate bool, errO
 		app.RecordUpdateFailure(fmt.Sprintf("updated to %s but the restart failed: %v", res.To, err))
 	}
 }
+
+// restartWanted keys on Installed, not Loaded: detection can be wrong, and an unloaded or unparseable service still needs restarting.
+func restartWanted(state packaging.ServiceStatus) bool { return state.Installed }
