@@ -62,16 +62,16 @@ func (r *slowRecipient) Wrap(fileKey []byte) ([]*age.Stanza, error) {
 type slowPort struct {
 	*fakePort
 	peak
-	gate chan struct{}
+	barrier chan struct{}
 	once sync.Once
 }
 
 func (p *slowPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
 	if p.enter() >= 2 {
-		p.once.Do(func() { close(p.gate) })
+		p.once.Do(func() { close(p.barrier) })
 	} else {
 		select {
-		case <-p.gate:
+		case <-p.barrier:
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -101,7 +101,7 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 	const files = 70
 	f.writeTranscripts("p/u%02d.jsonl", files)
 	f.plan.MaxFilesPerRun = files
-	port := &slowPort{fakePort: f.port, gate: make(chan struct{})}
+	port := &slowPort{fakePort: f.port, barrier: make(chan struct{})}
 
 	rep := f.run(func(o *engine.Options) {
 		o.Workers = 2

@@ -20,7 +20,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
 )
 
-// End-to-end gates: a raw + derived pair through the real loop, the derived object taking the
+// End-to-end checks: a raw + derived pair through the real loop, the derived object taking the
 // same scrub/seal/send path, and the invariant that matters most: NO SQLite rows in the sink.
 
 const enrichConv = "5d1f7b3e-9a2c-4e8f-b1d0-3c4a5b6c7d8e"
