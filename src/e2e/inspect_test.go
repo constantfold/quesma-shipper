@@ -13,15 +13,13 @@ import (
 	seal "github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// object is one sealed object, opened.
 type object struct {
 	Key      string
 	Manifest seal.Manifest
 	Payload  []byte
 }
 
-// The run's own counters ("shipped 4 unchanged 0 ..."). Never count objects in the store instead: a
-// re-shipped file lands under the same key.
+// The run's own counters ("shipped 4 unchanged 0 ..."); a re-shipped file lands under the same store key.
 func summary(t *testing.T, out string) map[string]int {
 	t.Helper()
 	counts := map[string]int{}
@@ -39,8 +37,7 @@ func summary(t *testing.T, out string) map[string]int {
 	return counts
 }
 
-// The source id of everything the run sent, per file; a global "shipped 0" would count the sidecars.
-// The console truncates to 32 per-file lines, so change detection reads the log via shippedFromLog.
+// The source id of every file the run sent. The console truncates to 32 lines, so tests read shippedFromLog.
 func shippedSources(out string) []string {
 	var sources []string
 	for line := range strings.SplitSeq(out, "\n") {

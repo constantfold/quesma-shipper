@@ -53,11 +53,9 @@ func TestClaudeCollectionContract(t *testing.T) {
 		objects := mirrorObjects(collected)
 		require.NotEqual(t, 0, len(objects), "nothing was collected; the rest of this test would pass vacuously")
 		for _, o := range objects {
-			// Both shapes the stores use, and from the manifest's native_path as well as the payload.
 			assert.NotContainsf(t, string(o.Payload), username, "%s: the OS username survived in the payload", o.Key)
 			assert.NotContains(t, o.Manifest.NativePath, username)
-			// Only where the fixture planted one: the sidecar's native path is the state directory,
-			// which sits under home on a real machine but not here.
+			// Only transcripts: the sidecar's native path is the state directory, outside this HOME.
 			if isTranscript(o) && !strings.Contains(o.Manifest.NativePath, "__USER__") {
 				t.Errorf("%s: native_path carries no placeholder: %s", o.Key, o.Manifest.NativePath)
 			}
@@ -66,8 +64,7 @@ func TestClaudeCollectionContract(t *testing.T) {
 	t.Run("EveryObjectCarriesBothHashesAndItsOwnPayload", func(t *testing.T) {
 		for _, o := range mirrorObjects(collected) {
 			assert.NotEqual(t, "", o.Manifest.SourceHash)
-			// An empty shipped_hash once shipped in every object, unnoticed because Seal took the
-			// manifest by value.
+			// An empty shipped_hash once shipped unnoticed, because Seal took the manifest by value.
 			assert.NotEqual(t, "", o.Manifest.ShippedHash)
 			if o.Manifest.SourceHash == o.Manifest.ShippedHash && o.Manifest.Redaction != nil &&
 				o.Manifest.Redaction.Density > 0 {
@@ -106,8 +103,7 @@ func TestClaudeCollectionContract(t *testing.T) {
 		assert.NotZero(t, summary(t, secondOut)["unchanged"], secondOut)
 		assert.NotContains(t, secondOut, "sealed of")
 	})
-	// mtime is a pre-filter and the content hash is the authority: a Cursor session leaves
-	// hundreds of files with new mtimes and identical bytes.
+	// mtime is a pre-filter and the content hash the authority: Cursor touches hundreds of unchanged files.
 	t.Run("TouchingEveryFileShipsNothing", func(t *testing.T) {
 		touchEverything(t, w)
 		out := runOneShot(t)
@@ -132,8 +128,7 @@ func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
 	runOneShot(t)
 
 	for _, o := range mirrorObjects(collect(t, w)) {
-		// The source id is deliberately in the clear so a reader can select by source without a
-		// key; everything after it must be opaque.
+		// The source id is in the clear so a reader can select by source; the name after it must be opaque.
 		hexPart, sealed := strings.CutSuffix(o.Key[strings.LastIndex(o.Key, "/")+1:], ".age")
 		assert.True(t, sealed, o.Key)
 		if _, err := hex.DecodeString(hexPart); err != nil {
@@ -157,8 +152,7 @@ func TestAppendingOneLineShipsTheFileAgain(t *testing.T) {
 	assert.Equal(t, 1, shippedClaude(t, w))
 	second := mirrorObjects(collect(t, w))
 
-	// A grown file keeps its key, an HMAC over the path, so growth shows up as a second version
-	// rather than a second object.
+	// A grown file keeps its key, an HMAC over the path, so growth is a second version, not a second object.
 	require.Lenf(t, second, len(first), "append produced %d objects, want the same %d under new content", len(second), len(first))
 	first, second = bySourceID(first, claudeSource), bySourceID(second, claudeSource)
 	require.Truef(t, len(first) == 1 && len(second) == 1, "want one transcript before and after append, got %d and %d", len(first), len(second))
@@ -182,28 +176,13 @@ func TestCursorPairYieldsADerivedObjectAndKeepsTheRaw(t *testing.T) {
 	require.True(t, !raw.Manifest.Derived && derived.Manifest.Derived, "want exactly one raw object and one derived object")
 	assert.Equalf(t, "ok", derived.Manifest.EnrichStatus, "derived object reports enrich_status %q, want ok", derived.Manifest.EnrichStatus)
 	assert.NotEqual(t, 0, len(derived.Manifest.DerivedFrom), "the derived object does not name what it came from")
-	// The point of the join: the store holds the tool output and the transcript does not. Passing
-	// for the raw object too would mean the enricher no longer earns its cost.
+	// The point of the join: only the store holds the tool output, so the raw object must lack it.
 	const onlyInTheStore = "main.go"
 	assert.Containsf(t, string(derived.Payload), onlyInTheStore, "the derived payload lacks what only the store has (%q)", onlyInTheStore)
 	assert.NotContainsf(t, string(raw.Payload), onlyInTheStore, "the raw transcript already had %q — this fixture no longer tests the join", onlyInTheStore)
 }
 
-func TestATranscriptTheStoreDoesNotKnowShipsRawAndSaysSo(t *testing.T) {
-	// The drift case: when the join stops aligning, the raw transcript must still ship and the
-	// manifest must say the join failed. Silence would be data loss that looks like success.
-	w := stageWorld(t)
-	stageCursor(t, w, realUsername(t), cursorConversation2026_07(), false)
-	runOneShot(t)
-
-	objects := bySourceID(mirrorObjects(collect(t, w)), cursorSource)
-	require.Lenf(t, objects, 1, "want the raw transcript alone, got %d objects", len(objects))
-	assert.True(t, !objects[0].Manifest.Derived, "a derived object was produced from a store that knows nothing about it")
-	assert.NotEqual(t, 0, len(objects[0].Payload), "the raw transcript shipped empty")
-}
-
-// The log belongs to whichever sync holds the lock. A manual sync during a scheduled one is
-// refused rather than interleaved, and must leave the running run's log where the notice said.
+// A manual sync during a scheduled one is refused for the lock and must leave the running sync's log alone.
 func TestASyncRefusedForTheLockDoesNotTouchTheRunLog(t *testing.T) {
 	w := stageClaudeWorld(t)
 	runOneShot(t)

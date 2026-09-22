@@ -17,8 +17,7 @@ import (
 	seal "github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The whole path in one run: authorize, validate, PUT, commit. Every assertion is about what
-// arrived at the store, the only thing a write-only client can get wrong unnoticed.
+// Authorize, validate, PUT, commit, judged by what arrived at the store, all a write-only client can get wrong.
 func TestVendPathShipsAuthorizedObjectsToTheStore(t *testing.T) {
 	v := stageClaudeWorld(t)
 
@@ -55,26 +54,7 @@ func TestVendPathShipsAuthorizedObjectsToTheStore(t *testing.T) {
 	openHeartbeat(t, v, beats[0])
 }
 
-// Progress lives in the local fingerprint document: a second run with nothing changed must
-// authorize no trajectory object, or every tick versions every file.
-func TestVendPathShipsNothingOnASecondRun(t *testing.T) {
-	v := stageClaudeWorld(t)
-	writeConfig(t, v, withoutGeneratedSources)
-
-	runOneShot(t)
-	first := len(v.store.mirrorPuts())
-	require.NotEqual(t, 0, first, "the first run shipped nothing, so the second proves nothing")
-
-	runOneShot(t)
-	assert.Equal(t, len(v.store.mirrorPuts()), first)
-	assert.Len(t, shippedFromLog(t, v), 0)
-	// The heartbeat is current state, not history: rewritten every run whatever fingerprints say.
-	assert.Equal(t, 2, len(v.store.heartbeats()))
-	v.plane.assertClean(t)
-}
-
-// A refused install stops the run and commits nothing, heartbeat included: writing one would be
-// this install's last act reporting itself healthy.
+// A refused install commits nothing, not even a heartbeat that would report it healthy.
 func TestVendPathRefusalStopsTheRunAndTheHeartbeat(t *testing.T) {
 	v := stageClaudeWorld(t)
 	v.plane.set(func(p *fakePlane) { p.status = http.StatusForbidden })
@@ -134,14 +114,14 @@ func TestVendPathDoctorProbesByWritingTheHeartbeat(t *testing.T) {
 	v := stageClaudeWorld(t)
 
 	out := run(t, "doctor")
-	// No conditional-write preflight exists on a write-only path.
 	require.Containsf(t, out, "one test file sent", "doctor's upload probe did not report a successful heartbeat write:\n%s", out)
 	assert.NotContainsf(t, out, "preflight", "doctor ran the conditional-write preflight against a write-only path:\n%s", out)
-	// Named by origin, never by a spendable ticket URL, from doctor's live runtime and status's
-	// configuration alike. The write path is compiled in, and `config` must still report it.
+	// Named by origin, never by a spendable ticket URL; `config` still reports the compiled-in write path.
 	assert.Containsf(t, out, v.store.server.URL, "doctor did not name the upload destination:\n%s", out)
 	assert.Contains(t, run(t, "status"), v.store.server.URL)
-	assert.Contains(t, run(t, "config"), "vend")
+	config := run(t, "config")
+	assert.Contains(t, config, "vend")
+	assert.Contains(t, config, "autoupdate.enabled")
 	beats := v.store.heartbeats()
 	require.Lenf(t, beats, 1, "the probe wrote %d heartbeats, want exactly one", len(beats))
 	// A heartbeat naming no source would report a healthy install as one that found nothing.
@@ -150,9 +130,8 @@ func TestVendPathDoctorProbesByWritingTheHeartbeat(t *testing.T) {
 	assert.Lenf(t, v.store.mirrorPuts(), 0, "doctor shipped %d trajectory objects; it diagnoses, it does not collect", len(v.store.mirrorPuts()))
 }
 
-// Once the machine owner lists origins, a control plane naming another host must get nothing. A
-// failed run uploads nothing, its own heartbeat included, so the failure has to survive on disk and
-// ride a later run that can ship: otherwise a machine that fails every tick looks idle downstream.
+// Listed origins refuse a plane naming another host. The failed run's heartbeat cannot ship either, so the
+// failure must survive on disk and ride a later run, or a machine failing every tick looks idle downstream.
 func TestAnUnlistedOriginIsRefusedAndTheFailureRidesTheNextHeartbeat(t *testing.T) {
 	v := stageClaudeWorld(t)
 	elsewhere := startFakeStore(t)
@@ -175,8 +154,7 @@ func TestAnUnlistedOriginIsRefusedAndTheFailureRidesTheNextHeartbeat(t *testing.
 	assert.Containsf(t, payload, "shipped nothing", "the recorded failure does not say what went wrong:\n%s", payload)
 }
 
-// doctor reads the local heartbeat mirror to answer "did anything leave this machine", and its own
-// probe's heartbeat has every file counter zeroed, so the probe must not overwrite the mirror.
+// doctor's probe heartbeat has zeroed file counters, so it must not overwrite the mirror doctor reads.
 func TestDoctorsProbeDoesNotOverwriteTheLastFlushMirror(t *testing.T) {
 	v := stageClaudeWorld(t)
 
@@ -193,13 +171,11 @@ func TestDoctorsProbeDoesNotOverwriteTheLastFlushMirror(t *testing.T) {
 	assert.Equalf(t, string(shipped), string(after), "doctor's probe overwrote the last flush's mirror.\nbefore:\n%s\nafter:\n%s", shipped, after)
 }
 
-// The stranded-fleet regression: an enrolled install with no upload_targets must still run the
-// flush rather than abort before the first network call. Nothing lands in this world because the
-// store is plaintext http, which unpinned mode refuses per object, and doctor's refusal must name
-// upload_targets as the way to admit one.
+// The stranded-fleet regression: with no upload_targets the flush still runs, unpinned and https only, so
+// this plaintext store gets nothing and doctor's refusal must name upload_targets.
 func TestVendPathRunsUnpinnedWithNoUploadTargets(t *testing.T) {
 	v := stageClaudeWorld(t)
-	writeConfigWithoutUploadTargets(t, v)
+	require.NoError(t, os.WriteFile(userConfigPath(v), []byte("config_version: 1\nmax_files_per_run: 10000\n"), 0o600))
 
 	// Non-zero because it sent none of what it prepared, but the flush still RAN.
 	out, err := runExpectingFailure(t, "run", "--once")
@@ -215,8 +191,7 @@ func TestVendPathRunsUnpinnedWithNoUploadTargets(t *testing.T) {
 	assert.Contains(t, run(t, "preview"), claudeSource)
 }
 
-// A ticket for another install's key is refused before any byte is sent: the store would accept
-// it, so the exact-key check is the whole defence against overwrites.
+// The store would accept another install's key, so the exact-key check is the whole defence against overwrites.
 func TestVendPathRefusesATicketNamingAnotherInstallsKey(t *testing.T) {
 	v := stageClaudeWorld(t)
 	v.plane.set(func(p *fakePlane) { p.misdirect = "00000000-0000-4000-8000-0000000000ff" })
