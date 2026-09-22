@@ -15,9 +15,7 @@ func Resolve(in Input) (*Effective, error) {
 	if in.Catalog == nil {
 		return nil, errors.New("config: no compiled catalog")
 	}
-
 	eff := &Effective{
-		ConfigVersion:  0,
 		OrganizationID: "default",
 		Schedule:       "15m",
 		MaxFilesPerRun: 512,
@@ -33,27 +31,20 @@ func Resolve(in Input) (*Effective, error) {
 		Provenance:              map[string]Origin{},
 	}
 	// Defaults are attributed too, so provenance never has a blank origin column.
-	for _, k := range []string{"mode.schedule", "max_files_per_run",
-		"send.sink", "scrub.rule_packs", "state_dir", "upload_targets", "config_version",
-		"drain_deadline", "structural_exempt",
-		"encryption.additional_recipients", "encryption.include_install_recipient",
-		"autoupdate.enabled"} {
+	for _, k := range []string{"mode.schedule", "max_files_per_run", "send.sink", "scrub.rule_packs", "state_dir",
+		"upload_targets", "config_version", "drain_deadline", "structural_exempt",
+		"encryption.additional_recipients", "encryption.include_install_recipient", "autoupdate.enabled"} {
 		eff.setOrigin(k, LayerCompiledDefaults)
 	}
 
-	// Source defaults come from the catalog, which is why it is layer 2.
 	overrides := map[string][]layeredOverride{}
 	for _, s := range in.Catalog.Sources() {
-		eff.Sources = append(eff.Sources, ResolvedSource{
-			Source:  s,
-			Enabled: s.IsEnabledByDefault(),
-		})
-		eff.setOrigin("sources."+s.ID+".enabled", LayerBundledCatalog)
-		eff.setOrigin("sources."+s.ID+".include", LayerBundledCatalog)
-		eff.setOrigin("sources."+s.ID+".roots", LayerBundledCatalog)
+		eff.Sources = append(eff.Sources, ResolvedSource{Source: s, Enabled: s.IsEnabledByDefault()})
+		for _, f := range []string{"enabled", "include", "roots"} {
+			eff.setOrigin("sources."+s.ID+"."+f, LayerBundledCatalog)
+		}
 	}
 
-	// --- merge, lowest layer first ------------------------------------------
 	for _, ld := range in.Layers {
 		if ld.Doc == nil {
 			continue
@@ -70,11 +61,9 @@ func Resolve(in Input) (*Effective, error) {
 				eff.setOrigin("organization", ld.Layer)
 			}
 		}
-
 		if rej := applyDocument(eff, ld); rej != nil {
 			return nil, rej
 		}
-
 		for _, o := range ld.Doc.Sources {
 			if _, ok := in.Catalog.Source(o.ID); !ok {
 				return nil, &RejectionError{ld.Layer, "sources." + o.ID,
@@ -87,19 +76,15 @@ func Resolve(in Input) (*Effective, error) {
 	if err := applySourceOverrides(eff, overrides); err != nil {
 		return nil, err
 	}
-
 	for _, check := range []func(*Effective) error{checkConfigVersion, checkUploadTargets, checkRulePacks, checkEncryption} {
 		if err := check(eff); err != nil {
 			return nil, err
 		}
 	}
-
 	eff.Deny = sources.New(in.Env.Home)
-
 	if err := resolveRoots(eff, in); err != nil {
 		return nil, err
 	}
-
 	slices.SortFunc(eff.Sources, func(a, b ResolvedSource) int { return cmp.Compare(a.ID, b.ID) })
 	return eff, nil
 }

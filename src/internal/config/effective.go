@@ -17,23 +17,22 @@ type Effective struct {
 	// OrganizationID is the organization= key segment; standalone installs write the placeholder "default".
 	OrganizationID string
 
-	// ConfigExpired says the remote layer in force is a cached one past expiry; collection continues, expiry cannot widen scope.
+	// ConfigExpired says the remote layer in force is a cached one past expiry; expiry cannot widen scope.
 	ConfigExpired bool
 
 	Schedule string
 
-	// DrainDeadline bounds `run --once --drain` and the SIGTERM drain, so an exit hook cannot block forever having flushed nothing.
+	// DrainDeadline bounds `run --once --drain` and the SIGTERM drain.
 	DrainDeadline time.Duration
 
 	StateDir       string
 	MaxFilesPerRun int
 	Sources        []ResolvedSource
 
-	// Catalog is the compiled source catalog the sources above were resolved from; the repo
-	// attributor and family display names derive from it, so no verb parses it twice.
+	// Catalog is the compiled catalog the sources were resolved from, so no verb parses it twice.
 	Catalog *sources.Compiled
 
-	// UploadTargets pins the origins a presigned upload ticket may name. Empty means unpinned; a bad entry is still refused.
+	// UploadTargets are the origins a presigned upload ticket may name. Empty means unpinned.
 	UploadTargets []UploadTarget
 
 	RulePacks      []string
@@ -41,38 +40,29 @@ type Effective struct {
 	StructuralEx   map[string][]string
 	Deny           *sources.List
 
-	// AdditionalRecipients are age public keys every object is encrypted to besides the install's own, kept as strings.
-	AdditionalRecipients []string
-
-	// IncludeInstallRecipient keeps the install's own key in the recipient set; withholding it requires another recipient.
+	AdditionalRecipients    []string
 	IncludeInstallRecipient bool
 
 	// AutoupdateEnabled says a released build may replace itself at daemon startup; dev builds never self-update.
 	AutoupdateEnabled bool
 
-	// TelemetryEndpoint is the control-plane path telemetry is submitted to, empty for an
-	// organization with no collector. Empty is the default, so telemetry is off unless served on.
+	// TelemetryEndpoint is the control-plane path telemetry is submitted to; empty means off.
 	TelemetryEndpoint string
 
 	// Provenance attributes every value to the layer that set it, for `config show --with-provenance`.
 	Provenance map[string]Origin
 }
 
-// Origin is where one value came from.
+// Origin is where one value came from; Derived marks a value computed rather than configured.
 type Origin struct {
-	Layer Layer
-
-	// Derived marks a value computed rather than configured; no layer set it.
+	Layer   Layer
 	Derived bool
 }
 
 // SinkAdapter names the one write path. It is compiled in, and a send: block in a served document is discarded.
 const SinkAdapter = "vend"
 
-// UploadAddressings is the closed set of addressing forms, named so a refusal can print the alternatives.
-var UploadAddressings = []string{"virtual-hosted", "path-style"}
-
-// Input is everything a resolution needs; the remote layer arrives in Layers like any other document, as LayerRemote.
+// Input is everything a resolution needs; the remote layer arrives in Layers as LayerRemote.
 type Input struct {
 	Catalog *sources.Compiled
 	Layers  []LayeredDocument
@@ -101,8 +91,4 @@ func (e *Effective) reject(field, format string, args ...any) error {
 
 func (e *Effective) setOrigin(field string, l Layer) {
 	e.Provenance[field] = Origin{Layer: l}
-}
-
-func (e *Effective) setDerived(field string) {
-	e.Provenance[field] = Origin{Derived: true}
 }

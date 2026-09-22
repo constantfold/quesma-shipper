@@ -6,27 +6,15 @@ import "fmt"
 type Layer int
 
 const (
-	// LayerCompiledDefaults is the binary's own defaults: the scope ceiling. Not overridable.
-	LayerCompiledDefaults Layer = iota + 1
-
-	// LayerBundledCatalog is the embedded source-spec catalog: data, but compiled in, so it carries the ceiling.
-	LayerBundledCatalog
-
-	// LayerUser is the per-user config file, the highest layer a machine owner controls directly.
-	LayerUser
-
-	// LayerRemote is the org's served document, present only on an enrolled install. Optional everywhere.
-	LayerRemote
+	LayerCompiledDefaults Layer = iota + 1 // the binary's own defaults: the scope ceiling
+	LayerBundledCatalog                    // the embedded source-spec catalog, compiled in
+	LayerUser                              // the per-user config file, the machine owner's own
+	LayerRemote                            // the org's served document, present only when enrolled
 )
 
 // IsLocal reports whether a layer is under the machine owner's control: where a deny beats a remote allow.
 func (l Layer) IsLocal() bool {
-	switch l {
-	case LayerCompiledDefaults, LayerBundledCatalog, LayerUser:
-		return true
-	default:
-		return false
-	}
+	return l >= LayerCompiledDefaults && l <= LayerUser
 }
 
 func (l Layer) String() string {
@@ -39,7 +27,6 @@ func (l Layer) String() string {
 		return "user"
 	case LayerRemote:
 		return "remote"
-	default:
-		return fmt.Sprintf("layer(%d)", int(l))
 	}
+	return fmt.Sprintf("layer(%d)", int(l))
 }
