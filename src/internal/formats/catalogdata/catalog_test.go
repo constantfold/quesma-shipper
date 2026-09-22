@@ -1,6 +1,7 @@
 package catalogdata_test
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -21,14 +22,14 @@ func validate(t *testing.T, raw []byte) error {
 
 // Every bundled catalog file must validate: the catalog is edited by people who do not read Go.
 func TestBundledCatalogValidates(t *testing.T) {
-	files, err := catalogdata.Files()
+	files, err := fs.Glob(catalogdata.FS, "*.yaml")
 	require.NoError(t, err)
 	// Group 1 is the v1 scope ceiling: Claude Code, Codex, Cursor.
 	for _, want := range []string{"claude-code.yaml", "codex.yaml", "cursor.yaml"} {
 		assert.Contains(t, files, want)
 	}
 	for _, name := range files {
-		raw, err := catalogdata.Read(name)
+		raw, err := catalogdata.FS.ReadFile(name)
 		require.NoError(t, err)
 		assert.NoError(t, validate(t, raw), name)
 	}
@@ -58,12 +59,12 @@ func TestSchemaRejectsBadCatalogFiles(t *testing.T) {
 
 // Checks every source in the bundled catalog against the rules the schema cannot express.
 func TestBundledSourceRules(t *testing.T) {
-	files, err := catalogdata.Files()
+	files, err := fs.Glob(catalogdata.FS, "*.yaml")
 	require.NoError(t, err)
 	seen := map[string]string{}
 	cursorJoin := false
 	for _, name := range files {
-		raw, err := catalogdata.Read(name)
+		raw, err := catalogdata.FS.ReadFile(name)
 		require.NoError(t, err)
 		var doc struct {
 			Sources []struct {

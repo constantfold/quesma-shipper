@@ -93,20 +93,6 @@ func TestMarkerDropsARepositorysSessions(t *testing.T) {
 	}
 }
 
-// A marker covers everything under it, and the walk stops at home: a marker above home
-// must not turn the whole machine off by accident.
-func TestMarkerCoversDescendantsAndStopsAtHome(t *testing.T) {
-	outer := t.TempDir()
-	writeFile(t, MarkerPath(outer), "")
-	home := filepath.Join(outer, "home")
-	repoDir(t, home, "work", true)
-	f := newRepoFilter(testProbe(), nil, home)
-	_, inside := f.Marker(repoDir(t, home, "work/acme/sub", false))
-	_, unmarked := f.Marker(repoDir(t, home, "other/repo", false))
-	assert.True(t, inside, "an ancestor's marker must cover a nested working directory")
-	assert.False(t, unmarked, "a marker above home must not count")
-}
-
 // A catalog without a probe attributes nothing, and a source the probe does not name is never read.
 func TestRepoFilterScope(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
@@ -188,6 +174,12 @@ func TestWorktreeMarkerScope(t *testing.T) {
 			repo := gitRepo(t, home, "clients/acme")
 			wt := writeWorktree(t, repo, filepath.Join(home, "clients", "wt"), "stray")
 			return []session{{repo, false}, {wt, false}, {repoDir(t, home, "clients/notes", false), true}}
+		},
+		// A marker above home must not turn the whole machine off by accident.
+		"ancestors count up to home only": func(t *testing.T, home string) []session {
+			writeFile(t, MarkerPath(filepath.Dir(home)), "")
+			repoDir(t, home, "work", true)
+			return []session{{repoDir(t, home, "work/acme/sub", false), true}, {repoDir(t, home, "other/repo", false), false}}
 		},
 		// A checkout at home (dotfiles) must not claim every directory under it.
 		"a marker at home stays out of checkouts": func(t *testing.T, home string) []session {

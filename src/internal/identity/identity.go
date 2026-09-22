@@ -13,10 +13,9 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
-
 	"filippo.io/age"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
@@ -65,7 +64,6 @@ func Mint(stateDir string) (*Unit, error) {
 	if err := platform.EnsureDir(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("identity: %w", err)
 	}
-
 	path := filepath.Join(stateDir, FileName)
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("identity: %s already exists: refusing to mint over an existing unit", path)
@@ -78,18 +76,19 @@ func Mint(stateDir string) (*Unit, error) {
 		return nil, fmt.Errorf("identity: generate age identity: %w", err)
 	}
 	nameKey := make([]byte, formats.NameKeySize)
-	if _, err := rand.Read(nameKey); err != nil {
-		return nil, fmt.Errorf("identity: generate name_key: %w", err)
-	}
+	rand.Read(nameKey) // never fails since Go 1.24
 
-	u := &Unit{
-		InstallID: uuid.New(),
-		Identity:  id,
-		NameKey:   nameKey,
-		CreatedAt: time.Now().UTC().Truncate(time.Second),
-	}
-	if err := save(path, u); err != nil {
-		return nil, err
+	u := &Unit{InstallID: uuid.New(), Identity: id, NameKey: nameKey, CreatedAt: time.Now().UTC().Truncate(time.Second)}
+	// Written atomically, so a crash leaves no unit or a complete one.
+	if err := platform.WriteJSON(path, unitFile{
+		IdentitySchema: IdentitySchema,
+		InstallID:      u.InstallID.String(),
+		AgeIdentity:    u.Identity.String(),
+		AgeRecipient:   u.Identity.Recipient().String(),
+		NameKey:        hex.EncodeToString(u.NameKey),
+		CreatedAt:      u.CreatedAt.Format(time.RFC3339),
+	}, 0o600); err != nil {
+		return nil, fmt.Errorf("identity: %w", err)
 	}
 	return u, nil
 }
@@ -109,7 +108,6 @@ func Load(stateDir string) (*Unit, error) {
 		return nil, fmt.Errorf("identity: %s has identity_schema %d, this client speaks %d: refusing to guess",
 			path, uf.IdentitySchema, IdentitySchema)
 	}
-
 	installID, err := uuid.Parse(uf.InstallID)
 	if err != nil {
 		return nil, fmt.Errorf("identity: install_id: %w", err)
@@ -134,26 +132,5 @@ func Load(stateDir string) (*Unit, error) {
 		return nil, fmt.Errorf("identity: age_recipient does not match age_identity")
 	}
 
-	return &Unit{
-		InstallID: installID,
-		Identity:  ageID,
-		NameKey:   nameKey,
-		CreatedAt: createdAt.UTC(),
-	}, nil
-}
-
-// save writes atomically, so a crash leaves no unit or a complete one.
-func save(path string, u *Unit) error {
-	uf := unitFile{
-		IdentitySchema: IdentitySchema,
-		InstallID:      u.InstallID.String(),
-		AgeIdentity:    u.Identity.String(),
-		AgeRecipient:   u.Identity.Recipient().String(),
-		NameKey:        hex.EncodeToString(u.NameKey),
-		CreatedAt:      u.CreatedAt.Format(time.RFC3339),
-	}
-	if err := platform.WriteJSON(path, uf, 0o600); err != nil {
-		return fmt.Errorf("identity: %w", err)
-	}
-	return nil
+	return &Unit{InstallID: installID, Identity: ageID, NameKey: nameKey, CreatedAt: createdAt.UTC()}, nil
 }

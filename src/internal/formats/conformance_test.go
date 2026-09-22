@@ -21,10 +21,7 @@ var update = flag.Bool("update", false, "regenerate the conformance vectors")
 const vectorDir = "../../conformance/v1/naming"
 
 type canonicalPathVectors struct {
-	VectorSet     string `json:"vector_set"`
-	VectorVersion int    `json:"vector_version"`
-	Description   string `json:"description"`
-	Vectors       []struct {
+	Vectors []struct {
 		Name          string `json:"name"`
 		SourceRelPath string `json:"source_rel_path"`
 		Username      string `json:"username"`

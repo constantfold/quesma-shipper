@@ -46,6 +46,11 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 		assert.True(t, r.Header.Get("Authorization") == "Bearer fixture-access" && r.Header.Get("ChatGPT-Account-Id") == "workspace-1", "wrong authentication")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{ "unknown":{"input_tokens":9007199254740993,"utilization":123.456,"optional":null,"accessToken":"fixture-secret"}, "windows":[] }`)), Header: http.Header{}}, nil
 	})}}
+	req.Capture = false
+	inspected, err := p.discover(req)
+	require.Truef(t, err == nil && len(inspected.Candidates) == 0 && inspected.Deferred, "inspection: %+v %v", inspected, err)
+	req.Capture = true
+	// Discovery neither fetches nor writes; only Load does.
 	first, err := p.discover(req)
 	require.NoError(t, err)
 	require.Truef(t, len(first.Candidates) == 1 && calls == 0, "first: %+v calls %d", first, calls)
@@ -65,23 +70,6 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	require.Truef(t, err == nil && len(next.Candidates) == 1 && calls == 1 && next.Candidates[0].Path != c.Path, "new bucket: %+v %v calls %d", next, err, calls)
 	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
 		t.Fatal("account collection wrote local state")
-	}
-}
-
-func TestAccountDiscoveryDoesNotFetchOrWrite(t *testing.T) {
-	req := accountFixture(t)
-	writeFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture"}}`)
-	p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
-		t.Fatal("discovery fetched account data")
-		return nil, nil
-	})}}
-	for _, capture := range []bool{false, true} {
-		req.Capture = capture
-		d, err := p.discover(req)
-		require.Truef(t, err == nil && len(d.Candidates) == 1 == capture, "capture=%v discovery: %+v %v", capture, d, err)
-	}
-	if _, err := os.Stat(req.StateDir); !os.IsNotExist(err) {
-		t.Fatal("discovery wrote state")
 	}
 }
 

@@ -97,28 +97,14 @@ func TestZeroCandidateHealthIsDistinguishedAndExplained(t *testing.T) {
 
 // Oldest first, since a bounded run must take the files closest to deletion; the version comes from the newest file.
 func TestCandidatesAreOldestFirstAndVersionIsNewest(t *testing.T) {
-	for _, tc := range []struct {
-		older, newer string
-		newTime      time.Time
-	}{
-		{"older.jsonl", "newer.jsonl", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)},
-		{"old.jsonl", "fresh.jsonl", time.Time{}},
-	} {
-		t.Run(tc.older, func(t *testing.T) {
-			root := t.TempDir()
-			old := filepath.Join(root, "projects", "p", tc.older)
-			writeFile(t, old, `{"type":"user","version":"2.1.100"}`+"\n")
-			setMTime(t, old, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
-			fresh := filepath.Join(root, "projects", "p", tc.newer)
-			writeFile(t, fresh, `{"type":"user","version":"2.1.245"}`+"\n")
-			if !tc.newTime.IsZero() {
-				setMTime(t, fresh, tc.newTime)
-			}
-			d := discover(t, globSource(root, "projects/**/*.jsonl"), nil)
-			assert.Equal(t, []string{"projects/p/" + tc.older, "projects/p/" + tc.newer}, relPaths(d))
-			assert.Equal(t, "2.1.245", d.AgentVersion)
-		})
-	}
+	root := t.TempDir()
+	old := filepath.Join(root, "projects", "p", "old.jsonl")
+	writeFile(t, old, `{"type":"user","version":"2.1.100"}`+"\n")
+	setMTime(t, old, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	writeFile(t, filepath.Join(root, "projects", "p", "fresh.jsonl"), `{"type":"user","version":"2.1.245"}`+"\n")
+	d := discover(t, globSource(root, "projects/**/*.jsonl"), nil)
+	assert.Equal(t, []string{"projects/p/old.jsonl", "projects/p/fresh.jsonl"}, relPaths(d))
+	assert.Equal(t, "2.1.245", d.AgentVersion)
 }
 
 // Shape drift blocks collection; empty sessions and both agents' version headers remain collectable.
@@ -227,45 +213,32 @@ func TestWalkDoesNotFollowSymlinks(t *testing.T) {
 	assert.Equal(t, []string{"projects/p/real.jsonl"}, relPaths(d))
 }
 
-// The deny list is the read-time authority: a credential file can appear after config validation has passed.
+// The deny list is the read-time authority, since a credential file can appear after config validation.
+// A denied tree is pruned, not walked; pruning follows only a whole-tree rule, so a directory named .env
+// is walked; and a parent that links into a denied tree is still denied.
 func TestDenyListAppliesAtDiscoveryTime(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, ".claude")
-	writeFile(t, filepath.Join(root, "projects", "p", "a.jsonl"), `{"a":1}`+"\n")
-	writeFile(t, filepath.Join(root, ".credentials.json"), `{"accessToken":"secret"}`)
-	// A glob wide enough to reach the credential file, as a hostile config would.
-	d := discover(t, globSource(root, "**"), New(home))
-	assert.Equal(t, []string{"projects/p/a.jsonl"}, relPaths(d))
-}
-
-// A candidate's own name is always literal, but its parent may link into a denied tree.
-func TestASymlinkedParentIntoADeniedTreeIsStillDenied(t *testing.T) {
 	home := realTempDir(t)
-	writeFile(t, filepath.Join(home, ".ssh", "store", "leak.jsonl"), `{"token":"x"}`+"\n")
-	if err := os.Symlink(filepath.Join(home, ".ssh"), filepath.Join(home, "link")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	d := discover(t, globSource(filepath.Join(home, "link", "store"), "**"), New(home))
-	assert.Empty(t, d.Candidates, "a file inside the ssh store was offered for shipping")
-}
-
-// A denied tree is pruned, not walked; pruning follows only a whole-tree rule, so a directory named .env is walked.
-func TestDeniedTreesArePrunedAndOthersWalked(t *testing.T) {
-	home := realTempDir(t)
-	writeFile(t, filepath.Join(home, "work", "a.jsonl"), `{"a":1}`+"\n")
+	writeFile(t, filepath.Join(home, ".claude", "projects", "p", "a.jsonl"), `{"a":1}`+"\n")
+	writeFile(t, filepath.Join(home, ".claude", ".credentials.json"), `{"accessToken":"secret"}`)
 	writeFile(t, filepath.Join(home, "projects", ".env", "b.jsonl"), `{"b":2}`+"\n")
 	writeFile(t, filepath.Join(home, "projects", "release.key", "c.jsonl"), `{"c":3}`+"\n")
 	writeFile(t, filepath.Join(home, "projects", ".env", ".env"), "TOKEN=x\n")
 	secret := filepath.Join(home, ".ssh")
 	writeFile(t, filepath.Join(secret, "store", "leak.jsonl"), `{"token":"x"}`+"\n")
+	if err := os.Symlink(secret, filepath.Join(home, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	linked := discover(t, globSource(filepath.Join(home, "link", "store"), "**"), New(home))
+	assert.Empty(t, linked.Candidates, "a file inside the ssh store was offered for shipping")
+
 	if os.Geteuid() != 0 {
 		// Unreadable, so descending into it would also be counted and reported.
 		require.NoError(t, os.Chmod(secret, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(secret, 0o700) })
 	}
-
+	// A glob wide enough to reach the credential files, as a hostile config would.
 	d := discover(t, globSource(home, "**"), New(home))
-	assert.ElementsMatch(t, []string{"work/a.jsonl", "projects/.env/b.jsonl", "projects/release.key/c.jsonl"}, relPaths(d))
+	assert.ElementsMatch(t, []string{".claude/projects/p/a.jsonl", "projects/.env/b.jsonl", "projects/release.key/c.jsonl"}, relPaths(d))
 	assert.Zerof(t, d.Unreadable, "the denied tree was opened: %s", d.UnreadableReason)
 }
 

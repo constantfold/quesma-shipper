@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"slices"
 
 	"gopkg.in/yaml.v3"
@@ -81,16 +82,12 @@ type Compiled struct {
 
 // Load parses and validates every embedded catalog file at process start, so a build whose catalog does not satisfy its own schema fails loudly.
 func Load() (*Compiled, error) {
-	names, err := catalogdata.Files()
-	if err != nil {
-		return nil, err
-	}
-
+	names, _ := fs.Glob(catalogdata.FS, "*.yaml")
 	c := &Compiled{byID: map[string]Source{}}
 	for _, name := range names {
-		raw, err := catalogdata.Read(name)
+		raw, err := catalogdata.FS.ReadFile(name)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("catalog: read %s: %w", name, err)
 		}
 		var asAny any
 		if err := yaml.Unmarshal(raw, &asAny); err != nil {

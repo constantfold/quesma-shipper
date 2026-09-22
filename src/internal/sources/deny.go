@@ -15,46 +15,19 @@ import (
 // refused, not applied. Matched against expanded, symlink-resolved absolute paths, never against the glob template.
 var CompiledDeny = []string{
 	// Cloud and SSH credential stores.
-	"~/.aws/**",
-	"~/.ssh/**",
-	"~/.gnupg/**",
-	"~/.kube/**",
-	"~/.azure/**",
-	"~/.docker/config.json",
-	"~/.config/gh/**",
-	"~/.config/gcloud/**",
-	"$APPDATA/gcloud/**",
-	"$APPDATA/GitHub CLI/**",
-
+	"~/.aws/**", "~/.ssh/**", "~/.gnupg/**", "~/.kube/**", "~/.azure/**", "~/.docker/config.json",
+	"~/.config/gh/**", "~/.config/gcloud/**", "$APPDATA/gcloud/**", "$APPDATA/GitHub CLI/**",
 	// Package-manager and VCS credential files.
-	"~/.netrc",
-	"~/.npmrc",
-	"~/.pypirc",
-	"~/.git-credentials",
-
+	"~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials",
 	// Key material and environment files, anywhere.
-	"**/.env",
-	"**/.env.*",
-	"**/id_rsa",
-	"**/id_ed25519",
-	"**/*.pem",
-	"**/*.p12",
-	"**/*.key",
-
-	// OS keychains.
+	"**/.env", "**/.env.*", "**/id_rsa", "**/id_ed25519", "**/*.pem", "**/*.p12", "**/*.key",
 	"~/Library/Keychains/**",
-
 	// Agent stores hold credentials that look like ordinary JSON, so collection targets projects/** and memory/**, never a whole root.
-	"~/.claude/.credentials.json",
-	"~/.claude.json",
-	"~/.codex/auth.json",
-	"~/.config/opencode/auth.json",
-	"~/.local/share/opencode/auth.json",
+	"~/.claude/.credentials.json", "~/.claude.json", "~/.codex/auth.json",
+	"~/.config/opencode/auth.json", "~/.local/share/opencode/auth.json",
 }
 
-type List struct {
-	patterns []string
-}
+type List struct{ patterns []string }
 
 // New expands ~ and $VAR. Entries whose variable is unset (e.g. $APPDATA outside Windows) are dropped.
 func New(home string) *List {

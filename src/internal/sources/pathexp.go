@@ -29,13 +29,11 @@ func (e Env) ExpandRoot(root string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("empty root")
 	}
-
 	expanded, err := e.expandVars(root)
 	if err != nil {
 		return "", err
 	}
 	expanded = ExpandHome(expanded, e.Home)
-
 	if !filepath.IsAbs(expanded) {
 		return "", fmt.Errorf("root %q expanded to %q, which is not absolute", root, expanded)
 	}
@@ -61,10 +59,7 @@ func (e Env) expandVars(s string) (string, error) {
 		}
 		return value
 	})
-	if err != nil {
-		return "", err
-	}
-	return expanded, nil
+	return expanded, err
 }
 
 // ExpandHome resolves a leading ~ against a home directory.
@@ -75,17 +70,14 @@ func ExpandHome(p, home string) string {
 	return p
 }
 
-// FirstExistingFile expands each candidate the way roots expand and returns the first that
-// exists and is not a directory; empty means absent. The engine and doctor share it, so what
-// doctor reports is what the enricher opens.
+// FirstExistingFile returns the first candidate that expands like a root, exists and is not a directory;
+// empty means absent. The engine and doctor share it, so what doctor reports is what the enricher opens.
 func (e Env) FirstExistingFile(candidates []string) string {
 	for _, cand := range candidates {
-		path, err := e.ExpandRoot(cand)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path
+		if path, err := e.ExpandRoot(cand); err == nil {
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				return path
+			}
 		}
 	}
 	return ""
