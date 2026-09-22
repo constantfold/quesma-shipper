@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -22,10 +23,7 @@ type Status = common.Status
 const unitName = "trajectory-shipper.service"
 
 func systemdPath(home string) string {
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
-	}
+	configHome := cmp.Or(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config"))
 	return filepath.Join(configHome, "systemd", "user", unitName)
 }
 
@@ -37,9 +35,7 @@ func Available() bool {
 	// `systemctl --user` needs a running user instance; a container or session-less login has none.
 	if err := exec.Command("systemctl", "--user", "is-system-running").Run(); err != nil {
 		out, _ := exec.Command("systemctl", "--user", "show-environment").CombinedOutput()
-		if strings.Contains(string(out), "Failed to connect to bus") || len(out) == 0 {
-			return false
-		}
+		return len(out) > 0 && !strings.Contains(string(out), "Failed to connect to bus")
 	}
 	return true
 }
@@ -125,10 +121,7 @@ func InstallService(spec Spec) (Status, error) {
 // lingerHint is the session-less-box caveat: without linger a --user service stops with the
 // last session and never starts at boot. A hint, not enabled here; linger is the owner's call.
 func lingerHint(ctx context.Context) string {
-	user := os.Getenv("USER")
-	if user == "" {
-		user = "$USER"
-	}
+	user := cmp.Or(os.Getenv("USER"), "$USER")
 	out, err := exec.CommandContext(ctx, "loginctl", "show-user", user, "--property=Linger").Output()
 	if err == nil && strings.Contains(string(out), "Linger=yes") {
 		return ""
@@ -190,7 +183,7 @@ func ServiceState(ctx context.Context) Status {
 		}
 	case st.Installed:
 		st.Detail = fmt.Sprintf("unit present but %s (%s): re-run the Quesma Shipper installer",
-			orUnknown(activeState), orUnknown(enabledState))
+			cmp.Or(activeState, "unknown"), cmp.Or(enabledState, "unknown"))
 	default:
 		st.Detail = "no agent installed; `quesma-shipper run` works in the foreground"
 	}
@@ -212,25 +205,13 @@ func RestartCommand() string {
 	return "systemctl --user restart " + unitName
 }
 
-func orUnknown(s string) string {
-	if s == "" {
-		return "unknown"
-	}
-	return s
-}
-
 // systemdQuote renders one ExecStart argument, bare when plainly safe. The risk is the percent
 // sign: systemd expands specifiers in unit files, so a path containing one has to double it.
 func systemdQuote(a string) string {
-	safe := a != ""
-	for _, r := range a {
-		if !(r == '/' || r == '.' || r == '-' || r == '_' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			safe = false
-			break
-		}
-	}
-	if safe {
+	if a != "" && strings.IndexFunc(a, func(r rune) bool {
+		return !(r == '/' || r == '.' || r == '-' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+	}) < 0 {
 		return a
 	}
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%")
