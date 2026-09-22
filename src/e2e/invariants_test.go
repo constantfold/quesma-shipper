@@ -56,9 +56,8 @@ func TestClaudeCollectionContract(t *testing.T) {
 			assert.NotContainsf(t, string(o.Payload), username, "%s: the OS username survived in the payload", o.Key)
 			assert.NotContains(t, o.Manifest.NativePath, username)
 			// Only transcripts: the sidecar's native path is the state directory, outside this HOME.
-			if isTranscript(o) && !strings.Contains(o.Manifest.NativePath, "__USER__") {
-				t.Errorf("%s: native_path carries no placeholder: %s", o.Key, o.Manifest.NativePath)
-			}
+			assert.Truef(t, !isTranscript(o) || strings.Contains(o.Manifest.NativePath, "__USER__"),
+				"%s: native_path carries no placeholder: %s", o.Key, o.Manifest.NativePath)
 		}
 	})
 	t.Run("EveryObjectCarriesBothHashesAndItsOwnPayload", func(t *testing.T) {
@@ -66,22 +65,16 @@ func TestClaudeCollectionContract(t *testing.T) {
 			assert.NotEqual(t, "", o.Manifest.SourceHash)
 			// An empty shipped_hash once shipped unnoticed, because Seal took the manifest by value.
 			assert.NotEqual(t, "", o.Manifest.ShippedHash)
-			if o.Manifest.SourceHash == o.Manifest.ShippedHash && o.Manifest.Redaction != nil &&
-				o.Manifest.Redaction.Density > 0 {
-				t.Errorf("%s: redaction changed bytes but both hashes are equal", o.Key)
-			}
+			redacted := o.Manifest.Redaction != nil && o.Manifest.Redaction.Density > 0
+			assert.Falsef(t, redacted && o.Manifest.SourceHash == o.Manifest.ShippedHash, "%s: redaction changed bytes but both hashes are equal", o.Key)
 			assert.Equal(t, int64(len(o.Payload)), o.Manifest.PayloadSize)
 		}
 	})
 	t.Run("SealedAtIsAReadableTimeFromThisRun", func(t *testing.T) {
 		for _, o := range collected {
 			got, err := time.Parse(time.RFC3339, o.Manifest.SealedAt)
-			if err != nil {
-				t.Errorf("%s: sealed_at %q does not parse: %v", o.Key, o.Manifest.SealedAt, err)
-				continue
-			}
-			if got.Before(before) || got.After(after) {
-				t.Errorf("%s: sealed_at %s is outside this run (%s..%s)", o.Key, got, before, after)
+			if assert.NoErrorf(t, err, "%s: sealed_at %q does not parse", o.Key, o.Manifest.SealedAt) {
+				assert.WithinRangef(t, got, before, after, "%s: sealed_at is outside this run", o.Key)
 			}
 		}
 	})
@@ -113,11 +106,7 @@ func TestClaudeCollectionContract(t *testing.T) {
 
 // Objects whose paths came from an agent's own store, the only place a username can appear.
 func isTranscript(o object) bool {
-	switch o.Manifest.SourceID {
-	case "claude-code-transcripts", "cursor-transcripts", "codex-rollouts":
-		return true
-	}
-	return false
+	return slices.Contains([]string{claudeSource, cursorSource, "codex-rollouts"}, o.Manifest.SourceID)
 }
 
 func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
@@ -131,9 +120,8 @@ func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
 		// The source id is in the clear so a reader can select by source; the name after it must be opaque.
 		hexPart, sealed := strings.CutSuffix(o.Key[strings.LastIndex(o.Key, "/")+1:], ".age")
 		assert.True(t, sealed, o.Key)
-		if _, err := hex.DecodeString(hexPart); err != nil {
-			t.Errorf("%s: name is not hex: %v", o.Key, err)
-		}
+		_, err := hex.DecodeString(hexPart)
+		assert.NoErrorf(t, err, "%s: name is not hex", o.Key)
 		for _, leak := range []string{username, "demo", ".jsonl", "projects", cursorConv} {
 			assert.NotContains(t, hexPart, leak)
 		}
@@ -190,17 +178,12 @@ func TestASyncRefusedForTheLockDoesNotTouchTheRunLog(t *testing.T) {
 
 	// Empty install id, so this stands in for another process rather than opening as this install.
 	held, err := state.Open(statePath(w), "")
-	require.NoErrorf(t, err, "could not stand in for a running sync: %v", err)
+	require.NoError(t, err, "could not stand in for a running sync")
 	defer held.Close()
 
-	if out, err := runExpectingFailure(t, "run", "--once", "--quiet"); err == nil {
-		t.Fatalf("a second sync was not refused for the lock:\n%s", out)
-	}
-
-	if after := runLogLines(t, w); !slices.Equal(before, after) {
-		t.Errorf("the refused sync rewrote the running sync's log:\nbefore:\n%s\nafter:\n%s",
-			strings.Join(before, "\n"), strings.Join(after, "\n"))
-	}
+	out, err := runExpectingFailure(t, "run", "--once", "--quiet")
+	require.Errorf(t, err, "a second sync was not refused for the lock:\n%s", out)
+	assert.Equal(t, before, runLogLines(t, w), "the refused sync rewrote the running sync's log")
 }
 
 // --quiet is for cron: it drops the console output and keeps the log, the run's only record.

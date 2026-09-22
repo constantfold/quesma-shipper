@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,14 +96,11 @@ func smokeBaseline(t *testing.T, m *smokeMachine) time.Duration {
 	for range smokeBaselineReps {
 		m.w.reset(t)
 		obs := m.w.mustSync(t)
-		if got := summary(t, obs.Output)["shipped"]; got < m.files {
-			t.Fatalf("the baseline run shipped %d of %d files", got, m.files)
-		}
+		require.GreaterOrEqual(t, summary(t, obs.Output)["shipped"], m.files, "the baseline run shipped too few files")
 		reps = append(reps, obs.Elapsed)
 	}
 	best := slices.Min(reps)
-	t.Logf("unshaped baseline on %d files: reps %s, best %v",
-		m.files, durationList(reps), best.Round(time.Millisecond))
+	t.Logf("unshaped baseline on %d files: reps %s, best %v", m.files, durationList(reps), best.Round(time.Millisecond))
 	return best
 }
 
@@ -143,27 +141,16 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 		row.BaselineSeconds = baseline.Seconds()
 		recordResult(t, row)
 
-		require.Falsef(t, counts["shipped"] < m.files, "the backlog run shipped %d of %d files", counts["shipped"], m.files)
+		require.GreaterOrEqual(t, counts["shipped"], m.files, "the backlog run shipped too few files")
 		require.Zerof(t, counts["failed"], "the backlog run failed files:\n%s", meas.last.Output)
 
-		if added >= bound {
-			t.Errorf("%v of latency on %d files added %v, over the %v bound: "+
-				"the run is paying round trips one at a time", smokeRTT, m.files, added, bound)
-		}
-		if perFile < smokeRequestsPerFileMin || perFile > smokeRequestsPerFileMax {
-			t.Errorf("the backlog made %d S3 requests for %d files, %.2f each, outside the "+
-				"%.2f to %.2f band", meas.counters.requests, m.files, perFile,
-				smokeRequestsPerFileMin, smokeRequestsPerFileMax)
-		}
-		if ratio > smokeWireRatioMax {
-			t.Errorf("the backlog put %d bytes on the wire for %d logical bytes, a ratio of %.3f "+
-				"over the %.2f bound", moved, m.bytes, ratio, smokeWireRatioMax)
-		}
-		if want := m.files + smokeSidecarObjects; meas.objects != want {
-			t.Errorf("the backlog left %d objects under %s, want exactly %d "+
-				"(%d files and %d sidecars)", meas.objects, m.w.keyRoot, want, m.files,
-				smokeSidecarObjects)
-		}
+		assert.Lessf(t, added, bound, "%v of latency on %d files: the run is paying round trips one at a time", smokeRTT, m.files)
+		assert.Truef(t, perFile >= smokeRequestsPerFileMin && perFile <= smokeRequestsPerFileMax,
+			"the backlog made %d S3 requests for %d files, %.2f each, outside the %.2f to %.2f band",
+			meas.counters.requests, m.files, perFile, smokeRequestsPerFileMin, smokeRequestsPerFileMax)
+		assert.LessOrEqualf(t, ratio, smokeWireRatioMax, "the backlog's wire bytes over %d logical bytes", m.bytes)
+		assert.Equalf(t, m.files+smokeSidecarObjects, meas.objects, "objects under %s (%d files and %d sidecars)",
+			m.w.keyRoot, m.files, smokeSidecarObjects)
 
 		assertNoResidualScratch(t, m.w)
 		assertPeakUnderBudget(t, smokeBacklogScenario, meas.peak, smokeBacklogBudget)
@@ -270,8 +257,7 @@ func stageSmokeMachine(t *testing.T) *smokeMachine {
 	t.Helper()
 	w := stageSmokeWorld(t)
 	bytes := stageCorpusFiles(t, w, smokeCorpusFiles)
-	t.Logf("smoke corpus: %d files, %d bytes staged, child at GOMAXPROCS=%d",
-		smokeCorpusFiles, bytes, w.gomaxprocs)
+	t.Logf("smoke corpus: %d files, %d bytes staged, child at GOMAXPROCS=%d", smokeCorpusFiles, bytes, w.gomaxprocs)
 	return &smokeMachine{w: w, files: smokeCorpusFiles, bytes: bytes}
 }
 

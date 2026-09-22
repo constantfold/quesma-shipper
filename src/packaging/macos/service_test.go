@@ -5,7 +5,6 @@ package macos
 import (
 	"context"
 	"encoding/xml"
-	"errors"
 	"strings"
 	"testing"
 
@@ -23,16 +22,13 @@ func testSpec() Spec {
 func TestRestartHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := RestartService(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("restart with a canceled context = %v, want context canceled", err)
-	}
+	require.ErrorIs(t, RestartService(ctx), context.Canceled)
 }
 
 func TestServiceStateHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	got := ServiceState(ctx)
-	require.Truef(t, !got.Loaded, "state with a canceled context = %+v, want not loaded", got)
+	require.False(t, ServiceState(ctx).Loaded, "state with a canceled context must not read as loaded")
 }
 
 func TestPlistIsWellFormedAndKeepsTheAgentAlive(t *testing.T) {

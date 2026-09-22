@@ -34,24 +34,11 @@ type Info struct {
 // releaseVersion is set by release CI via -ldflags -X; believed only when applyStamp corroborates it.
 var releaseVersion string
 
-var (
-	once   sync.Once
-	cached Info
-)
-
 // Current reads the stamped information once.
-func Current() Info {
-	once.Do(func() { cached = read() })
-	return cached
-}
+var Current = sync.OnceValue(read)
 
 func read() Info {
-	i := Info{
-		Version:   "unknown",
-		GoVersion: runtime.Version(),
-		OS:        runtime.GOOS,
-		Arch:      runtime.GOARCH,
-	}
+	i := Info{Version: "unknown", GoVersion: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		// Reported as unknown rather than invented: a made-up version in a manifest is worse than reporting unknown.
@@ -90,15 +77,8 @@ func read() Info {
 
 // applyStamp honors a stamp only when the hash it ends with prefixes vcs.revision and the tree is clean.
 func applyStamp(i Info, stamp string) Info {
-	if stamp == "" {
-		return i
-	}
 	dot := strings.LastIndex(stamp, ".")
-	if dot < 0 || dot == len(stamp)-1 {
-		return i
-	}
-	hash := stamp[dot+1:]
-	if i.Revision == "" || !strings.HasPrefix(i.Revision, hash) || i.Modified {
+	if dot < 0 || dot == len(stamp)-1 || !strings.HasPrefix(i.Revision, stamp[dot+1:]) || i.Modified {
 		return i
 	}
 	i.Version = stamp

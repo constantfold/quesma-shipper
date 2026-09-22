@@ -10,25 +10,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAppForExecutableValidatesIdentity(t *testing.T) {
 	app := filepath.Join(t.TempDir(), appName)
 	executable := writeTestApp(t, app, bundleIdentifier, executableName)
-	if got, ok := appForExecutable(executable); !ok || got != app {
-		t.Fatalf("appForExecutable() = %q, %v", got, ok)
-	}
-	if _, ok := appForExecutable("/Users/me/.local/bin/quesma-shipper"); ok {
-		t.Fatal("a raw binary was treated as an app bundle")
-	}
-	other := filepath.Join(t.TempDir(), "Other.app")
-	if _, ok := appForExecutable(writeTestApp(t, other, "com.example.other", executableName)); ok {
-		t.Fatal("an unrelated app was treated as Quesma Shipper")
-	}
-	wrongName := filepath.Join(t.TempDir(), appName)
-	if _, ok := appForExecutable(writeTestApp(t, wrongName, bundleIdentifier, "helper")); ok {
-		t.Fatal("an unrelated executable was treated as Quesma Shipper")
+	got, ok := appForExecutable(executable)
+	require.True(t, ok)
+	require.Equal(t, app, got)
+	for name, exe := range map[string]string{
+		"a raw binary":            "/Users/me/.local/bin/quesma-shipper",
+		"an unrelated app":        writeTestApp(t, filepath.Join(t.TempDir(), "Other.app"), "com.example.other", executableName),
+		"an unrelated executable": writeTestApp(t, filepath.Join(t.TempDir(), appName), bundleIdentifier, "helper"),
+	} {
+		_, ok := appForExecutable(exe)
+		assert.False(t, ok, "%s was treated as Quesma Shipper", name)
 	}
 }
 
@@ -40,12 +38,10 @@ func TestApplyAppPackageReplacesTheWholeBundle(t *testing.T) {
 
 	const version = "0.0.1-123.abcdef123456"
 	require.NoError(t, applyAppPackage(testAppPackage(t, version), app, version))
-	if _, err := os.Stat(filepath.Join(app, "old")); !os.IsNotExist(err) {
-		t.Fatalf("old bundle survived replacement: %v", err)
-	}
-	if got, err := os.ReadFile(filepath.Join(app, "new")); err != nil || string(got) != "new" {
-		t.Fatalf("new bundle not installed: %q, %v", got, err)
-	}
+	assert.NoFileExists(t, filepath.Join(app, "old"), "old bundle survived replacement")
+	got, err := os.ReadFile(filepath.Join(app, "new"))
+	require.NoError(t, err, "new bundle not installed")
+	assert.Equal(t, "new", string(got))
 }
 
 // When CI points at the built package, the updater accepts its bundle and Installer lays that component out.
@@ -56,11 +52,10 @@ func TestBuiltPackageSatisfiesTheUpdater(t *testing.T) {
 	}
 	raw, err := os.ReadFile(pkg)
 	require.NoError(t, err)
-	_, expandAppPackageErr := expandAppPackage(raw, t.TempDir(), version)
-	require.NoErrorf(t, expandAppPackageErr, "the updater rejects the built package: %v", expandAppPackageErr)
-	if selected := installerChoices(t, pkg); !selected[bundleIdentifier] {
-		t.Fatalf("Installer choice selection = %v; %s must be laid out", selected, bundleIdentifier)
-	}
+	_, err = expandAppPackage(raw, t.TempDir(), version)
+	require.NoError(t, err, "the updater rejects the built package")
+	selected := installerChoices(t, pkg)
+	require.Truef(t, selected[bundleIdentifier], "Installer choice selection = %v; %s must be laid out", selected, bundleIdentifier)
 }
 
 // installerChoices reads Installer's own view of what the package would lay out.
@@ -69,10 +64,10 @@ func installerChoices(t *testing.T, pkg string) map[string]bool {
 	show := exec.Command("/usr/sbin/installer", "-showChoicesXML", "-pkg", pkg, "-target", "CurrentUserHomeDirectory")
 	convert := exec.Command("/usr/bin/plutil", "-convert", "json", "-o", "-", "-")
 	xml, err := show.Output()
-	require.NoErrorf(t, err, "installer -showChoicesXML: %v", err)
+	require.NoError(t, err, "installer -showChoicesXML")
 	convert.Stdin = strings.NewReader(string(xml))
 	out, err := convert.Output()
-	require.NoErrorf(t, err, "plutil -convert json: %v", err)
+	require.NoError(t, err, "plutil -convert json")
 	var choices []installerChoice
 	require.NoError(t, json.Unmarshal(out, &choices))
 	selected := map[string]bool{}
@@ -106,14 +101,11 @@ func testAppPackage(t *testing.T, version string) []byte {
 
 	work := t.TempDir()
 	component := filepath.Join(work, componentPackage)
-	if res, err := exec.Command("/usr/bin/pkgbuild", "--root", root, "--identifier", bundleIdentifier,
-		"--version", "1", component).CombinedOutput(); err != nil {
-		t.Fatalf("pkgbuild: %v: %s", err, res)
-	}
+	out, err := exec.Command("/usr/bin/pkgbuild", "--root", root, "--identifier", bundleIdentifier, "--version", "1", component).CombinedOutput()
+	require.NoErrorf(t, err, "pkgbuild: %s", out)
 	pkg := filepath.Join(work, "quesma-shipper.pkg")
-	if out, err := exec.Command("/usr/bin/productbuild", "--package", component, pkg).CombinedOutput(); err != nil {
-		t.Fatalf("productbuild: %v: %s", err, out)
-	}
+	out, err = exec.Command("/usr/bin/productbuild", "--package", component, pkg).CombinedOutput()
+	require.NoErrorf(t, err, "productbuild: %s", out)
 	raw, err := os.ReadFile(pkg)
 	require.NoError(t, err)
 	return raw

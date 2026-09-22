@@ -36,24 +36,10 @@ func TestInstallScript(t *testing.T) {
 		wantOut     string
 		wantCalls   []string
 	}{
-		{
-			name:      "PlacesALocalBinaryAndLogsIn",
-			args:      []string{"inv-1", "--server", "http://cp.example"},
-			wantCalls: []string{"--version", "login --server http://cp.example inv-1", "postinstall"},
-		},
-		{
-			name:      "KeepsAnExistingLogin",
-			enrolled:  true,
-			args:      []string{"--no-service"},
-			wantOut:   "already logged in",
-			wantCalls: []string{"--version"},
-		},
-		{
-			name:      "DoesNotRequireEnrollment",
-			args:      []string{"--no-service"},
-			wantOut:   "not enrolled",
-			wantCalls: []string{"--version"},
-		},
+		{name: "PlacesALocalBinaryAndLogsIn", args: []string{"inv-1", "--server", "http://cp.example"},
+			wantCalls: []string{"--version", "login --server http://cp.example inv-1", "postinstall"}},
+		{name: "KeepsAnExistingLogin", enrolled: true, args: []string{"--no-service"}, wantOut: "already logged in", wantCalls: []string{"--version"}},
+		{name: "DoesNotRequireEnrollment", args: []string{"--no-service"}, wantOut: "not enrolled", wantCalls: []string{"--version"}},
 		{name: "RequiresServerBeforeChangingAnything", args: []string{"token", "--no-service"}, wantErr: true, wantOut: "pass --server URL"},
 		{name: "ChecksLocalInputBeforeChangingAnything", missingFrom: true, args: []string{"token", "--no-service"}, wantErr: true, wantOut: "no such file"},
 	} {

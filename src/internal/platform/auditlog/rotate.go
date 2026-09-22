@@ -32,11 +32,10 @@ func readTail(path string, n int) ([]byte, error) {
 	return append(prev, cur...), nil
 }
 
-// defaultTailLines bounds a tail with no explicit count; without it, n=0 means the whole file.
-const defaultTailLines = 200
-
-// tailChunk is how much is read per backwards step.
-const tailChunk = 64 << 10
+const (
+	defaultTailLines = 200      // bounds a tail with no explicit count; without it, n=0 means the whole file
+	tailChunk        = 64 << 10 // how much is read per backwards step
+)
 
 // bytesRead counts what the backwards reader pulled off disk: the cost-is-the-answer property a test can assert on.
 var bytesRead atomic.Int64

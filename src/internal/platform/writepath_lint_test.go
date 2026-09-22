@@ -1,12 +1,12 @@
 package platform_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -110,41 +110,21 @@ var bannedWrites = map[string]string{
 
 // TestWritePathLint fails if a package outside the allow-list opens a file for writing: a lint, because Go cannot forbid an import.
 func TestWritePathLint(t *testing.T) {
-	var findings []string
 	forEachModuleGoFile(t, func(rel string, file *ast.File, fset *token.FileSet) {
-		if slices.Contains(writeCapablePackages, filepath.ToSlash(filepath.Dir(rel))) {
-			return
-		}
-		if slices.Contains(writeCapableFiles, rel) {
+		if slices.Contains(writeCapablePackages, path.Dir(rel)) || slices.Contains(writeCapableFiles, rel) {
 			return
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "os" && bannedWrites[sel.Sel.Name] != "" {
+					t.Errorf("%s:%d: os.%s outside the write allow-list — %s",
+						rel, fset.Position(sel.Pos()).Line, sel.Sel.Name, bannedWrites[sel.Sel.Name])
+				}
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkgIdent, ok := sel.X.(*ast.Ident)
-			if !ok || pkgIdent.Name != "os" {
-				return true
-			}
-			why, banned := bannedWrites[sel.Sel.Name]
-			if !banned {
-				return true
-			}
-			findings = append(findings, fmt.Sprintf("%s:%d: os.%s outside the write allow-list — %s",
-				rel, fset.Position(call.Pos()).Line, sel.Sel.Name, why))
 			return true
 		})
 	})
-
-	for _, f := range findings {
-		t.Error(f)
-	}
-	if len(findings) > 0 {
+	if t.Failed() {
 		t.Logf("packages permitted to write: %s", strings.Join(writeCapablePackages, ", "))
 	}
 }

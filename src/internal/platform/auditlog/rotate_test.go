@@ -34,10 +34,9 @@ func TestTheLogRotatesInsteadOfGrowingForever(t *testing.T) {
 	previous := size(t, filepath.Join(dir, auditlog.FileName+".1"))
 
 	require.NotEqual(t, int64(0), previous, "nothing rotated; the log grows without bound")
-	assert.Truef(t, current <= 16<<20, "the current log is %d bytes, well past the rotation threshold", current)
+	assert.LessOrEqual(t, current, int64(16<<20), "the current log is well past the rotation threshold")
 	// Two generations, no more: the disk cost is bounded and the most recent history survives a rotation.
-	_, statErr := os.Stat(filepath.Join(dir, auditlog.FileName+".2"))
-	assert.Error(t, statErr, "a third generation exists; two is the whole design")
+	assert.NoFileExists(t, filepath.Join(dir, auditlog.FileName+".2"), "a third generation exists; two is the whole design")
 }
 
 // A tail that spans a rotation must still answer, or the rotation creates a blind window exactly when someone looks.
@@ -50,9 +49,9 @@ func TestTailReachesIntoThePreviousGeneration(t *testing.T) {
 
 	entries, err := auditlog.Tail(path, 3)
 	require.NoError(t, err)
-	require.Lenf(t, entries, 3, "want 3 entries across the rotation, got %d", len(entries))
-	assert.Equalf(t, "newer-1", entries[len(entries)-1].File, "newest is %q, want newer-1", entries[len(entries)-1].File)
-	assert.Equalf(t, "older-2", entries[0].File, "oldest of the three is %q, want older-2", entries[0].File)
+	require.Len(t, entries, 3, "entries across the rotation")
+	assert.Equal(t, "newer-1", entries[2].File, "newest")
+	assert.Equal(t, "older-2", entries[0].File, "oldest of the three")
 }
 
 func write(t *testing.T, path string, files ...string) {

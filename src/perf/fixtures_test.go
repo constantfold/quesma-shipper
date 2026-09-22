@@ -78,11 +78,7 @@ func stageCorpusFiles(t *testing.T, w *world, n int) int {
 	return bytes
 }
 
-func removeCorpusMaster() {
-	if corpusMaster != "" {
-		_ = os.RemoveAll(corpusMaster)
-	}
-}
+func removeCorpusMaster() { _ = os.RemoveAll(corpusMaster) }
 
 // Hardlinks the whole backlog into w and returns how many files it staged.
 func stageCorpus(t *testing.T, w *world) int {

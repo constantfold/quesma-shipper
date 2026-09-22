@@ -4,11 +4,11 @@ package linux
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func testSpec() Spec {
@@ -21,16 +21,14 @@ func testSpec() Spec {
 func TestRestartHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := RestartService(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("restart with a canceled context = %v, want context canceled", err)
-	}
+	require.ErrorIs(t, RestartService(ctx), context.Canceled)
 }
 
 func TestUnitCarriesRestartEnvironmentAndLoginStart(t *testing.T) {
 	got := renderUnit(testSpec())
 	for _, want := range []string{"ExecStart=/usr/local/bin/quesma-shipper run", "Restart=always",
 		"WantedBy=default.target", "Environment=HOME=/home/jane"} {
-		assert.Falsef(t, !strings.Contains(got, want), "unit is missing %q:\n%s", want, got)
+		assert.Containsf(t, got, want, "unit is missing %q", want)
 	}
 	assert.Falsef(t, strings.Contains(got, "User=") || strings.Contains(got, "[Timer]"), "user service contains system-level or timer configuration:\n%s", got)
 }

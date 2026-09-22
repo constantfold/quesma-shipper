@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -116,8 +116,7 @@ func run(m *testing.M) int {
 		// The edge network first: a container created on an internal one gets no port bindings (moby #36174).
 		network.WithNetwork([]string{"toxiproxy"}, edgeNet),
 		network.WithNetwork([]string{"toxiproxy"}, internalNet),
-		testcontainers.WithExposedPorts(
-			toxiproxyAPIPort+"/tcp", proxyListenPort+"/tcp", adminListenPort+"/tcp"),
+		testcontainers.WithExposedPorts(toxiproxyAPIPort+"/tcp", proxyListenPort+"/tcp", adminListenPort+"/tcp"),
 		// The image defaults the API to localhost, which from outside the container is nothing.
 		testcontainers.WithCmd("-host=0.0.0.0", "-proxy-metrics"),
 		testcontainers.WithWaitStrategy(wait.ForHTTP("/version").WithPort(toxiproxyAPIPort+"/tcp")),
@@ -150,13 +149,7 @@ func run(m *testing.M) int {
 		return fail("create the admin proxy", err)
 	}
 
-	adminS3 = awss3.NewFromConfig(aws.Config{
-		Region:      "us-east-1",
-		Credentials: credentials.NewStaticCredentialsProvider(minio.Username, minio.Password, ""),
-	}, func(o *awss3.Options) {
-		o.BaseEndpoint = aws.String(adminEndpoint)
-		o.UsePathStyle = true
-	})
+	adminS3 = pathStyleS3(adminEndpoint, minio.Username, minio.Password)
 
 	// Minted before the protocol peer starts, because it signs the tickets used by the measured path.
 	if err := mintIngestUser(ctx, minio); err != nil {
@@ -233,11 +226,7 @@ func withLatency(t *testing.T, rtt time.Duration) {
 		require.NoErrorf(t, err, "add %s latency toxic", stream)
 	}
 	// /reset removes every toxic and re-enables every proxy, however the test exits.
-	t.Cleanup(func() {
-		if err := toxi.ResetState(); err != nil {
-			t.Errorf("reset toxiproxy: %v", err)
-		}
-	})
+	t.Cleanup(func() { assert.NoError(t, toxi.ResetState(), "reset toxiproxy") })
 
 	// A full request, not a dial: the toxic delays data, so a connect-only probe would pass unshaped.
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 30 * time.Second}
@@ -246,9 +235,7 @@ func withLatency(t *testing.T, rtt time.Duration) {
 	require.NoError(t, err, "probe the shaped link")
 	resp.Body.Close()
 	elapsed := time.Since(start)
-	if elapsed < rtt*3/4 {
-		t.Fatalf("a round trip through the proxy took %v with %v of latency configured; "+
-			"the toxic is not on the wire and every timing below would be meaningless", elapsed, rtt)
-	}
+	require.GreaterOrEqualf(t, elapsed, rtt*3/4, "a round trip through the proxy with %v of latency configured; "+
+		"the toxic is not on the wire and every timing below would be meaningless", rtt)
 	t.Logf("shaping live: %v round trip at %v configured rtt", elapsed.Round(time.Millisecond), rtt)
 }

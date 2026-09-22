@@ -100,11 +100,7 @@ type cursorTurn struct {
 func cursorConversationRepeat() []cursorTurn {
 	return []cursorTurn{
 		{BubbleID: "r1", Kind: 1, Text: "run the tests, then run them again"},
-		{
-			BubbleID: "r2", Kind: 2, Tool: "run_terminal_cmd",
-			Command: "go test ./internal/...",
-			Result:  "ok  \tdemo/internal/api\t0.24s",
-		},
+		{BubbleID: "r2", Kind: 2, Tool: "run_terminal_cmd", Command: "go test ./internal/...", Result: "ok  \tdemo/internal/api\t0.24s"},
 		{BubbleID: "r3", Kind: 2, Tool: "run_terminal_cmd", Command: "go test ./internal/...", NoBubble: true},
 		{BubbleID: "r4", Kind: 2, Text: "Both runs passed.", Model: "claude-opus-5"},
 	}
@@ -114,12 +110,8 @@ func cursorConversation2026_07() []cursorTurn {
 	return []cursorTurn{
 		{BubbleID: "b1", Kind: 1, Text: "list the workspace"},
 		{BubbleID: "b2", Kind: 2, Text: "Listing the workspace folder contents.", Model: "claude-opus-5"},
-		{
-			BubbleID: "b3", Kind: 2, Tool: "run_terminal_cmd",
-			Command: "ls -la /work/api",
-			// The store's exclusive contribution: the transcript never records what a command printed.
-			Result: "total 24\n-rw-r--r--  1 dev staff  812 Jul  1 09:58 main.go",
-		},
+		// The store's exclusive contribution: the transcript never records what a command printed.
+		{BubbleID: "b3", Kind: 2, Tool: "run_terminal_cmd", Command: "ls -la /work/api", Result: "total 24\n-rw-r--r--  1 dev staff  812 Jul  1 09:58 main.go"},
 	}
 }
 
@@ -174,9 +166,8 @@ func writeCursorStore(t *testing.T, w *world, turns []cursorTurn) {
 		}
 	}
 	insert := func(key, value string) {
-		if _, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, key, value); err != nil {
-			t.Fatalf("insert %s: %v", key, err)
-		}
+		_, err := db.Exec(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, key, value)
+		require.NoErrorf(t, err, "insert %s", key)
 	}
 	insert("composerData:"+cursorConv, fmt.Sprintf(
 		`{"composerId":%q,"createdAt":1751000000000,"fullConversationHeadersOnly":[%s]}`,

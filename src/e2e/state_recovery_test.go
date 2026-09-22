@@ -41,14 +41,13 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		if changed {
 			want = 2
 		}
-		assert.Equal(t, w.store.versions(o.Key), want)
+		assert.Equal(t, want, w.store.versions(o.Key))
 		assert.NotEqual(t, slices.Contains(present, o.Key), changed)
 	}
 
-	// The replacement document loads, and the next run trusts it: nothing to send but the heartbeat,
-	// which is current state and rewritten every run.
-	_, peekErr := engine.Peek(statePath(w))
-	require.NoErrorf(t, peekErr, "the replacement document does not load: %v", peekErr)
+	// The replacement document loads, and the next run sends nothing but the heartbeat, which is rewritten every run.
+	_, err := engine.Peek(statePath(w))
+	require.NoError(t, err, "the replacement document does not load")
 	puts, beats := len(w.store.mirrorPuts()), len(w.store.heartbeats())
 	out := runOneShot(t)
 	assert.Len(t, shippedFromLog(t, w), 0)

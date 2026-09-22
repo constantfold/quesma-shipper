@@ -114,8 +114,7 @@ func (l *Log) Append(e Entry) error {
 // sanitize enforces the never-record list structurally: Reason is the only free text, so it is flattened and truncated.
 func sanitize(e Entry) Entry {
 	const maxReason = 500
-	e.Reason = strings.ReplaceAll(e.Reason, "\n", " ")
-	e.Reason = strings.ReplaceAll(e.Reason, "\r", " ")
+	e.Reason = strings.NewReplacer("\n", " ", "\r", " ").Replace(e.Reason)
 	if len(e.Reason) > maxReason {
 		e.Reason = e.Reason[:maxReason] + "…(truncated)"
 	}

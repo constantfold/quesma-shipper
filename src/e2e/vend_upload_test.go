@@ -205,10 +205,8 @@ func TestVendPathRefusesATicketNamingAnotherInstallsKey(t *testing.T) {
 // An ordinary per-object failure: nothing commits, and the run reports it rather than stopping.
 func assertEveryObjectFailed(t *testing.T, out string) {
 	t.Helper()
-	if counts := summary(t, out); counts["failed"] == 0 || counts["shipped"] != 0 {
-		t.Errorf("the run reported shipped %d failed %d; want every object failed and none shipped:\n%s",
-			counts["shipped"], counts["failed"], out)
-	}
+	counts := summary(t, out)
+	assert.Truef(t, counts["failed"] != 0 && counts["shipped"] == 0, "want every object failed and none shipped:\n%s", out)
 }
 
 func openHeartbeat(t *testing.T, v *world, put storedPut) string {

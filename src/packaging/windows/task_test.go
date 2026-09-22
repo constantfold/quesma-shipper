@@ -1,10 +1,9 @@
 package windows
 
 import (
-	"encoding/binary"
+	"bytes"
 	"encoding/xml"
 	"testing"
-	"unicode/utf16"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,19 +37,6 @@ func TestTaskRunsAsTheInteractiveUserAndSurvivesUpdates(t *testing.T) {
 	require.Truef(t, doc.enabled() && doc.Command == taskRunner(spec.Executable), "parsed task = %+v", doc)
 }
 
-func TestParseTaskAcceptsSchtasksUTF16Output(t *testing.T) {
-	raw := `<?xml version="1.0" encoding="UTF-16"?><Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>C:\shipper.exe</Command></Exec></Actions></Task>`
-	units := utf16.Encode([]rune(raw))
-	encoded := make([]byte, 2+2*len(units))
-	encoded[0], encoded[1] = 0xff, 0xfe
-	for i, unit := range units {
-		binary.LittleEndian.PutUint16(encoded[2+i*2:], unit)
-	}
-	doc, err := parseTask(encoded)
-	require.NoError(t, err)
-	require.Truef(t, doc.enabled() && doc.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
-}
-
 // Windows 11 26200 writes single-byte text declaring UTF-16, with no BOM and a doubled CR.
 func TestParseTaskAcceptsSingleByteOutputThatDeclaresUTF16(t *testing.T) {
 	raw := "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\r\n" +
@@ -78,18 +64,17 @@ func TestParseTaskTreatsAnAbsentEnabledAsEnabled(t *testing.T) {
 		`<Settings><Enabled>false</Enabled></Settings></Task>`
 	doc, err = parseTask([]byte(disabled))
 	require.NoError(t, err)
-	assert.True(t, !doc.enabled(), "an explicitly disabled task was reported as enabled")
+	assert.False(t, doc.enabled(), "an explicitly disabled task was reported as enabled")
 }
 
 func TestTaskXMLForSchtasksIsUTF16AndRoundTrips(t *testing.T) {
 	raw := renderTask(common.Spec{Executable: `C:\Quesma Shipper\quesma-shipper.exe`}, "S-1-5-21-1", "jane")
 	encoded := taskXMLForSchtasks(raw)
-	if len(encoded) < 2 || encoded[0] != 0xff || encoded[1] != 0xfe {
-		t.Fatalf("task XML lacks UTF-16LE BOM: %x", encoded[:min(len(encoded), 8)])
-	}
+	require.True(t, bytes.HasPrefix(encoded, []byte{0xff, 0xfe}), "task XML lacks UTF-16LE BOM")
 	doc, err := parseTask(encoded)
 	require.NoError(t, err)
-	require.Equalf(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Command, "parsed command = %q", doc.Command)
+	assert.True(t, doc.enabled())
+	assert.Equal(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Command)
 }
 
 func TestLegacyTaskIsOursOnlyForThisUsersOwnTask(t *testing.T) {
@@ -97,12 +82,11 @@ func TestLegacyTaskIsOursOnlyForThisUsersOwnTask(t *testing.T) {
 	doc, err := parseTask([]byte(ours))
 	require.NoError(t, err)
 	assert.True(t, legacyTaskIsOurs(doc, "s-1-5-21-7-1001"), "a task whose principal is this user, in a different case, was not recognized")
-	assert.True(t, !legacyTaskIsOurs(doc, "S-1-5-21-7-1002"), "another user's task was treated as ours to retire")
-	assert.True(t, !legacyTaskIsOurs(taskDocument{}, "S-1-5-21-7-1001"), "a task with no principal was treated as ours to retire")
+	assert.False(t, legacyTaskIsOurs(doc, "S-1-5-21-7-1002"), "another user's task was treated as ours to retire")
+	assert.False(t, legacyTaskIsOurs(taskDocument{}, "S-1-5-21-7-1001"), "a task with no principal was treated as ours to retire")
 }
 
 func TestTaskRunnerMapsBackToTheOwnedProgram(t *testing.T) {
-	runner := `C:\Users\Jane\Quesma Shipper\QUESMA-SHIPPER-SUPERVISOR.EXE`
-	want := `C:\Users\Jane\Quesma Shipper\quesma-shipper.exe`
-	require.Equal(t, programFromTask(runner), want)
+	require.Equal(t, `C:\Users\Jane\Quesma Shipper\quesma-shipper.exe`,
+		programFromTask(`C:\Users\Jane\Quesma Shipper\QUESMA-SHIPPER-SUPERVISOR.EXE`))
 }

@@ -83,7 +83,7 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	obs := childObservation{Output: out.String(), Elapsed: time.Since(start), TimedOut: ctx.Err() != nil, Err: err}
 
 	st := cmd.ProcessState
-	require.Falsef(t, st == nil, "the shipper left no process state behind: %v", err)
+	require.NotNilf(t, st, "the shipper left no process state behind: %v", err)
 	obs.ExitCode = st.ExitCode()
 	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		obs.Signal = ws.Signal()
@@ -242,9 +242,7 @@ func TestTheHarnessObservesAChildRun(t *testing.T) {
 	var obs childObservation
 	c := aroundStore(t, func() { obs = w.mustSync(t) })
 
-	if got := summary(t, obs.Output)["shipped"]; got < files {
-		t.Fatalf("the self-test run shipped %d of %d files", got, files)
-	}
+	require.GreaterOrEqual(t, summary(t, obs.Output)["shipped"], files, "the self-test run shipped too few files")
 	objects := len(w.currentKeys(t))
 
 	assert.Falsef(t, c.up <= 0 || c.down <= 0, "the run shipped %d files and the proxy counted %d bytes up, %d down", files, c.up, c.down)

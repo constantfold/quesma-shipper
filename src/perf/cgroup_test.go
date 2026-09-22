@@ -41,8 +41,7 @@ func stageCappedWorld(t *testing.T, budget int64) *world {
 	t.Helper()
 	w := stageSmokeWorld(t)
 	hard := budget * memoryCapHeadroom
-	w.extraEnv = append(w.extraEnv,
-		fmt.Sprintf("GOMEMLIMIT=%d", hard*memoryLimitNumerator/memoryLimitDenominator))
+	w.extraEnv = append(w.extraEnv, fmt.Sprintf("GOMEMLIMIT=%d", hard*memoryLimitNumerator/memoryLimitDenominator))
 	w.launcher = memoryCapArgs(hard, w.childVars())
 	return w
 }

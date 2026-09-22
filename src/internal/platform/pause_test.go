@@ -57,10 +57,8 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, platform.File), []byte(tc.body), 0o644))
 			got := platform.Read(dir)
-			if !got.Paused {
-				t.Fatal("a flag file that exists but does not parse read as NOT paused: " +
-					"that direction resumes collection on a machine whose owner stopped it")
-			}
+			require.True(t, got.Paused, "a flag file that exists but does not parse read as NOT paused: "+
+				"that direction resumes collection on a machine whose owner stopped it")
 			assert.True(t, tc.body == "" || got.Reason != "" || tc.name == "the flag says paused false", "no reason given, so `status` could not explain the state")
 		})
 	}
@@ -68,8 +66,7 @@ func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
 
 // The structural form of "no config can undo it": the guarantee is in what this package cannot see.
 func TestPauseCannotSeeConfigOrBackend(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps",
-		"github.com/QuesmaOrg/quesma-shipper/internal/platform").Output()
+	out, err := exec.Command("go", "list", "-deps", "github.com/QuesmaOrg/quesma-shipper/internal/platform").Output()
 	if err != nil {
 		t.Skipf("go list unavailable: %v", err)
 	}

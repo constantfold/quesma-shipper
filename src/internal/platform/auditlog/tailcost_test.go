@@ -27,7 +27,7 @@ func TestTailingALargeLogReadsOnlyTheEndOfIt(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	size := info.Size()
-	require.Truef(t, size >= 30<<20, "the fixture is only %d bytes; it cannot show the difference", size)
+	require.GreaterOrEqual(t, size, int64(30<<20), "the fixture is too small to show the difference")
 
 	bytesRead.Store(0)
 	entries, err := Tail(path, 3)
@@ -37,9 +37,6 @@ func TestTailingALargeLogReadsOnlyTheEndOfIt(t *testing.T) {
 	assert.Equal(t, "f19999", entries[2].File, "last entry must be the newest line")
 	assert.Equal(t, "f19997", entries[0].File, "first entry must be the third newest line")
 
-	if read > 1<<20 {
-		t.Errorf("tailing 3 lines from a %d byte log read %d bytes; it should read the end, "+
-			"not the file", size, read)
-	}
-	assert.NotEqual(t, int64(0), read, "nothing was read; the counter is not wired and this test proves nothing")
+	assert.LessOrEqual(t, read, int64(1<<20), "tailing 3 lines should read the end, not the file")
+	assert.NotZero(t, read, "nothing was read; the counter is not wired and this test proves nothing")
 }

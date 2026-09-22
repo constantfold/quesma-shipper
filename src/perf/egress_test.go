@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,16 +46,13 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	// An address, not a name: the claim is about routing, not about docker's resolver.
 	code, _, err := minioCtr.Exec(ctx, []string{"curl", "-sS", "--max-time", "5", "http://1.1.1.1/"})
 	require.NoError(t, err, "probe the store's egress")
-	if code == 0 {
-		t.Errorf("the store reached 1.1.1.1 from its own network: the network is not internal, " +
-			"and nothing here can claim the shipper's traffic is the only traffic")
-	}
+	assert.NotZero(t, code, "the store reached 1.1.1.1 from its own network: the network is not internal, "+
+		"and nothing here can claim the shipper's traffic is the only traffic")
 }
 
 // A sync whose tickets name a dead second-org endpoint must neither fall back elsewhere nor report success.
 func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
-	bucket, err := createVersionedBucket(context.Background(),
-		fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
+	bucket, err := createVersionedBucket(context.Background(), fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
 	// Real, so the emptiness assertion below is an answer rather than a NoSuchBucket.
 	require.NoError(t, err, "create the second org's bucket")
 	w := stageWorldIn(t, "nowhere", deadEndpoint, bucket)
@@ -67,22 +65,11 @@ func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 	t.Logf("a sync whose tickets name %s ended %s: shipped %d, failed %d",
 		deadEndpoint, obs.exitStatus(), counts["shipped"], counts["failed"])
 
-	if counts["shipped"] != 0 {
-		t.Errorf("a sync whose tickets name %s reported %d files shipped:\n%s",
-			deadEndpoint, counts["shipped"], obs.Output)
-	}
-	if counts["failed"] < files {
-		t.Errorf("a sync whose tickets name %s reported %d files failed, want at least the %d it "+
-			"staged: a file that was neither shipped nor failed went somewhere unaccounted for\n%s",
-			deadEndpoint, counts["failed"], files, obs.Output)
-	}
-	if moved := proxiedBytes(t) - before; moved != 0 {
-		t.Errorf("a sync whose tickets name %s moved %d bytes through the real store's proxy",
-			deadEndpoint, moved)
-	}
-	if keys := w.currentKeys(t); len(keys) != 0 {
-		t.Errorf("a sync whose tickets name %s landed %d objects in %s", deadEndpoint, len(keys), bucket)
-	}
+	assert.Zerof(t, counts["shipped"], "a sync whose tickets name %s reported files shipped:\n%s", deadEndpoint, obs.Output)
+	assert.GreaterOrEqualf(t, counts["failed"], files, "a sync whose tickets name %s reported fewer failed files than it "+
+		"staged: a file that was neither shipped nor failed went somewhere unaccounted for\n%s", deadEndpoint, obs.Output)
+	assert.Zerof(t, proxiedBytes(t)-before, "a sync whose tickets name %s moved bytes through the real store's proxy", deadEndpoint)
+	assert.Emptyf(t, w.currentKeys(t), "a sync whose tickets name %s landed objects in %s", deadEndpoint, bucket)
 }
 
 // A privileged port: an ephemeral one bound and closed to learn its number is free for anything to take.

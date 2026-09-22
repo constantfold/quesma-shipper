@@ -103,8 +103,7 @@ func retireLegacyTask(userSID string) error {
 	}
 	_, _ = schtasks("/End", "/TN", legacyTaskName)
 	if out, err := schtasks("/Delete", "/TN", legacyTaskName, "/F"); err != nil {
-		return fmt.Errorf("supervise: retire the former scheduled task %q: %s",
-			legacyTaskName, commandError(err, out))
+		return fmt.Errorf("supervise: retire the former scheduled task %q: %s", legacyTaskName, commandError(err, out))
 	}
 	return nil
 }

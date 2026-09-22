@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,15 +101,10 @@ func assertInFlightCapIsWired(t *testing.T, w *world) {
 	probe.extraEnv = append(slices.Clone(w.extraEnv), envMaxInFlightBytes+"=not-a-byte-count")
 
 	obs := probe.observedSync(t)
-	if obs.Err == nil {
-		t.Fatalf("a sync with %s set to a non-number ended %s: the cap this scenario sets is not "+
-			"being read, so the peak below would describe the compiled default instead\n%s",
-			envMaxInFlightBytes, obs.exitStatus(), obs.Output)
-	}
-	if !strings.Contains(obs.Output, envMaxInFlightBytes) {
-		t.Fatalf("a sync with %s set to a non-number ended %s without naming it:\n%s",
-			envMaxInFlightBytes, obs.exitStatus(), obs.Output)
-	}
+	require.Errorf(t, obs.Err, "a sync with %s set to a non-number succeeded: the cap this scenario sets is not "+
+		"being read, so the peak below would describe the compiled default instead\n%s", envMaxInFlightBytes, obs.Output)
+	require.Containsf(t, obs.Output, envMaxInFlightBytes, "a sync with %s set to a non-number ended %s without naming it",
+		envMaxInFlightBytes, obs.exitStatus())
 }
 
 // One large JSON string forces a whole decoded value; its CPU cost has no calibrated budget.
@@ -152,37 +147,20 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 	recordResult(t, row)
 
 	// The timeout first: both arrive as a SIGKILL and only one of them is about memory.
-	if obs.TimedOut {
-		t.Fatalf("%s: the sync did not finish inside %v and was killed for running long, not by "+
-			"its %d byte cap; peak read %d bytes (%s)",
-			scenario, syncTimeout, budget.memory, obs.PeakRSS, obs.PeakRSSSource)
-	}
+	require.Falsef(t, obs.TimedOut, "%s: the sync did not finish inside %v and was killed for running long, not by "+
+		"its %d byte cap; peak read %d bytes (%s)", scenario, syncTimeout, budget.memory, obs.PeakRSS, obs.PeakRSSSource)
 	// Not necessarily this scenario's ceiling: S4 runs uncapped, so a kill there came from the machine.
-	if obs.Killed() {
-		t.Fatalf("%s: the child was killed carrying %d bytes of fixture in %d files under a %d "+
-			"byte budget; peak read %d bytes (%s) before it went",
-			scenario, logical, files, budget.memory, obs.PeakRSS, obs.PeakRSSSource)
-	}
-	if obs.Err != nil {
-		t.Fatalf("%s: quesma-shipper run --once ended %s: %v\n%s", scenario, obs.exitStatus(), obs.Err, obs.Output)
-	}
+	require.Falsef(t, obs.Killed(), "%s: the child was killed carrying %d bytes of fixture in %d files under a %d "+
+		"byte budget; peak read %d bytes (%s) before it went", scenario, logical, files, budget.memory, obs.PeakRSS, obs.PeakRSSSource)
+	require.NoErrorf(t, obs.Err, "%s: quesma-shipper run --once ended %s\n%s", scenario, obs.exitStatus(), obs.Output)
 
 	counts := summary(t, obs.Output)
-	if counts["shipped"] < files {
-		t.Errorf("%s: the run shipped %d of %d files:\n%s", scenario, counts["shipped"], files, obs.Output)
-	}
-	if counts["failed"] != 0 {
-		t.Errorf("%s: the run failed %d files:\n%s", scenario, counts["failed"], obs.Output)
-	}
-	if want := files + smokeSidecarObjects; objects != want {
-		t.Errorf("%s: %d objects under %s, want exactly %d (%d files and %d sidecars)",
-			scenario, objects, w.keyRoot, want, files, smokeSidecarObjects)
-	}
-	if floor := int64(logical) / 2; c.up < floor {
-		t.Errorf("%s: %d bytes went up for %d logical bytes, under the %d floor: the fixture "+
-			"compressed away and the run proves nothing about carrying %d bytes",
-			scenario, c.up, logical, floor, logical)
-	}
+	assert.GreaterOrEqualf(t, counts["shipped"], files, "%s: the run shipped too few files:\n%s", scenario, obs.Output)
+	assert.Zerof(t, counts["failed"], "%s: the run failed files:\n%s", scenario, obs.Output)
+	assert.Equalf(t, files+smokeSidecarObjects, objects, "%s: objects under %s (%d files and %d sidecars)",
+		scenario, w.keyRoot, files, smokeSidecarObjects)
+	assert.GreaterOrEqualf(t, c.up, int64(logical)/2, "%s: bytes up for %d logical bytes, under half: the fixture "+
+		"compressed away and the run proves nothing about carrying them", scenario, logical)
 
 	assertPeakUnderBudget(t, scenario, obs, budget.memory)
 	assertNoResidualScratch(t, w)
@@ -193,10 +171,7 @@ func raiseMaxFileBytes(t *testing.T, w *world, limit int64) {
 	t.Helper()
 	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
 	body, err := os.ReadFile(path)
-	require.Falsef(t, err != nil, "read the world's config: %v", err)
-	body = append(body, fmt.Sprintf(
-		"sources:\n  - id: claude-code-transcripts\n    max_file_bytes: %d\n", limit)...)
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		t.Fatalf("raise max_file_bytes to %d: %v", limit, err)
-	}
+	require.NoError(t, err, "read the world's config")
+	body = append(body, fmt.Sprintf("sources:\n  - id: claude-code-transcripts\n    max_file_bytes: %d\n", limit)...)
+	require.NoErrorf(t, os.WriteFile(path, body, 0o600), "raise max_file_bytes to %d", limit)
 }

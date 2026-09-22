@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,9 +29,8 @@ func TestHomebrewUpdateReexec(t *testing.T) {
 	helper := filepath.Join(root, "replacement.go")
 	require.NoError(t, os.WriteFile(helper, []byte("package main\nimport (\"fmt\"; \"os\")\nfunc main() { fmt.Println(os.Args[1]) }\n"), 0o600))
 	replacement := filepath.Join(root, "replacement")
-	if out, err := exec.Command("go", "build", "-o", replacement, helper).CombinedOutput(); err != nil {
-		t.Fatalf("build replacement: %v, %s", err, out)
-	}
+	out, err := exec.Command("go", "build", "-o", replacement, helper).CombinedOutput()
+	require.NoErrorf(t, err, "build replacement: %s", out)
 	executable, err := os.Executable()
 	require.NoError(t, err)
 	raw, err := os.ReadFile(executable)
@@ -45,18 +43,18 @@ func TestHomebrewUpdateReexec(t *testing.T) {
 	plist := writePlist(t, root, installed)
 	cmd := exec.Command(link, "-test.run=^TestHomebrewUpdateReexec$")
 	cmd.Env = append(os.Environ(), "QUESMA_TEST_BREW_REEXEC=1", "QUESMA_TEST_BREW_REPLACEMENT="+replacement)
-	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "self-update restarted\n" {
-		t.Fatalf("update and reexec: %v, %s", err, out)
-	}
-	if target, err := os.Readlink(link); err != nil || target != installed {
-		t.Fatalf("command link changed: %q, %v", target, err)
-	}
+	out, err = cmd.CombinedOutput()
+	require.NoErrorf(t, err, "update and reexec: %s", out)
+	require.Equal(t, "self-update restarted\n", string(out))
+	target, err := os.Readlink(link)
+	require.NoError(t, err)
+	require.Equal(t, installed, target, "command link changed")
 	require.Equal(t, common.ServiceProgram(Status{Path: plist}), installed)
 	updated, err := os.ReadFile(installed)
 	require.Truef(t, err == nil && !bytes.Equal(raw, updated), "binary was not replaced: %v", err)
-	if out, err := exec.Command(link, "next launch").CombinedOutput(); err != nil || string(out) != "next launch\n" {
-		t.Fatalf("launch after update: %v, %s", err, out)
-	}
+	out, err = exec.Command(link, "next launch").CombinedOutput()
+	require.NoErrorf(t, err, "launch after update: %s", out)
+	require.Equal(t, "next launch\n", string(out))
 }
 
 func TestHomebrewServiceOwnership(t *testing.T) {
@@ -90,11 +88,9 @@ func TestHomebrewProgramCannotRemoveItself(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "Caskroom", "quesma-shipper", "1.0.0", "quesma-shipper")
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
 	require.NoError(t, os.WriteFile(exe, []byte("installed binary"), 0o755))
-	if _, err := RemoveProgram(exe); err == nil || !strings.Contains(err.Error(), "brew uninstall") {
-		t.Fatalf("RemoveProgram = %v", err)
-	}
-	_, statErr := os.Stat(exe)
-	require.NoError(t, statErr)
+	_, err := RemoveProgram(exe)
+	require.ErrorContains(t, err, "brew uninstall")
+	require.FileExists(t, exe)
 }
 
 func TestHomebrewUninstallOwnership(t *testing.T) {

@@ -51,22 +51,12 @@ func Open(stateDir, runID string) (*Log, error) {
 	return &Log{path: path, runID: runID}, nil
 }
 
-func (l *Log) Start() {
-	l.append(entry{Ev: "start", PID: os.Getpid()}, true)
-}
-
-func (l *Log) Phase(name string) {
-	l.append(entry{Ev: "phase", Phase: name}, false)
-}
+func (l *Log) Start()            { l.append(entry{Ev: "start", PID: os.Getpid()}, true) }
+func (l *Log) Phase(name string) { l.append(entry{Ev: "phase", Phase: name}, false) }
+func (l *Log) Exit()             { l.append(entry{Ev: "exit"}, true) }
 
 // Reported marks the crash report DELIVERED; Exit cannot, since the heartbeat fails open.
-func (l *Log) Reported() {
-	l.append(entry{Ev: "reported"}, true)
-}
-
-func (l *Log) Exit() {
-	l.append(entry{Ev: "exit"}, true)
-}
+func (l *Log) Reported() { l.append(entry{Ev: "reported"}, true) }
 
 // append fsyncs only run markers: page-cache writes survive process death, only power loss needs the sync.
 func (l *Log) append(e entry, syncNow bool) {
