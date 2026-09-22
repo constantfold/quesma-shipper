@@ -149,6 +149,17 @@ func (e Enrollment) PrivateKey() (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(b), nil
 }
 
+// Client binds requests to this enrollment's endpoint, identity and signing key.
+func (e Enrollment) Client() (*Client, error) {
+	key, err := e.PrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	return New(Options{
+		Endpoint: e.Endpoint, InstallID: e.InstallID, Organization: e.Organization, DeviceKey: key,
+	})
+}
+
 // NewDeviceKey generates the request-signing keypair.
 func NewDeviceKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 	return ed25519.GenerateKey(nil)

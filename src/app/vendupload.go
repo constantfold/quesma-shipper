@@ -50,16 +50,7 @@ func newControlPlaneClient(stateDir string) (*controlplane.Client, error) {
 		return nil, errors.New("uploading needs an enrolled control plane to authorize every object; " +
 			"`quesma-shipper login` first (`quesma-shipper preview` works without it)")
 	}
-	deviceKey, err := enrollment.PrivateKey()
-	if err != nil {
-		return nil, err
-	}
-	return controlplane.New(controlplane.Options{
-		Endpoint:     enrollment.Endpoint,
-		InstallID:    enrollment.InstallID,
-		Organization: enrollment.Organization,
-		DeviceKey:    deviceKey,
-	})
+	return enrollment.Client()
 }
 
 // newUploadPort assembles the write path. The enrollment record is mandatory, the allowlist is not:

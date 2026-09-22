@@ -103,17 +103,7 @@ func unusableCache(fetchErr, cacheErr error) error {
 
 // fetch does one round-trip and caches what it gets.
 func fetch(ctx context.Context, o RefreshOptions) (Remote, error) {
-	deviceKey, err := o.Enrollment.PrivateKey()
-	if err != nil {
-		return Remote{}, err
-	}
-
-	c, err := New(Options{
-		Endpoint:     o.Enrollment.Endpoint,
-		InstallID:    o.Enrollment.InstallID,
-		Organization: o.Enrollment.Organization,
-		DeviceKey:    deviceKey,
-	})
+	c, err := o.Enrollment.Client()
 	if err != nil {
 		return Remote{}, err
 	}

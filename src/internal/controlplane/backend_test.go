@@ -129,14 +129,7 @@ func (p *fakePlane) enrolled(t *testing.T, endpoint, installID string) *controlp
 func (p *fakePlane) client(t *testing.T, endpoint, install string) *controlplane.Client {
 	t.Helper()
 	e := p.enrolled(t, endpoint, install)
-	priv, err := e.PrivateKey()
-	require.NoError(t, err)
-	c, err := controlplane.New(controlplane.Options{
-		Endpoint:     endpoint,
-		InstallID:    install,
-		Organization: e.Organization,
-		DeviceKey:    priv,
-	})
+	c, err := e.Client()
 	require.NoError(t, err)
 	return c
 }
