@@ -18,7 +18,7 @@ func digitsOnly(s string) string {
 	}, s)
 }
 
-// luhnValid implements the Luhn check used by payment card numbers; d must be digits only.
+// luhnValid is the payment card Luhn check; d must be digits only.
 func luhnValid(d string) bool {
 	sum := 0
 	double := false
@@ -37,7 +37,7 @@ func luhnValid(d string) bool {
 }
 
 // panValid decides whether a digit run is plausibly a payment card number, not merely Luhn-valid:
-// Luhn alone passes roughly one in ten random digit runs. Three structural gates come first: card
+// Luhn alone passes roughly one in ten random digit runs. Three structural checks come first: card
 // grouping, a real PAN length (13-16 or 19), and the issuer range, which carries most precision.
 func panValid(s string) bool {
 	groups := []int{0}

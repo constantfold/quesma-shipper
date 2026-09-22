@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,38 @@ func TestAnchorRefusals(t *testing.T) {
 	}
 }
 
+// The hand-written half of the differential test: a candidate the pattern rejects sitting in
+// front of, or inside, a real match. Getting the resume position wrong loses exactly these.
+var anchorTraps = []string{
+	// A rejected candidate in front of a live one, sharing a prefix.
+	"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
+	"AKIAAKIA0123456789ABCDEF",
+	"SKSK" + strings.Repeat("a", 32),
+	"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
+	"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
+	// Boundary traps around the \b rules.
+	"_AIza" + strings.Repeat("b", 35),
+	"AIza" + strings.Repeat("b", 36),
+	" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
+	// Case-folded heads, including the runes (?i) reaches outside ASCII.
+	"ToKeN: " + strings.Repeat("a", 25),
+	"toKen: " + strings.Repeat("a", 25),
+	"MY_ſECRET token : " + strings.Repeat("a", 25),
+	"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
+	"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
+	// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
+	"://user:pass@host",
+	"x://user:pass@host",
+	"1http://user:pass@host",
+	"http://user:pass@host postgres://admin:hunter2@db:5432/app",
+	"see http://a://user:pass@host",
+	"ftp://u:p@h ftp://u:p@h",
+	"http://user@host",
+	"http://user:pw@ http://user:password@host",
+	strings.Repeat("a", 100) + "://u:ppp@h",
+	"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
+}
+
 // The differential fuzz: for every anchored rule, the literal scan and the plain sweep must return
 // the same spans. The per-rule alphabet is adversarial: the paths differ only on near-matches.
 func TestAnchorMatchesSweep(t *testing.T) {
@@ -166,23 +199,21 @@ func TestAnchorMatchesSweep(t *testing.T) {
 	if testing.Short() {
 		rounds = 2000
 	}
-	total := 0
 	for _, r := range loadedRules(t, PatternPacks...) {
 		if r.anchor == nil {
 			continue
 		}
+		values := slices.Clone(anchorTraps)
 		alphabet := fuzzAlphabet(r)
 		for i := 0; i < rounds; i++ {
-			value := buildFuzzValue(rng, alphabet)
-			got := r.matchAnchored(value)
-			want := r.matchSweep(value)
-			if !reflect.DeepEqual(got, want) {
+			values = append(values, buildFuzzValue(rng, alphabet))
+		}
+		for _, value := range values {
+			if got, want := r.matchAnchored(value), r.matchSweep(value); !reflect.DeepEqual(got, want) {
 				t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
 			}
-			total++
 		}
 	}
-	t.Logf("%d cases", total)
 }
 
 // fuzzAlphabet is the token pool one rule's fuzz draws from.
@@ -224,52 +255,6 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 		b.WriteString(pool[rng.Intn(len(pool))])
 	}
 	return b.String()
-}
-
-// The hand-written half of the fuzz: a candidate the pattern rejects sitting in front of, or
-// inside, a real match. Getting the resume position wrong loses exactly these.
-func TestAnchorOverlapTraps(t *testing.T) {
-	rules := loadedRules(t, PatternPacks...)
-
-	values := []string{
-		// A rejected candidate in front of a live one, sharing a prefix.
-		"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
-		"AKIAAKIA0123456789ABCDEF",
-		"SKSK" + strings.Repeat("a", 32),
-		"SK" + strings.Repeat("a", 32) + "SK" + strings.Repeat("f", 32),
-		"eyJ.eyJ" + strings.Repeat("a", 12) + ".eyJ" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12),
-		// Boundary traps around the \b rules.
-		"_AIza" + strings.Repeat("b", 35),
-		"AIza" + strings.Repeat("b", 36),
-		" AIza" + strings.Repeat("b", 35) + " AIza" + strings.Repeat("c", 35),
-		// Case-folded heads, including the runes (?i) reaches outside ASCII.
-		"ToKeN: " + strings.Repeat("a", 25),
-		"toKen: " + strings.Repeat("a", 25),
-		"MY_ſECRET token : " + strings.Repeat("a", 25),
-		"AWS_SECRET_ACCESS_KEY=" + strings.Repeat("a", 40),
-		"aws access key id = " + strings.Repeat("A", 40) + " aws_secret_access_key=" + strings.Repeat("b", 40),
-		// URL userinfo: schemes that fail, schemes that overlap, no scheme at all.
-		"://user:pass@host",
-		"x://user:pass@host",
-		"1http://user:pass@host",
-		"http://user:pass@host postgres://admin:hunter2@db:5432/app",
-		"see http://a://user:pass@host",
-		"ftp://u:p@h ftp://u:p@h",
-		"http://user@host",
-		"http://user:pw@ http://user:password@host",
-		strings.Repeat("a", 100) + "://u:ppp@h",
-		"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
-	}
-
-	for _, v := range values {
-		for _, r := range rules {
-			if r.anchor == nil {
-				continue
-			}
-			got, want := r.matchAnchored(v), r.matchSweep(v)
-			assert.Equalf(t, got, want, "%s on %q:\n anchored %v\n sweep    %v", r.id, v, got, want)
-		}
-	}
 }
 
 // The regression for the shape that made anchoring quadratic: every line a PEM header, none a

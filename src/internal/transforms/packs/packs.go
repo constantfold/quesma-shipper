@@ -23,9 +23,6 @@ const (
 	GenericEntropy = "generic-entropy"
 )
 
-// HeuristicPacks are the low-confidence packs; the engine checks exemptions first.
-var HeuristicPacks = []string{GenericEntropy}
-
 // Span is one matched byte range; the engine's transforms.Span is an alias of it.
 type Span struct {
 	Start  int
@@ -42,7 +39,7 @@ type ruleSpec struct {
 	Guard    string   `json:"guard"`
 	Scanner  string   `json:"scanner"`
 
-	// Sweep pins the rule to the plain FindAll path: for keywords that occur mid-match
+	// Sweep keeps the rule on the plain FindAll path: for keywords that occur mid-match
 	// rather than at every match's start, or where anchoring is a proven cost cliff.
 	Sweep bool `json:"sweep"`
 }
@@ -65,8 +62,7 @@ type Rule struct {
 	// hand is a byte walk that replaces the regex outright, declared by the corpus entry.
 	hand candidateScanner
 
-	// fused names this rule's slot in the shared PII walk: the keywordless shapes read
-	// candidates out of a ValueScan the caller filled once for the whole ladder.
+	// fused names this rule's slot in the shared PII walk a ValueScan runs once per value.
 	fused fusedKind
 
 	// anchor is the literal entry point built from the corpus keywords, nil when the rule
@@ -78,8 +74,8 @@ type Rule struct {
 // the guard and checksum. See pii.go and handscan.go for each equivalence argument.
 type candidateScanner func(value string) []Span
 
-// The one registry of scanners, one entry per name: a fused kind reads its candidates out of
-// the shared walk, and only a rule with no slot there carries its own byte walk.
+// A fused kind reads its candidates out of the shared walk; only a rule with no slot there
+// carries its own byte walk.
 var scanners = map[string]struct {
 	fn    candidateScanner
 	fused fusedKind
@@ -96,35 +92,24 @@ func (r *Rule) RuleID() string { return r.id }
 // Keywords are the rule's literal markers, for registering with a shared Prefilter.
 func (r *Rule) Keywords() []string { return r.keywords }
 
-// MatchScanned finds every occurrence in a value the caller has already scanned for keywords.
-// Hand scanner, anchor or sweep: all three answer identically, which the tests beside each pin.
-func (r *Rule) MatchScanned(value string) []Span {
-	if r.fused != fusedNone {
-		var c ValueScan
-		c.Reset(value)
-		return r.checked(c.candidates(r.fused), value)
-	}
-	if r.hand != nil {
+// MatchScannedIn finds every occurrence in a value the caller has already scanned for keywords,
+// with scan Reset to this exact value. Fused slot, hand scanner, anchor or sweep: all answer
+// identically, which the tests beside each check.
+func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
+	switch {
+	case r.fused != fusedNone:
+		// Guard and checksum read the scan's own bytes, so a stale scan cannot be checksummed
+		// against a different string.
+		return r.checked(scan.candidates(r.fused), scan.value)
+	case r.hand != nil:
 		return r.checked(r.hand(value), value)
-	}
-	if r.anchor != nil {
+	case r.anchor != nil:
 		return r.matchAnchored(value)
 	}
 	return r.matchSweep(value)
 }
 
-// MatchScannedIn is MatchScanned for an engine holding a ValueScan Reset to this exact
-// value; every other rule takes MatchScanned's paths unaffected.
-func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
-	if r.fused != fusedNone {
-		// Guard and checksum must read the scan's own bytes, not the caller's argument: a
-		// scan left pointing at an earlier value would checksum the wrong string silently.
-		return r.checked(scan.candidates(r.fused), scan.value)
-	}
-	return r.MatchScanned(value)
-}
-
-// checked drops the candidates their guard or checksum rejects, in place, and stamps the
+// checked drops, in place, the candidates the guard or checksum rejects, and stamps the
 // survivors. A rejected candidate still consumed its bytes, as FindAll commits them.
 func (r *Rule) checked(found []Span, value string) []Span {
 	out := found[:0]
@@ -141,8 +126,7 @@ func (r *Rule) checked(found []Span, value string) []Span {
 	return out
 }
 
-// The one statement of the guard-then-checksum policy: both filtered paths decide through
-// it, so a change to either predicate cannot reach one path and miss the other.
+// accepts applies the guard-then-checksum policy every path shares.
 func (r *Rule) accepts(value string, start, end int) bool {
 	if r.guard != nil && !r.guard(value, start, end) {
 		return false
@@ -150,8 +134,7 @@ func (r *Rule) accepts(value string, start, end int) bool {
 	return r.checksum == nil || r.checksum(value[start:end])
 }
 
-// matchSweep hands the whole value to the regex engine, and is the reference the two fast
-// paths are held to: the tests replay each against it over adversarial input.
+// matchSweep hands the whole value to the regex engine: the reference the fast paths are held to.
 func (r *Rule) matchSweep(value string) []Span {
 	var out []Span
 	for _, loc := range r.re.FindAllStringSubmatchIndex(value, -1) {
@@ -176,9 +159,8 @@ func (r *Rule) matchAnchored(value string) []Span {
 		if at < 0 {
 			break
 		}
+		// \b, which verify cannot see: every entry literal starts on a word byte.
 		if s.wordEdge && at > 0 && isWordByte(value[at-1]) {
-			// \b failed, which the anchored pattern cannot see: value[at:] begins a text.
-			// Every entry literal starts on a word byte, so the byte before is the test.
 			pos = at + 1
 			continue
 		}
@@ -196,19 +178,15 @@ func (r *Rule) matchAnchored(value string) []Span {
 			out = append(out, sp)
 		}
 		// A match carries an entry literal, so it is never empty.
-		pos = loc[1]
-		if pos <= at {
-			pos = at + 1
-		}
+		pos = max(loc[1], at+1)
 	}
 	return out
 }
 
-// span turns one match's index list into the span to redact, guard and checksum applied.
+// span turns one match's index list into the span to redact, guard and checksum applied. A
+// capture group redacts the value and keeps the key name, which is signal and not the secret.
 func (r *Rule) span(value string, loc []int) (Span, bool) {
 	start, end := loc[0], loc[1]
-	// A capture group redacts the value and leaves the context: for assignments and
-	// headers the key name is useful signal, and the name is not the secret.
 	if r.capture > 0 && len(loc) > 2*r.capture+1 && loc[2*r.capture] >= 0 {
 		start, end = loc[2*r.capture], loc[2*r.capture+1]
 	}
@@ -218,27 +196,21 @@ func (r *Rule) span(value string, loc []int) (Span, bool) {
 	return Span{Start: start, End: end, RuleID: r.id}, true
 }
 
-// What the corpora name; an unknown name is a loud compile error.
 var checksums = map[string]func(string) bool{
 	"iban":  ibanValid,
 	"pesel": peselValid,
 	"pan":   panValid,
 }
 
-// Context checks a rule can declare: a guard sees the characters around the match, which
-// is how "not part of a decimal number" is expressed where \b cannot say it.
+// A guard sees the characters around the match, for what \b cannot say.
 var guards = map[string]func(value string, start, end int) bool{
-	// Rejects a match that is a piece of a larger decimal number: preceded by a dot, or
-	// followed by a dot that continues into digits. Any other dot is prose punctuation.
+	// Rejects a piece of a larger decimal number: preceded by a dot, or followed by a dot that
+	// continues into digits. Any other dot is prose punctuation.
 	"no-decimal-neighbor": func(value string, start, end int) bool {
 		if start > 0 && value[start-1] == '.' {
 			return false
 		}
-		if end < len(value) && value[end] == '.' &&
-			end+1 < len(value) && value[end+1] >= '0' && value[end+1] <= '9' {
-			return false
-		}
-		return true
+		return !(end+1 < len(value) && value[end] == '.' && value[end+1] >= '0' && value[end+1] <= '9')
 	},
 }
 
@@ -258,74 +230,60 @@ func Load(pack string) ([]*Rule, error) {
 
 	out := make([]*Rule, 0, len(c.Rules))
 	for _, spec := range c.Rules {
-		r, err := compileSpec(pack, spec)
+		r, err := compileSpec(spec)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("packs: %s rule %s: %w", pack, spec.ID, err)
 		}
 		out = append(out, r)
 	}
 	return out, nil
 }
 
-// Split out of Load so the tests can compile a spec the corpora deliberately do not have.
-func compileSpec(pack string, spec ruleSpec) (*Rule, error) {
+// compileSpec is split out of Load so the tests can compile specs the corpora do not have. An
+// unknown checksum, guard or scanner name is an error.
+func compileSpec(spec ruleSpec) (*Rule, error) {
 	re, err := regexp.Compile(spec.Regex)
 	if err != nil {
-		return nil, fmt.Errorf("packs: %s rule %s: %w", pack, spec.ID, err)
+		return nil, err
 	}
 	r := &Rule{id: spec.ID, re: re, keywords: spec.Keywords, capture: spec.Capture}
 	if spec.Checksum != "" {
-		fn, ok := checksums[spec.Checksum]
-		if !ok {
-			return nil, fmt.Errorf("packs: %s rule %s: unknown checksum %q",
-				pack, spec.ID, spec.Checksum)
+		if r.checksum = checksums[spec.Checksum]; r.checksum == nil {
+			return nil, fmt.Errorf("unknown checksum %q", spec.Checksum)
 		}
-		r.checksum = fn
 	}
 	if spec.Guard != "" {
-		fn, ok := guards[spec.Guard]
-		if !ok {
-			return nil, fmt.Errorf("packs: %s rule %s: unknown guard %q",
-				pack, spec.ID, spec.Guard)
+		if r.guard = guards[spec.Guard]; r.guard == nil {
+			return nil, fmt.Errorf("unknown guard %q", spec.Guard)
 		}
-		r.guard = fn
 	}
 	if spec.Scanner != "" {
 		sc, ok := scanners[spec.Scanner]
 		if !ok {
-			return nil, fmt.Errorf("packs: %s rule %s: unknown scanner %q",
-				pack, spec.ID, spec.Scanner)
+			return nil, fmt.Errorf("unknown scanner %q", spec.Scanner)
 		}
-		// A scanner returns whole spans, so pairing one with a capture group would redact
-		// more than the regex it reproduces: the combination does not compile.
+		// A scanner returns whole spans, so with a capture group it would redact more than its regex.
 		if spec.Capture > 0 {
-			return nil, fmt.Errorf("packs: %s rule %s: scanner %q with capture group %d",
-				pack, spec.ID, spec.Scanner, spec.Capture)
+			return nil, fmt.Errorf("scanner %q with capture group %d", spec.Scanner, spec.Capture)
 		}
-		r.hand = sc.fn
-		r.fused = sc.fused
-		// No anchor for a rule that never runs its regex: it would be dead state.
+		r.hand, r.fused = sc.fn, sc.fused
+		// No anchor: the regex never runs.
 		return r, nil
 	}
-	anchor, err := newAnchorScan(spec.Regex, spec.Keywords, spec.Sweep)
-	if err != nil {
-		return nil, fmt.Errorf("packs: %s rule %s: %w", pack, spec.ID, err)
-	}
-	r.anchor = anchor
-	return r, nil
+	r.anchor, err = newAnchorScan(spec.Regex, spec.Keywords, spec.Sweep)
+	return r, err
 }
 
-// Available lists the packs with an embedded corpus, plus the code-only heuristic packs.
+// Available lists the packs with an embedded corpus, plus the code-only heuristic pack.
 func Available() []string {
 	entries, err := corpora.ReadDir("data")
 	if err != nil {
 		return nil
 	}
-	var out []string
+	out := []string{GenericEntropy}
 	for _, e := range entries {
 		out = append(out, strings.TrimSuffix(e.Name(), ".json"))
 	}
-	out = append(out, HeuristicPacks...)
 	slices.Sort(out)
 	return out
 }

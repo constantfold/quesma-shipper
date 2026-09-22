@@ -8,12 +8,11 @@ import (
 	"unicode/utf8"
 )
 
-// anchorScan finds corpus keywords, then verifies an anchored regex.
-// Keywords must start every match; rules with interior keywords declare sweep instead.
-// TestAnchorMatchesSweep checks that contract.
+// anchorScan finds corpus keywords, then verifies an anchored regex. Keywords must start every
+// match; rules with interior keywords declare sweep instead. TestAnchorMatchesSweep checks that.
 type anchorScan struct {
-	// verify is \A(?:pattern) run against value[p:]: the non-capturing group keeps every
-	// group number, and the leading \A makes the engine's anchored fast exit apply.
+	// verify is \A(?:pattern) run against value[p:]: the group keeps every group number, and \A
+	// makes the engine's anchored fast exit apply.
 	verify *regexp.Regexp
 
 	// lits are the entry literals: the rule's corpus keywords.
@@ -22,21 +21,17 @@ type anchorScan struct {
 	// fold means the literals match under Go's (?i), Unicode simple folding, not an ASCII flip.
 	fold bool
 
-	// wordEdge means the pattern opened with \b, which verify cannot check: value[p:] starts
-	// a text, so the boundary is decided here against the byte before p.
+	// wordEdge means the pattern opened with \b, which verify cannot check at value[p:].
 	wordEdge bool
 }
 
 const (
 	// maxAnchorLits bounds the litCursor's fixed scratch; the corpora carry at most five.
 	maxAnchorLits = 8
-	// minAnchorLen: a single-byte literal is a memchr that lands on prose constantly, and
-	// verifying the candidate then costs more than the NFA step it replaced.
+	// A single-byte literal lands on prose constantly, and verifying costs more than it saves.
 	minAnchorLen = 2
-)
 
-// cursor sentinels. Positions are byte offsets, so both are out of band.
-const (
+	// litCursor positions out of band of any byte offset.
 	litUnscanned = -2
 	litExhausted = -1
 )
@@ -48,35 +43,23 @@ func newAnchorScan(pattern string, keywords []string, sweep bool) (*anchorScan, 
 		return nil, nil
 	}
 	rest, fold := strings.CutPrefix(pattern, "(?i)")
+	// A (?i) region anywhere but the head means the keywords' spelling is not the matches'.
 	if strings.Contains(rest, "(?i") {
-		// A (?i) region anywhere but the head means the keywords' spelling is not the matches'.
 		return nil, nil
 	}
 	wordEdge := strings.HasPrefix(rest, `\b`)
 	for _, k := range keywords {
-		if len(k) < minAnchorLen {
-			return nil, nil
-		}
-		for i := 0; i < len(k); i++ {
-			if k[i] >= utf8.RuneSelf {
-				return nil, nil
-			}
-		}
-		if wordEdge && !isWordByte(k[0]) {
-			// With \b in front, a non-word entry byte needs the byte before it to be a
-			// word byte, which the anchored verify cannot see. Not decidable here.
-			return nil, nil
-		}
-		// The candidate search jumps between the two ASCII cases of the first byte, so a
-		// first character that also folds onto a non-ASCII rune would be searched short.
-		if fold && !foldOrbitASCII(rune(asciiLower(k[0]))) {
+		// With \b in front, a non-word entry byte depends on the byte before it, which verify
+		// cannot see. With (?i), the search jumps between the two ASCII cases of the first byte,
+		// so a first character that also folds onto a non-ASCII rune would be searched short.
+		if len(k) < minAnchorLen || !isASCII(k) || wordEdge && !isWordByte(k[0]) ||
+			fold && !foldOrbitASCII(rune(asciiLower(k[0]))) {
 			return nil, nil
 		}
 	}
 	verify, err := regexp.Compile(`\A(?:` + pattern + `)`)
 	if err != nil {
-		// Unreachable: Load compiles the same pattern first. Returned rather than swallowed,
-		// since a silently dropped fast path would be invisible except as a slowdown.
+		// Load compiles the same pattern first; returned so a lost fast path is not silent.
 		return nil, fmt.Errorf("anchor: anchored form of %q: %w", pattern, err)
 	}
 	return &anchorScan{verify: verify, lits: keywords, fold: fold, wordEdge: wordEdge}, nil
@@ -92,10 +75,8 @@ func foldOrbitASCII(r rune) bool {
 	return true
 }
 
-// The \b test this file needs is isWordByte, in pii.go, with the argument for why it is exact.
-
-// litCursor remembers, per entry literal, the next occurrence at or after the scan position,
-// as per-call scratch: nothing about a scan is stored on the Rule, which is shared.
+// litCursor remembers, per entry literal, the next occurrence at or after the scan position, as
+// per-call scratch: nothing about a scan is stored on the Rule, which is shared.
 type litCursor struct {
 	at [maxAnchorLits]int
 }
@@ -123,8 +104,7 @@ func (c *litCursor) next(s *anchorScan, value string, pos int) int {
 	return best
 }
 
-// index finds the next occurrence of one entry literal at or after from, which the caller
-// keeps within len(value).
+// index finds the next occurrence of one entry literal at or after from <= len(value).
 func (s *anchorScan) index(value string, from int, lit string) int {
 	var at int
 	if s.fold {
@@ -182,8 +162,7 @@ func indexEitherByte(s string, a, b byte) int {
 	return ia
 }
 
-// hasFoldPrefix reports whether s starts with lit under Go's (?i) folding. lit is ASCII,
-// checked at build time; s is arbitrary, so a wide rune is compared through its fold orbit.
+// hasFoldPrefix reports whether s starts with the ASCII lit under Go's (?i) folding.
 func hasFoldPrefix(s, lit string) bool {
 	end := 0
 	for range len(lit) {

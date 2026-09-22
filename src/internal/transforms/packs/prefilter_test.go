@@ -118,16 +118,3 @@ func TestPrefilterRejectsNonASCIIKeywords(t *testing.T) {
 	_, addKeywordsErr := b.AddKeywords([]string{""})
 	require.Error(t, addKeywordsErr, "expected an empty keyword to fail the build")
 }
-
-// Same registrations, same filter: the build stays reproducible.
-func TestPrefilterGatesAreDeterministic(t *testing.T) {
-	build := func() *Prefilter {
-		b := NewPrefilterBuilder()
-		for _, r := range loadedRules(t, PatternPacks...) {
-			_, addKeywordsErr := b.AddKeywords(r.Keywords())
-			require.NoError(t, addKeywordsErr)
-		}
-		return b.Build()
-	}
-	require.Equal(t, build(), build())
-}

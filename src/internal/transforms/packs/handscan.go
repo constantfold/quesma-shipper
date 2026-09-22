@@ -2,14 +2,11 @@ package packs
 
 import "strings"
 
-// Hand scanner for the email rule, whose keyword "@" fires on nearly every value. It
-// reproduces the pattern's leftmost-first semantics and handscan_test.go replays both, so a
-// corpus edit cannot leave the scanner behind.
+// Hand scanner for the email rule, whose keyword "@" fires on nearly every value. It reproduces
+// the corpus pattern's leftmost-first semantics; pii_test.go replays both, so a corpus edit
+// cannot leave the scanner behind.
 
-// emailRegex is the pii-core email pattern, verbatim, for the equivalence test.
-const emailRegex = `\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`
-
-// Character classes of emailRegex, plus \w for the two \b assertions, packed one byte per input
+// Character classes of the email pattern, plus \w for the two \b assertions, packed one byte per input
 // byte. ASCII-only: every word rune is one ASCII byte, so the byte test answers \b's question.
 const (
 	clsLocal  = 1 << 0 // [A-Za-z0-9._%+-], the local part
@@ -36,7 +33,7 @@ var emailClass = func() (t [256]uint8) {
 	return t
 }()
 
-// scanEmail finds what emailRegex would find, in one pass anchored on the '@' signs. The local
+// scanEmail finds what the email pattern would find, in one pass anchored on the '@' signs. The local
 // run ends exactly at an '@', so leftmost is the first position in it where \b holds; the domain
 // split is the last '.' that works, and the TLD can only be the whole letter run. Ids come from
 // Rule.checked, so spans leave here without one.

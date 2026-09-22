@@ -6,8 +6,7 @@ import "fmt"
 // walk returns exactly the spans its regex returns, in the same order; the regex stays compiled as
 // the reference and pii_test.go replays it. Go's \b is ASCII-only, so a byte test decides it.
 
-// The byte classes the three shapes are stated in, one bit each so a run's classes
-// accumulate with an AND: a bit survives exactly when every byte in the run carried it.
+// One bit per class, so a run's classes accumulate with an AND.
 const (
 	piiWord  = 1 << iota // [0-9A-Za-z_], Go's \w and so the whole of what \b looks at
 	piiDigit             // [0-9]
@@ -15,8 +14,7 @@ const (
 	piiAlpha             // [A-Z], the IBAN country prefix
 )
 
-// piiClass packs those classes one byte per input byte, so a walk does one table load per
-// position. A byte >= 0x80 gets class 0: non-word however it decodes, and unconsumable.
+// piiClass gives a byte >= 0x80 class 0: non-word however it decodes, and unconsumable.
 var piiClass = func() (t [256]uint8) {
 	for c := 0; c < 256; c++ {
 		switch {
@@ -34,11 +32,11 @@ var piiClass = func() (t [256]uint8) {
 // isWordByte reports Go's ASCII \w, which is the whole of what \b looks at.
 func isWordByte(c byte) bool { return piiClass[c]&piiWord != 0 }
 
-// panMaxDigits is one more than the pattern's 18 repetitions: a span is at most 19 digits.
-const panMaxDigits = 19
-
-// panMinReps is the pattern's lower repetition bound; a span holds at least 13 digits.
-const panMinReps = 12
+// The card-pan pattern's bounds: 12 to 18 repetitions, so 13 to 19 digits.
+const (
+	panMaxDigits = 19
+	panMinReps   = 12
+)
 
 // fusedKind names the rule a fused candidate list belongs to; fusedNone matches on its own.
 type fusedKind uint8
@@ -50,8 +48,7 @@ const (
 	fusedCardPAN
 )
 
-// ValueScan is the per-value scratch the fused walk fills. Scratch, not state: the caller
-// owns one per Scrub call and never shares it, which keeps a compiled Scrubber concurrent.
+// ValueScan is the per-value scratch the fused walk fills; the caller owns one per Scrub call.
 type ValueScan struct {
 	value string
 	done  bool
@@ -74,8 +71,7 @@ func (c *ValueScan) candidates(kind fusedKind) []Span {
 		c.walk()
 		c.done = true
 	}
-	// An unnamed kind panics rather than falling through to a neighbour's list, whose spans
-	// would be stamped with the asking rule's id: wrong spans, wrong attribution, no signal.
+	// An unnamed kind panics rather than silently returning a neighbour's spans.
 	switch kind {
 	case fusedPESEL:
 		return c.pesel
