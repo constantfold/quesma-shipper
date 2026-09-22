@@ -18,20 +18,16 @@ import (
 // on. The answer is to stop prefiltering the key-name regex, not to stop redacting.
 func TestNonASCIIKeyNameStillRedacts(t *testing.T) {
 	cfg := transforms.DefaultConfig()
-	cfg.SecretKeyNames = append(transforms.DefaultSecretKeyNames(), "CLÉ_SECRÈTE")
+	cfg.SecretKeyNames = append(cfg.SecretKeyNames, "CLÉ_SECRÈTE")
 	s, err := transforms.New(cfg)
 	require.NoErrorf(t, err, "a non-ASCII key name must compile, got %v", err)
 
-	line := []byte(`{"type":"user","text":"CLÉ_SECRÈTE=hunter2"}` + "\n")
-	res, err := s.Scrub(line, transforms.Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
+	res := scrubJSONL(t, s, "claude-code", `{"type":"user","text":"CLÉ_SECRÈTE=hunter2"}`+"\n")
 	assert.Containsf(t, string(res.Out), transforms.Sentinel("key-name"), "the secret survived: %s", res.Out)
 	assert.NotContainsf(t, string(res.Out), "hunter2", "the secret survived verbatim: %s", res.Out)
 
 	// Dropping the whole gate is the fallback; dropping a rule is not.
-	res, err = s.Scrub([]byte(`{"type":"user","text":"GITHUB_TOKEN=hunter2"}`+"\n"),
-		transforms.Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
+	res = scrubJSONL(t, s, "claude-code", `{"type":"user","text":"GITHUB_TOKEN=hunter2"}`+"\n")
 	assert.NotContainsf(t, string(res.Out), "hunter2", "an ASCII name stopped firing next to a non-ASCII one: %s", res.Out)
 }
 
@@ -74,13 +70,12 @@ func TestWideObjectKeepsDuplicateKeySemantics(t *testing.T) {
 			res, err := s.Scrub([]byte(b.String()), transforms.Hint{Family: "claude-code", JSONL: true})
 			require.NoErrorf(t, err, "width %d dup %v: %v", width, dup, err)
 			name := fmt.Sprintf("width %d dup %v", width, dup)
-			if dup {
-				assert.Truef(t, res.LinesParsed == 1 && res.LinesRawScanned == 0, "%s: expected the line to stay decoded, got parsed=%d raw=%d", name, res.LinesParsed, res.LinesRawScanned)
-				assert.NotContainsf(t, string(res.Out), "AKIAIOSFODNN7EXAMPLE", "%s: the secret survived: %s", name, res.Out)
-				continue
-			}
 			assert.Truef(t, res.LinesParsed == 1 && res.LinesRawScanned == 0, "%s: expected a parsed line, got parsed=%d raw=%d", name, res.LinesParsed, res.LinesRawScanned)
-			assert.Equalf(t, b.String(), string(res.Out), "%s: a record with nothing to redact must come out verbatim", name)
+			if dup {
+				assert.NotContainsf(t, string(res.Out), "AKIAIOSFODNN7EXAMPLE", "%s: the secret survived: %s", name, res.Out)
+			} else {
+				assert.Equalf(t, b.String(), string(res.Out), "%s: a record with nothing to redact must come out verbatim", name)
+			}
 		}
 	}
 }

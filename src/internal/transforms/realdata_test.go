@@ -26,18 +26,8 @@ func TestRealDataRescrub(t *testing.T) {
 
 	// Username stays empty on purpose: the mirror's content already carries __USER__, and naming one
 	// here would make byte-diffs mean two things.
-	cfg := transforms.DefaultConfig()
-	s, err := transforms.New(cfg)
+	s, err := transforms.New(transforms.DefaultConfig())
 	require.NoError(t, err)
-
-	type manifest struct {
-		SourceFamily string `json:"source_family"`
-		Redaction    *struct {
-			Density  float64        `json:"density"`
-			RuleHits map[string]int `json:"rule_hits"`
-			ScanMode string         `json:"scan_mode"`
-		} `json:"redaction"`
-	}
 
 	var (
 		objects, skipped, changed, engineErrs int
@@ -59,7 +49,10 @@ func TestRealDataRescrub(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		var m manifest
+		var m struct {
+			SourceFamily string                       `json:"source_family"`
+			Redaction    *transforms.RedactionSummary `json:"redaction"`
+		}
 		if err := json.Unmarshal(raw, &m); err != nil || m.Redaction == nil {
 			skipped++
 			return nil

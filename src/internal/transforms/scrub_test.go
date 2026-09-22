@@ -14,16 +14,9 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// exemptions is the COMPILED baseline, not a test fixture: testing the same list the
-// binary runs is the point.
-func exemptions() map[string][]string {
-	return transforms.CompiledExemptions()
-}
-
 func newScrubber(t *testing.T) *transforms.Scrubber {
 	t.Helper()
 	cfg := transforms.DefaultConfig()
-	cfg.Exemptions = exemptions()
 	cfg.Username = "jane"
 	s, err := transforms.New(cfg)
 	require.NoError(t, err)
@@ -159,7 +152,7 @@ func TestPlantedSecretInEveryExemptFieldIsStillCaught(t *testing.T) {
 	s := newScrubber(t)
 	const planted = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
 
-	for family, paths := range exemptions() {
+	for family, paths := range transforms.CompiledExemptions() {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
 				line := buildRecordWithValueAt(t, path, planted)
@@ -265,8 +258,7 @@ func TestTornTailIsRawScannedAndShips(t *testing.T) {
 	payload := `{"type":"user","uuid":"u1","message":{"content":[{"type":"text","text":"fine"}]}}` + "\n" +
 		`{"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"ghp_abcdefghijklmnopqrstuvwxyz0123456789 and tru`
 
-	res, err := s.Scrub([]byte(payload), transforms.Hint{Family: "claude-code", JSONL: true})
-	require.NoErrorf(t, err, "a torn tail must not be an engine error: %v", err)
+	res := scrubJSONL(t, s, "claude-code", payload)
 	out := string(res.Out)
 
 	assert.NotContains(t, out, "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the pattern packs must still scan a torn line")
@@ -302,9 +294,8 @@ func TestOneLevelOfBase64IsDecodedAndScanned(t *testing.T) {
 	assert.NotContainsf(t, string(res.Out), once, "a base64-wrapped secret must be caught:\n%s", res.Out)
 
 	// Double encoding is out of scope by design; pinning it documents the boundary.
-	res2 := scrubJSONL(t, s, "claude-code",
+	scrubJSONL(t, s, "claude-code",
 		`{"type":"user","message":{"content":[{"type":"text","text":"`+twice+`"}]}}`+"\n")
-	_ = res2 // no assertion on catching it; the entropy backstop may or may not fire
 }
 
 // A recorded over-redaction, left alone deliberately. In a postgres URL the url-userinfo
@@ -378,21 +369,16 @@ func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
 	const id = "toolu_01FcSqsnNxWeeDGKyfZKjJHbXk9QwErTyU"
 	for _, field := range []string{"toolUseId", "sessionId", "uuid", "requestId"} {
 		in := `{"` + field + `":"` + id + `"}` + "\n"
-		res, err := s.Scrub([]byte(in), transforms.Hint{Family: "claude-code", JSONL: true})
-		require.NoError(t, err)
+		res := scrubJSONL(t, s, "claude-code", in)
 		assert.Equalf(t, in, string(res.Out), "%s was redacted by the compiled default:\n got %s\nwant %s", field, res.Out, in)
 	}
 
 	// Exemption is detector-scoped: a credential planted in an exempt field is still caught.
-	res, err := s.Scrub([]byte(`{"toolUseId":"AKIAIOSFODNN7EXAMPLE"}`+"\n"),
-		transforms.Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
+	res := scrubJSONL(t, s, "claude-code", `{"toolUseId":"AKIAIOSFODNN7EXAMPLE"}`+"\n")
 	assert.NotContainsf(t, string(res.Out), "AKIAIOSFODNN7EXAMPLE", "a credential in an exempt field survived: %s", res.Out)
 
 	// And a field nobody exempted is still scanned, or the test above proves nothing.
-	res, err = s.Scrub([]byte(`{"someField":"`+id+`"}`+"\n"),
-		transforms.Hint{Family: "claude-code", JSONL: true})
-	require.NoError(t, err)
+	res = scrubJSONL(t, s, "claude-code", `{"someField":"`+id+`"}`+"\n")
 	assert.Containsf(t, string(res.Out), "__REDACTED:", "an unexempted high-entropy value was not redacted: %s", res.Out)
 }
 
