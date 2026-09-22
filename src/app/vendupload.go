@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -166,43 +167,34 @@ func (p *vendPort) request(batch []engine.PreparedObject) (controlplane.Authoriz
 // uploadMetadata maps manifest metadata onto the closed request set, name by name. An unknown name
 // fails the whole batch: dropping it would ship plaintext metadata disagreeing with the manifest.
 func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string, error) {
-	var out controlplane.UploadMetadata
-	var dropped []string
-	for name, value := range md {
-		switch name {
-		case "manifest-version":
-			out.ManifestVersion = value
-		case "source-id":
-			out.SourceID = value
-		case "shipped-hash":
-			out.ShippedHash = value
-		case "artifact-class":
-			out.ArtifactClass = value
-		case "agent-version":
-			// The one value an agent's own file supplies verbatim: out of grammar it would fail the
-			// WHOLE batch for as long as that file exists, so the value goes and the object ships.
-			if !printableASCII(value, 128) {
-				dropped = append(dropped, fmt.Sprintf(
-					"agent-version %q is not printable ASCII within 128 bytes; "+
-						"shipping without it (the sealed manifest keeps it)", value))
-				break
-			}
-			out.AgentVersion = value
-		case "shape-sniff":
-			out.ShapeSniff = value
-		case "derived":
-			out.Derived = value
-		case "enrich-status":
-			out.EnrichStatus = value
-		case "kind":
-			out.Kind = value
-		case "source-hash", "ticket-id":
+	for name := range md {
+		switch {
+		case name == "source-hash" || name == "ticket-id":
 			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
 				"metadata %q is derived by the server and may not be requested", name)
-		default:
+		case !slices.Contains(upload.MetadataNames, name):
 			return controlplane.UploadMetadata{}, nil, fmt.Errorf(
 				"metadata %q is outside the closed request set", name)
 		}
+	}
+	out := controlplane.UploadMetadata{
+		ManifestVersion: md["manifest-version"],
+		SourceID:        md["source-id"],
+		ShippedHash:     md["shipped-hash"],
+		ArtifactClass:   md["artifact-class"],
+		AgentVersion:    md["agent-version"],
+		ShapeSniff:      md["shape-sniff"],
+		Derived:         md["derived"],
+		EnrichStatus:    md["enrich-status"],
+		Kind:            md["kind"],
+	}
+	var dropped []string
+	// A malformed agent version must not block the whole batch; the sealed manifest keeps it.
+	if !printableASCII(out.AgentVersion, 128) {
+		dropped = append(dropped, fmt.Sprintf(
+			"agent-version %q is not printable ASCII within 128 bytes; "+
+				"shipping without it (the sealed manifest keeps it)", out.AgentVersion))
+		out.AgentVersion = ""
 	}
 	return out, dropped, nil
 }

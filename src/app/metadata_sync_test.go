@@ -20,6 +20,9 @@ func TestMetadataNamesMatchControlPlane(t *testing.T) {
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(controlplane.UploadMetadata{})) {
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		tags = append(tags, name)
+		mapped, _, err := uploadMetadata(map[string]string{name: name})
+		require.NoError(t, err)
+		require.Equal(t, name, reflect.ValueOf(mapped).FieldByName(f.Name).String())
 	}
 	require.Truef(t, slices.Equal(tags, upload.MetadataNames), "upload.MetadataNames drifted from controlplane.UploadMetadata tags:\n  tags:  %v\n  names: %v", tags, upload.MetadataNames)
 }
