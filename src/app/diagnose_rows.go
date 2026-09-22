@@ -44,7 +44,7 @@ func checkUpdate(ctx context.Context, build Build, autoupdate bool, getenv func(
 	latest, published, available, err := check(ctx, packaging.UpdateOptions{Current: build.Version, Timeout: updateCheckTimeout})
 	when := ""
 	if !published.IsZero() {
-		when = ", " + published.Format("2006-01-02")
+		when = ", " + published.Format(time.DateOnly)
 	}
 	switch {
 	case err != nil:
@@ -110,21 +110,16 @@ func enrollmentRows(stateDir string, enr *controlplane.Enrollment, enrErr error,
 		rows = append(rows, Row{Sev: SevDim, Label: "install_key_root", Detail: root})
 	}
 
+	cached := Row{Sev: SevDim, Label: "cached_config", Detail: "none - no remote config has verified yet"}
 	if c, err := controlplane.LoadCache(stateDir); err == nil {
+		fetched, expires := c.FetchedAt.Format(time.RFC3339), c.ExpiresAt.Format(time.RFC3339)
+		cached.Sev, cached.Detail = SevOK, fmt.Sprintf("current - fetched %s, expires %s", fetched, expires)
 		if c.Expired(time.Now()) {
-			rows = append(rows, Row{Sev: SevWarn, Label: "cached_config",
-				Detail: fmt.Sprintf("expired - fetched %s, expired %s",
-					c.FetchedAt.Format(time.RFC3339), c.ExpiresAt.Format(time.RFC3339)),
-				Fix: "collecting under it and stamping config_expired; check that the control plane is reachable"})
-		} else {
-			rows = append(rows, Row{Sev: SevOK, Label: "cached_config",
-				Detail: fmt.Sprintf("current - fetched %s, expires %s",
-					c.FetchedAt.Format(time.RFC3339), c.ExpiresAt.Format(time.RFC3339))})
+			cached.Sev, cached.Detail = SevWarn, fmt.Sprintf("expired - fetched %s, expired %s", fetched, expires)
+			cached.Fix = "collecting under it and stamping config_expired; check that the control plane is reachable"
 		}
-	} else {
-		rows = append(rows, Row{Sev: SevDim, Label: "cached_config",
-			Detail: "none - no remote config has verified yet"})
 	}
+	rows = append(rows, cached)
 
 	rows = append(rows, Row{Sev: SevDim, Label: "config_source", Detail: string(remote.Origin)})
 	if remote.Err != nil {

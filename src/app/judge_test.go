@@ -147,15 +147,10 @@ func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 
 	rec := readFailureRecord(dir)
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "the recovery left %d failures on the streak", rec.ConsecutiveFailures)
-	if rec.Latest() == nil || rec.Latest().Kind != formats.FailureStoreCorrupt {
-		t.Fatalf("the discard was not recorded: %+v", rec.Recent)
-	}
-	if last := rec.LatestCounted(); last == nil || last.Kind != formats.FailureTick {
-		t.Errorf("LatestCounted picked the uncounted discard: %+v", last)
-	}
-	if rows := failureRows(dir, time.Now()); rows != nil {
-		t.Errorf("doctor still reports failing runs after the recovery: %+v", rows)
-	}
+	require.True(t, rec.Latest() != nil && rec.Latest().Kind == formats.FailureStoreCorrupt, "the discard was not recorded: %+v", rec.Recent)
+	last := rec.LatestCounted()
+	assert.True(t, last != nil && last.Kind == formats.FailureTick, "LatestCounted picked the uncounted discard: %+v", last)
+	assert.Nil(t, failureRows(dir, time.Now()), "doctor still reports failing runs after the recovery")
 }
 
 func TestACrashIsPersistedLocally(t *testing.T) {
@@ -189,9 +184,7 @@ func TestStalledTickLifecycle(t *testing.T) {
 
 	rec := readFailureRecord(dir)
 	require.Truef(t, len(rec.Recent) == 1 && rec.Latest().Kind == formats.FailureStalled, "want exactly one stalled event, got %+v", rec.Recent)
-	if !strings.Contains(rec.Latest().Message, "tick 7") || rec.Latest().RunID != "eeeeeeeeeeeeeeee" {
-		t.Errorf("the event does not name the tick or its run: %+v", rec.Latest())
-	}
+	assert.True(t, strings.Contains(rec.Latest().Message, "tick 7") && rec.Latest().RunID == "eeeeeeeeeeeeeeee", "the event does not name the tick or its run: %+v", rec.Latest())
 	assert.Equalf(t, 0, rec.ConsecutiveFailures, "a stall moved consecutive_failures to %d; the tick may yet complete", rec.ConsecutiveFailures)
 
 	// Clean ticks append nothing; the next stall must replace the standing event.

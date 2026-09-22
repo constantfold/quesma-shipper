@@ -50,13 +50,12 @@ func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*form
 	r.recMu.Unlock()
 }
 
-// RecordCrash deduplicates rediscovery of the latest crashed run.
+// RecordCrash skips the latest crashed run when it is rediscovered on restart before delivery.
 func RecordCrash(crash *formats.LastCrash) {
 	if crash == nil {
 		return
 	}
 	appendWithoutRuntime("crash", func(dir string, rec *formats.FailureRecord) bool {
-		// Undelivered crashes are rediscovered on every restart.
 		for i := len(rec.Recent) - 1; i >= 0; i-- {
 			if rec.Recent[i].Kind == formats.FailureCrash {
 				if rec.Recent[i].RunID == crash.RunID {
@@ -102,14 +101,11 @@ func recordWithoutRuntime(runID, kind, message string) {
 	})
 }
 
-// Resolve state independently so broken configuration cannot hide its own failure.
+// appendWithoutRuntime resolves state independently so broken configuration cannot hide its own
+// failure; the directory may not exist yet when a verb fails before minting an identity.
 func appendWithoutRuntime(what string, mutate func(dir string, rec *formats.FailureRecord) bool) {
 	dir, _, err := pauseStateDir()
-	if err != nil || dir == "" {
-		return
-	}
-	// A verb can fail before anything has minted an identity, so the directory may not exist yet.
-	if err := platform.EnsureDir(dir, 0o700); err != nil {
+	if err != nil || dir == "" || platform.EnsureDir(dir, 0o700) != nil {
 		return
 	}
 	rec := readFailureRecord(dir)
@@ -145,7 +141,6 @@ func (r *Runtime) failureRecord() formats.FailureRecord {
 func readFailureRecord(stateDir string) formats.FailureRecord {
 	raw, _, err := platform.ReadWhole(filepath.Join(stateDir, lastFailureFile), maxFailureBytes)
 	if err != nil {
-		// ReadWhole wraps missing-file errors; a fresh install needs no warning.
 		if !errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "warning: %s is unreadable and is ignored: %v\n", lastFailureFile, err)
 		}

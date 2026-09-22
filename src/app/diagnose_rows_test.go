@@ -139,10 +139,8 @@ func TestFamilyRows(t *testing.T) {
 					Candidates: make([]sources.Candidate, 34)})),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, collecting && files == 1234, "collecting=%v files=%d", collecting, files)
-		require.Lenf(t, rows, 1, "healthy agent must be one row, got %d: %+v", len(rows), rows)
-		if rows[0].Sev != SevOK || rows[0].Label != "Claude Code" {
-			t.Errorf("headline: %+v", rows[0])
-		}
+		require.Lenf(t, rows, 1, "healthy agent must be one row: %+v", rows)
+		assert.True(t, rows[0].Sev == SevOK && rows[0].Label == "Claude Code", "headline: %+v", rows[0])
 		for _, want := range []string{"1,234 files", "transcripts", "context"} {
 			assert.Containsf(t, rows[0].Detail, want, "detail %q missing %q", rows[0].Detail, want)
 		}
@@ -176,10 +174,8 @@ func TestFamilyRows(t *testing.T) {
 		rows, _, _ := familyRows("Codex", []sourceProbe{enable(src)}, familyUpload{}, time.Now(), false)
 		require.Truef(t, len(rows) == 2 && rows[0].Sev == SevWarn && rows[1].Sub, "want a ! headline and one Sub finding, got %+v", rows)
 		assert.Truef(t, strings.Contains(rows[1].Detail, "/home/x/.codex/sessions") && strings.Contains(rows[1].Detail, "Codex may have changed where it writes"), "the finding must name the folder and the likely cause: %q", rows[1].Detail)
-		r := &Report{Sections: []Section{{Rows: rows}}}
-		if iss, fails := r.Issues(); len(iss)-fails != 1 {
-			t.Errorf("one agent with one finding must count as 1 issue, got %d", len(iss)-fails)
-		}
+		iss, fails := (&Report{Sections: []Section{{Rows: rows}}}).Issues()
+		assert.Equal(t, 1, len(iss)-fails, "one agent with one finding must count as 1 issue")
 	})
 
 	t.Run("disabled source is dim, never a finding", func(t *testing.T) {
@@ -187,10 +183,8 @@ func TestFamilyRows(t *testing.T) {
 			probe("cursor-transcripts", "cursor", sources.Discovery{}),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, !collecting && rows[0].Sev == SevDim && strings.Contains(rows[0].Detail, "disabled by configuration"), "a deliberately disabled agent must headline dim: %+v", rows)
-		r := &Report{Sections: []Section{{Rows: rows}}}
-		if iss, fails := r.Issues(); fails != 0 || len(iss) != 0 {
-			t.Errorf("disabled by configuration must not count: fails=%d issues=%d", fails, len(iss))
-		}
+		iss, fails := (&Report{Sections: []Section{{Rows: rows}}}).Issues()
+		assert.True(t, fails == 0 && len(iss) == 0, "disabled by configuration must not count: %v", iss)
 	})
 
 	t.Run("absent agent is one dim line", func(t *testing.T) {
@@ -220,9 +214,7 @@ func TestFamilyUploadRow(t *testing.T) {
 
 	rows, _, _ = familyRows("F", probes,
 		familyUpload{recorded: true, at: now, failed: 2}, now, false)
-	if rows[1].Sev != SevWarn || rows[1].Fix == "" {
-		t.Errorf("failed uploads must warn with a fix: %+v", rows[1])
-	}
+	assert.True(t, rows[1].Sev == SevWarn && rows[1].Fix != "", "failed uploads must warn with a fix: %+v", rows[1])
 	assert.Containsf(t, rows[1].Detail, "nothing new", "zero shipped should read as checked/nothing new: %q", rows[1].Detail)
 
 	rows, _, _ = familyRows("F", probes, familyUpload{}, now, true)
@@ -345,23 +337,16 @@ func TestLastFailureRows(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
 
-	if rows := lastFailureRows(dir, now, true); rows != nil {
-		t.Fatalf("a clean install shows no failure row, got %+v", rows)
-	}
+	require.Nil(t, lastFailureRows(dir, now, true), "a clean install shows no failure row")
 
 	r := &Runtime{eff: &config.Effective{StateDir: dir}}
 	r.JudgeTick(errors.New("the sink refused"), formats.Report{}, false, platform.Delta{})
 
 	for _, verbose := range []bool{false, true} {
-		if rows := lastFailureRows(dir, now, verbose); rows != nil {
-			t.Fatalf("an ongoing streak already has a schedule row, got duplicate %+v", rows)
-		}
+		require.Nil(t, lastFailureRows(dir, now, verbose), "an ongoing streak already has a schedule row")
 	}
-
 	r.JudgeTick(nil, formats.Report{Shipped: 1}, false, platform.Delta{})
-	if rows := lastFailureRows(dir, now, false); rows != nil {
-		t.Fatalf("a recovered failure must not warn by default, got %+v", rows)
-	}
+	require.Nil(t, lastFailureRows(dir, now, false), "a recovered failure must not warn by default")
 	rows := lastFailureRows(dir, now, true)
 	require.Truef(t, len(rows) == 1 && rows[0].Sev == SevDim && strings.Contains(rows[0].Detail, "tick_failed"), "verbose must still show the recovered failure, got %+v", rows)
 }
