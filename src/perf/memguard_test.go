@@ -1,32 +1,21 @@
 //go:build perf
 
-// The memory guard: what a sync costs in resident bytes, and what stops it costing more. Two layers
-// must hold: the harness fails a run that merely reached its budget, and a Linux cgroup underneath
-// makes a runaway a clean SIGKILL. The fixtures are incompressible on purpose (see memguardRun).
+// Memory scenarios and their resource budgets.
 package perf
 
 import (
-	"bufio"
-	"context"
 	"fmt"
-	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// Spelled out rather than imported, because this module consumes the shipper as a binary;
-// assertInFlightCapIsWired is what catches drift in the literal.
+// The harness consumes a binary; assertInFlightCapIsWired checks this literal reaches it.
 const envMaxInFlightBytes = "SHIPPER_MAX_IN_FLIGHT_BYTES"
 
 // S3's acceptance gate: the requirement, not a measurement; see smokeBigFileAcceptance.
@@ -35,23 +24,19 @@ const (
 	acceptanceBudget    int64 = 200 << 20
 )
 
-// S3's interim guard: 32 MiB rather than the design's 100 MB, because the tier's budget cannot afford
-// a seventy second scenario. That costs resolution, so it catches a doubling rather than one extra
-// copy. The budget is PROVISIONAL; tightening is the direction, loosening one to pass is not.
+// The bounded 32 MiB interim guard catches doubling; its provisional budget may only tighten.
 const (
 	bigFileBytes  int64 = 32 << 20
 	bigFileBudget int64 = 416 << 20
 )
 
-// S4: four files, no two of which fit under the cap together, so admission must serialise them or the
-// peak gives it away. An override rather than the compiled default, which would mean staging gigabytes.
+// No two files fit together under the override, forcing serial admission.
 const (
 	inFlightCap       int64 = 12 << 20
 	inFlightFileBytes int64 = 8 << 20
 	inFlightFiles           = 4
 
-	// Sits between the serialised peak and the peak the same files reach when allowed to stack, so a
-	// gate that stopped serialising fails here rather than merely running faster.
+	// Between the serial and concurrent peaks, so a broken gate fails this budget.
 	inFlightBudget int64 = 208 << 20
 )
 
@@ -59,25 +44,11 @@ const (
 const (
 	singleLineFileBytes int64 = 50 << 20
 	singleLineBudget    int64 = 250 << 20
-	// A dirty string exists as source, decoded text, replacement and output at once; bounding that
-	// corner is deliberate, rather than forcing a chunked matcher into the normal path.
+	// Dirty strings coexist as source, decoded text, replacement and output.
 	singleLineDirtyBudget int64 = 320 << 20
 )
 
-// GOMEMLIMIT is a soft target and can never fail a test. It sits under the cap so the runtime spends
-// CPU before the kernel spends the process, and under the cap rather than under the budget, which
-// would only buy collector time.
-const memoryLimitNumerator, memoryLimitDenominator = 3, 4
-
-// The kernel's ceiling sits above the gated budget so the high-water assertion speaks first, with a
-// peak and a budget in the message; a cap at the budget turns every small breach into a bare SIGKILL.
-const memoryCapHeadroom = 2
-
-// --- S3: one big file --------------------------------------------------------
-
-// The requirement, skipped because it is not met: the pipeline holds the payload about five times
-// over, so this OOMs by construction. It is the acceptance test for the streaming change, and
-// deleting the skip is what that change has to do; the body stays compiled so it cannot rot.
+// Streaming acceptance remains skipped until the pipeline can meet the declared memory bound.
 func smokeBigFileAcceptance(t *testing.T) {
 	t.Run("S3-big-file-acceptance", func(t *testing.T) {
 		t.Skipf("the acceptance gate for streaming: %d bytes through a %d byte ceiling needs a "+
@@ -93,8 +64,7 @@ func smokeBigFileAcceptance(t *testing.T) {
 	})
 }
 
-// The interim guard, so the number lands in the results file every run. One file rather than a corpus:
-// the per-file copies are what this scenario is about.
+// The interim guard measures per-file copies with a bounded fixture.
 func smokeBigFile(t *testing.T) {
 	t.Run("S3-big-file", func(t *testing.T) {
 		requireMemoryCap(t)
@@ -104,11 +74,7 @@ func smokeBigFile(t *testing.T) {
 	})
 }
 
-// --- S4: the in-flight cap ---------------------------------------------------
-
-// End-to-end proof that the admission gate serialises large files: the unit test says the arithmetic
-// is right and nothing about whether a real sync obeys it. No cgroup and no GOMEMLIMIT here,
-// deliberately: a hard cap would turn a broken gate into a kill and a soft limit would hide one.
+// No cgroup or GOMEMLIMIT: either could mask whether admission serializes these files.
 func smokeInFlightCap(t *testing.T) {
 	t.Run("S4-in-flight-cap", func(t *testing.T) {
 		w := stageWorld(t)
@@ -129,8 +95,7 @@ func smokeInFlightCap(t *testing.T) {
 	})
 }
 
-// The deterministic half of the scenario's claim, since a peak is a number with a spread: a binary
-// that refuses a non-numeric cap and names the variable is a binary that read it.
+// A rejected non-numeric override proves the binary reads the cap this scenario sets.
 func assertInFlightCapIsWired(t *testing.T, w *world) {
 	t.Helper()
 	// A copy, so the probe's deliberately broken value never reaches the measured run.
@@ -149,10 +114,7 @@ func assertInFlightCapIsWired(t *testing.T, w *world) {
 	}
 }
 
-// --- S6 and S7: the single-line transcripts ----------------------------------
-
-// One 50 MiB JSON string: the shape that forces the scrubber to hold a whole decoded value. No CPU
-// budget on either single-line scenario, deliberately, because none has ever been calibrated.
+// One large JSON string forces a whole decoded value; its CPU cost has no calibrated budget.
 func smokeSingleLine(t *testing.T) {
 	t.Run("S6-single-line-transcript", func(t *testing.T) {
 		w := stageWorld(t)
@@ -162,8 +124,7 @@ func smokeSingleLine(t *testing.T) {
 	})
 }
 
-// The same giant string carrying secrets, so decoded text, replacement and re-quoted output all exist
-// at once: the corner singleLineDirtyBudget is deliberately higher for.
+// Secrets add replacement and quoted-output copies, covered by singleLineDirtyBudget.
 func smokeSingleLineSecrets(t *testing.T) {
 	t.Run("S7-single-line-secret-transcript", func(t *testing.T) {
 		w := stageWorld(t)
@@ -176,21 +137,15 @@ func smokeSingleLineSecrets(t *testing.T) {
 	})
 }
 
-// --- the shared run ----------------------------------------------------------
-
-// What a scenario declares it must stay under; zero on a dimension means unmonitored, so a scenario
-// gates on what it was written to measure and records the rest.
+// Zero leaves a dimension unmonitored.
 type resourceBudget struct {
 	memory int64 // bytes of peak RSS, gated on every run
 
-	// Child CPU seconds: recorded on every row but judged by the declaring scenario on the
-	// repetition it chooses, since a per-run gate hands the verdict to the noisiest one.
+	// The scenario judges its chosen repetition; gating each run would select the noisiest one.
 	cpu float64
 }
 
-// The two memory layers fail differently: a SIGKILL is the cgroup's runaway verdict, and a survivor
-// that reached the budget fails just as hard. The wire-byte floor is what makes the payload real: a
-// fixture that compressed away would give a fast green run proving nothing about the size it claimed.
+// Judge both resource cost and actual wire bytes; compressible fixtures could pass vacuously.
 func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudget, files, logical int) childObservation {
 	t.Helper()
 
@@ -210,8 +165,7 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 		CorpusFiles:     files,
 		CorpusBytes:     logical,
 		ChildGOMAXPROCS: w.gomaxprocs,
-		// These are not timed against it, but a row that hid the shaping would be compared with
-		// one measured on an unshaped wire.
+		// Record shaping even when the scenario does not judge latency.
 		ShapedRTTMillis:   smokeRTT.Milliseconds(),
 		RepSeconds:        []float64{obs.Elapsed.Seconds()},
 		BestSeconds:       obs.Elapsed.Seconds(),
@@ -265,23 +219,6 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 	return obs
 }
 
-// Three layers from one budget, in the order they should speak: the harness fails at the budget, the
-// runtime targets three quarters of the kernel ceiling, and the kernel kills at memoryCapHeadroom
-// times it. The launcher carries a snapshot of the world's variables, because sudo will not carry the
-// environment across, so a scenario must not change the machine after this returns.
-func stageCappedWorld(t *testing.T, budget int64) *world {
-	t.Helper()
-	w := stageWorld(t)
-	w.gomaxprocs = smokeGOMAXPROCS
-	hard := budget * memoryCapHeadroom
-	w.extraEnv = append(w.extraEnv,
-		fmt.Sprintf("GOMEMLIMIT=%d", hard*memoryLimitNumerator/memoryLimitDenominator))
-	w.launcher = memoryCapArgs(hard, w.childVars())
-	return w
-}
-
-// Appended to the config the world already wrote: one scenario needs it, and a source ceiling is a
-// property of that fixture rather than of the machine.
 func raiseMaxFileBytes(t *testing.T, w *world, limit int64) {
 	t.Helper()
 	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
@@ -291,331 +228,5 @@ func raiseMaxFileBytes(t *testing.T, w *world, limit int64) {
 		"sources:\n  - id: claude-code-transcripts\n    max_file_bytes: %d\n", limit)...)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatalf("raise max_file_bytes to %d: %v", limit, err)
-	}
-}
-
-// --- the hard cap ------------------------------------------------------------
-
-// No memory controller here means no enforceable ceiling, whatever systemd-run reports.
-const cgroupControllers = "/sys/fs/cgroup/cgroup.controllers"
-
-// Small enough to make the hog cheap, large enough that a Go runtime starting up is nowhere near it.
-const memoryCapProbeBytes int64 = 128 << 20
-
-// Bounded on purpose: a hog that grew until something stopped it is the failure this suite prevents,
-// so the probe asks only for what it can afford on a machine where the cap turns out to be decoration.
-const memoryHogOvershoot = 4
-
-// Touching 512 MiB takes well under a second, so a probe still going has found something to say.
-const memoryCapProbeTimeout = 2 * time.Minute
-
-// Separates "this developer's machine cannot cap memory" from "the machine this tier targets cannot".
-const ciEnv = "GITHUB_ACTIONS"
-
-var (
-	capOnce sync.Once
-	capErr  error
-)
-
-// Skipped loudly rather than run uncapped: a memory guard whose cap silently was not there passes for
-// the wrong reason. On CI it is a failure and not a skip, because the runner is the machine these
-// budgets are calibrated on, and a lost sudo would drop the whole scenario out of a green job.
-func requireMemoryCap(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skipf("the memory cap is a cgroup and %s has none: this scenario needs Linux", runtime.GOOS)
-	}
-	capOnce.Do(func() { capErr = probeMemoryCap() })
-	if capErr == nil {
-		return
-	}
-	if os.Getenv(ciEnv) == "true" {
-		t.Fatalf("no enforceable memory cap on this CI runner, where it is a precondition "+
-			"rather than an option: %v", capErr)
-	}
-	t.Skipf("no enforceable memory cap on this machine: %v", capErr)
-}
-
-// Four things, each of which has failed somewhere: the memory controller must exist, systemd-run must
-// accept the properties, the command must come back as the calling user (without --uid it runs as root
-// and leaves a world the framework cannot delete), and the cap must actually kill something.
-func probeMemoryCap() error {
-	controllers, err := os.ReadFile(cgroupControllers)
-	if err != nil {
-		return fmt.Errorf("no cgroup v2 at %s: %v", cgroupControllers, err)
-	}
-	if !slices.Contains(strings.Fields(string(controllers)), "memory") {
-		return fmt.Errorf("%s offers no memory controller, only %q",
-			cgroupControllers, strings.TrimSpace(string(controllers)))
-	}
-	for _, tool := range []string{"sudo", "systemd-run"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			return fmt.Errorf("no %s on this machine: %v", tool, err)
-		}
-	}
-	id, err := exec.LookPath("id")
-	if err != nil {
-		return fmt.Errorf("no id(1) to probe the wrapper with: %v", err)
-	}
-
-	argv := append(memoryCapArgs(memoryCapProbeBytes, nil), id, "-u")
-	out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %v: %s", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
-	}
-	// The last line: sudo and systemd-run write their own noise to stderr.
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return fmt.Errorf("%s printed nothing", strings.Join(argv, " "))
-	}
-	if got, want := fields[len(fields)-1], strconv.Itoa(os.Getuid()); got != want {
-		return fmt.Errorf("a capped child ran as uid %s, not %s: it would leave a world this "+
-			"test cannot clean up", got, want)
-	}
-	return probeMemoryCapKills()
-}
-
-// The half of the probe nothing else can stand in for: a ceiling the kernel accepts but does not
-// enforce produces a scope that starts, runs and caps nothing, so something deliberately over-budget
-// has to die inside one. The hog is this test binary, whose appetite the harness knows.
-func probeMemoryCapKills() error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("no path to this test binary to run a hog with: %v", err)
-	}
-	want := memoryCapProbeBytes * memoryHogOvershoot
-
-	ctx, cancel := context.WithTimeout(context.Background(), memoryCapProbeTimeout)
-	defer cancel()
-	argv := append(memoryCapArgs(memoryCapProbeBytes, []string{fmt.Sprintf("%s=%d", memoryHogEnv, want)}), self)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.WaitDelay = waitDelay
-	out, err := cmd.CombinedOutput()
-
-	if err == nil {
-		return fmt.Errorf("a child that touched %d bytes under a %d byte cap exited cleanly: "+
-			"the cap is accepted and not enforced, so nothing below it would be capped either",
-			want, memoryCapProbeBytes)
-	}
-	st := cmd.ProcessState
-	if st == nil {
-		return fmt.Errorf("the hog left no process state behind: %v: %s",
-			err, strings.TrimSpace(string(out)))
-	}
-	ws, ok := st.Sys().(syscall.WaitStatus)
-	killed := (ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL) ||
-		st.ExitCode() == 128+int(syscall.SIGKILL)
-	if !killed {
-		return fmt.Errorf("a child that touched %d bytes under a %d byte cap ended %v rather "+
-			"than being killed: %s", want, memoryCapProbeBytes, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// --- the hog ------------------------------------------------------------------
-
-// Puts this test binary into hog mode, as a whole number of bytes to touch.
-const memoryHogEnv = "SHIPPER_PERF_MEMORY_HOG_BYTES"
-
-// The thing the memory cap is supposed to kill. Touched a page at a time rather than merely
-// allocated: an untouched allocation is address space, and the cgroup accounts pages.
-func runMemoryHog(spec string) int {
-	want, err := strconv.ParseInt(strings.TrimSpace(spec), 10, 64)
-	if err != nil || want <= 0 {
-		fmt.Fprintf(os.Stderr, "perf: %s=%q is not a positive whole number of bytes\n",
-			memoryHogEnv, spec)
-		return 2
-	}
-	const (
-		chunk = 1 << 20
-		page  = 4 << 10
-	)
-	held := make([][]byte, 0, want/chunk+1)
-	for total := int64(0); total < want; total += chunk {
-		buf := make([]byte, chunk)
-		for i := 0; i < len(buf); i += page {
-			buf[i] = 1
-		}
-		held = append(held, buf)
-	}
-	// Held to the end: memory the collector could take back is not something a cap has to kill.
-	runtime.KeepAlive(held)
-	return 0
-}
-
-// A transient scope rather than a container, so the child stays a direct descendant of the test
-// process. MemorySwapMax=0 is not optional: with a runner's swapfile unbounded, a cap becomes a
-// thrashing machine instead of a clean kill, and OOMPolicy=kill takes the whole scope at once. The
-// environment travels as --setenv because sudo resets what it was called with.
-func memoryCapArgs(limit int64, vars []string) []string {
-	argv := []string{
-		"sudo", "-n",
-		"systemd-run", "--scope", "--quiet",
-		fmt.Sprintf("--uid=%d", os.Getuid()),
-		fmt.Sprintf("--gid=%d", os.Getgid()),
-		fmt.Sprintf("--property=MemoryMax=%d", limit),
-		"--property=MemorySwapMax=0",
-		"--property=OOMPolicy=kill",
-	}
-	for _, v := range vars {
-		argv = append(argv, "--setenv="+v)
-	}
-	return append(argv, "--")
-}
-
-// --- the incompressible fixture ----------------------------------------------
-
-// A literal, never a clock: two runs writing different bytes would report different memory.
-const memguardSeedText = "trajectory-shipper perf memguard"
-
-// Exactly the 32 bytes ChaCha8 takes, checked while compiling: a longer seed truncates silently.
-const (
-	_ = uint(len(memguardSeedText) - 32)
-	_ = uint(32 - len(memguardSeedText))
-)
-
-var memguardSeed = [32]byte([]byte(memguardSeedText))
-
-const (
-	// 64 symbols, so one random byte masked to six bits picks one.
-	memguardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-	// A redaction constraint, not a cosmetic one: the entropy backstop replaces any run of 24 or
-	// more base64-alphabet characters, so a space every twenty keeps the staged bytes the shipped
-	// bytes and this file out of the redaction path.
-	memguardRun = 20
-
-	// Large enough that the JSON frame is noise, small enough that generating a file stays a stream.
-	memguardLineFill = 8 << 10
-)
-
-// Streamed through a buffered writer, never assembled in memory: this measures what the child holds,
-// and a harness building a 500 MB string first would be the biggest process in the measurement.
-func stageIncompressibleFile(t *testing.T, w *world, index int, target int64) int {
-	t.Helper()
-	written, _ := stageIncompressibleValue(t, w, index, target, 0)
-	return written
-}
-
-// The writer behind it; with secretEvery above zero it plants a secret pair every secretEvery-th line
-// and reports how many carry one, so a run's redaction count can be checked exactly.
-func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, secretEvery int) (int, int) {
-	t.Helper()
-	slug := fmt.Sprintf("-Users-perf-work-bulk-%d", index)
-	session := corpusSessionID(index)
-	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
-	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
-
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	bw := bufio.NewWriterSize(f, 1<<20)
-
-	written := 0
-	n, err := fmt.Fprintf(bw, corpusFirstLine, session, cwd)
-	require.Falsef(t, err != nil, "write %s: %v", path, err)
-	written += n
-
-	src := rand.NewChaCha8(memguardStreamSeed(index))
-	fill := make([]byte, memguardLineFill)
-	// A tail after a space rather than a splice: an insertion would break the filler alignment that
-	// keeps the entropy backstop off it (see memguardRun). Bare tokens, because a KEY=VALUE frame can
-	// route a hit to a key-name rule, and the trailing words keep either token off the string boundary.
-	secretTail := []byte(" " + corpusGitHubToken + " " + corpusAWSKey + " end of line")
-	text := make([]byte, 0, memguardLineFill+len(secretTail))
-	secretLines := 0
-	for line := 1; int64(written) < target; line++ {
-		memguardFill(t, src, fill)
-		text = append(text[:0], fill...)
-		if secretEvery > 0 && line%secretEvery == 0 {
-			text = append(text, secretTail...)
-			secretLines++
-		}
-		n, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a%d","sessionId":%q,"cwd":%q,"message":{"id":"m%d","model":"claude-opus-5","content":[{"type":"text","text":%q}],"usage":{"input_tokens":120,"output_tokens":340}}}`+"\n",
-			line, session, cwd, line, text)
-		require.Falsef(t, err != nil, "write %s: %v", path, err)
-		written += n
-	}
-	if err := bw.Flush(); err != nil {
-		t.Fatalf("flush %s: %v", path, err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close %s: %v", path, err)
-	}
-	// The pre-filter compares size and mtime, so the stamp cannot be the wall clock.
-	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
-	return written, secretLines
-}
-
-const singleLineChunk = 390 * (memguardRun + 1)
-
-func stageSingleLineFile(t *testing.T, w *world, target int64) int {
-	t.Helper()
-	written, _ := stageSingleLineValue(t, w, "-Users-perf-work-oneline", target, "")
-	return written
-}
-
-func stageSingleLineSecretFile(t *testing.T, w *world, target int64) (int, int) {
-	t.Helper()
-	return stageSingleLineValue(t, w, "-Users-perf-work-oneline-secrets", target, corpusGitHubToken)
-}
-
-func stageSingleLineValue(t *testing.T, w *world, slug string, target int64, secret string) (int, int) {
-	t.Helper()
-	session := corpusSessionID(0)
-	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
-	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	bw := bufio.NewWriterSize(f, 1<<20)
-
-	tail := `"}],"usage":{"input_tokens":120,"output_tokens":340}}}` + "\n"
-	written, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a1","sessionId":%q,"cwd":%q,"message":{"id":"m1","model":"claude-opus-5","content":[{"type":"text","text":"`, session, cwd)
-	require.NoError(t, err)
-	src := rand.NewChaCha8(memguardStreamSeed(0))
-	fill := make([]byte, singleLineChunk)
-	secrets := 0
-	for int64(written+len(tail)) < target {
-		if secret != "" {
-			n, err := bw.WriteString(secret + " ")
-			require.NoError(t, err)
-			written += n
-			secrets++
-		}
-		memguardFill(t, src, fill)
-		n, err := bw.Write(fill)
-		require.NoError(t, err)
-		written += n
-	}
-	n, err := bw.WriteString(tail)
-	require.NoError(t, err)
-	written += n
-	require.NoError(t, bw.Flush())
-	require.NoError(t, f.Close())
-	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
-	return written, secrets
-}
-
-// A stream per file, so a store that deduplicated identical payloads could not make this look cheap.
-func memguardStreamSeed(index int) [32]byte {
-	seed := memguardSeed
-	seed[len(seed)-1] ^= byte(index)
-	seed[len(seed)-2] ^= byte(index >> 8)
-	return seed
-}
-
-// High-entropy text with a space every memguardRun characters; see memguardRun for why.
-func memguardFill(t *testing.T, src *rand.ChaCha8, buf []byte) {
-	t.Helper()
-	if _, err := src.Read(buf); err != nil {
-		t.Fatalf("read the fixture stream: %v", err)
-	}
-	for i := range buf {
-		if i%(memguardRun+1) == memguardRun {
-			buf[i] = ' '
-			continue
-		}
-		buf[i] = memguardAlphabet[buf[i]&63]
 	}
 }

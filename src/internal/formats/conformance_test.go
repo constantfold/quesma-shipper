@@ -94,45 +94,16 @@ func TestConformanceMirrorName(t *testing.T) {
 
 func generateMirrorKeyVectors(t *testing.T) []byte {
 	t.Helper()
-
-	keys := map[string]string{
-		"key_a": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-		"key_b": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-	}
-	cases := []struct{ name, key, path string }{
-		{"empty canonical path still yields a full-length name", "key_a", ""},
-		{"claude code transcript", "key_a", "projects/proj/a.jsonl"},
-		{"claude code transcript under a pseudonymized slug", "key_a", "projects/-Users-__USER__-work-api/3f2504e0.jsonl"},
-		{"claude code subagent transcript", "key_a", "projects/-Users-__USER__-work-api/3f2504e0/subagents/agent-9f2c.jsonl"},
-		{"codex rollout", "key_a", "sessions/2026/07/30/rollout-2026-07-30T10-00-00-0199.jsonl"},
-		{"codex cold rollout is a different file from its plaintext form", "key_a", "sessions/2026/07/30/rollout-2026-07-30T10-00-00-0199.jsonl.zst"},
-		{"cursor transcript", "key_a", "c8cbeb0b/c8cbeb0b.jsonl"},
-		{"enricher output is its own object", "key_a", "c8cbeb0b/c8cbeb0b.jsonl.enriched.jsonl"},
-		{"percent-encoded segment", "key_a", "images/Screenshot%202026-07-27%20at%2014.32.36.png"},
-		{"same path under a second name key gives an unrelated name", "key_b", "projects/proj/a.jsonl"},
-	}
-
-	out := mirrorKeyVectors{
-		VectorSet:     "mirror-key",
-		VectorVersion: 1,
-		Description: "mirror_name = lowercase-hex HMAC-SHA256(name_key, \"mirror:\" + canonical_path). " +
-			"Keyed rather than a bare hash, so a name is blinded against anyone holding bucket-list rights. " +
-			"Derived from the path and never from content, so a file's whole history lands on one key as object " +
-			"versions and a re-ship after state loss converges onto it. Fixed length, so a pathological path has " +
-			"no key-length edge case. Note key_a and key_b over the same path: blinding is keyed.",
-		Keys: keys,
-	}
-	for _, c := range cases {
-		key, err := hex.DecodeString(keys[c.key])
+	var out mirrorKeyVectors
+	readJSON(t, "mirror-key.json", &out)
+	for i := range out.Vectors {
+		c := &out.Vectors[i]
+		keyHex, ok := out.Keys[c.Key]
+		require.Truef(t, ok, "vector names unknown key %q", c.Key)
+		key, err := hex.DecodeString(keyHex)
 		require.NoError(t, err)
-		out.Vectors = append(out.Vectors, mirrorKeyVector{
-			Name:          c.name,
-			Key:           c.key,
-			CanonicalPath: c.path,
-			MirrorName:    formats.MirrorName(key, c.path),
-		})
+		c.MirrorName = formats.MirrorName(key, c.CanonicalPath)
 	}
-
 	b, err := json.MarshalIndent(out, "", "  ")
 	require.NoError(t, err)
 	return append(b, '\n')

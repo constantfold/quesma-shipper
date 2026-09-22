@@ -50,7 +50,8 @@ Golden tests pin output byte for byte. They are `src/e2e/golden_test.go`, the co
 under `src/conformance/`, and the wire fixtures that the contract tests import from the
 [shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol) module. A golden diff is a claim
 that the output must change. Read the diff. Explain it in the pull request. Do not run with
-`-update` until a maintainer agrees.
+`-update` until a maintainer agrees. Conformance inputs and case descriptions live in the
+vector JSON files; regeneration recalculates their expected outputs without replacing the inputs.
 
 File formats, the wire protocol, configuration keys, and the object-key grammar are compatibility
 surfaces. A change to one of them needs a test that shows old inputs still work, and a note in the

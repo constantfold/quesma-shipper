@@ -100,7 +100,7 @@ func Read(o Options) (Result, error) {
 
 	// First: in place.
 	if o.StartAt == "" || o.StartAt == ReadInPlace {
-		res, err := readInPlace(o)
+		res, err := readAt(o, o.Path, ReadInPlace)
 		if err == nil {
 			return res, nil
 		}
@@ -125,7 +125,18 @@ func Read(o Options) (Result, error) {
 		o.Path, inPlaceErr, snapshotErr, err)
 }
 
-func finish(db *sql.DB, o Options, method ReadMethod) (Result, error) {
+// Never use immutable=1: it skips the WAL and can silently return stale data.
+func readAt(o Options, path string, method ReadMethod) (Result, error) {
+	dsn := "file:" + path + "?mode=ro&_pragma=query_only(1)"
+	if method == ReadInPlace {
+		// Briefly wait for live writers before paying for a snapshot.
+		dsn += "&_pragma=busy_timeout(2000)&_txlock=deferred"
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return Result{}, err
+	}
+	defer db.Close()
 	res, err := query(db, o)
 	if err != nil && !errors.Is(err, ErrTruncated) {
 		return Result{}, err
@@ -133,19 +144,6 @@ func finish(db *sql.DB, o Options, method ReadMethod) (Result, error) {
 	res.Truncated = errors.Is(err, ErrTruncated)
 	res.Method = method
 	return res, nil
-}
-
-// readInPlace is the fast path: mode=ro and deliberately NOT immutable=1, which would skip the WAL and silently return stale data.
-func readInPlace(o Options) (Result, error) {
-	// busy_timeout: meeting a writer's lock is the ordinary case here, and failing instantly costs a whole VACUUM copy.
-	dsn := "file:" + o.Path + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)&_txlock=deferred"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return Result{}, err
-	}
-	defer db.Close()
-
-	return finish(db, o, ReadInPlace)
 }
 
 // readSnapshot is the second method: VACUUM INTO a scratch file, query it, delete it. A leftover is a corrupt partial: delete it, never resume into it.
@@ -182,13 +180,7 @@ func readSnapshot(o Options) (result Result, err error) {
 		return Result{}, fmt.Errorf("vacuum into %s: %w", scratch, err)
 	}
 
-	snap, err := sql.Open("sqlite", "file:"+scratch+"?mode=ro&_pragma=query_only(1)")
-	if err != nil {
-		return Result{}, err
-	}
-	defer snap.Close()
-
-	return finish(snap, o, ReadSnapshot)
+	return readAt(o, scratch, ReadSnapshot)
 }
 
 // readColdCopy is the last resort: copy db, -wal and -shm together, then open the copy read-only. Cold databases only,
@@ -226,13 +218,7 @@ func readColdCopy(o Options) (result Result, err error) {
 		return Result{}, err
 	}
 
-	db, err := sql.Open("sqlite", "file:"+copied+"?mode=ro&_pragma=query_only(1)")
-	if err != nil {
-		return Result{}, err
-	}
-	defer db.Close()
-
-	return finish(db, o, ReadColdCopy)
+	return readAt(o, copied, ReadColdCopy)
 }
 
 // CopyCold copies a database and its sidecars into dir, keeping basenames. Returns the copied database's path.
@@ -290,7 +276,7 @@ func query(db *sql.DB, o Options) (Result, error) {
 				sb.WriteString(" OR ")
 			}
 			sb.WriteString("key LIKE ? ESCAPE '\\'")
-			args = append(args, escapeLike(p)+"%")
+			args = append(args, likeEscaper.Replace(p)+"%")
 		}
 	}
 	// Ordered, so a read is reproducible and an enricher's output does not depend on SQLite's row order.
@@ -340,18 +326,8 @@ func quoteSQLString(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-// escapeLike neutralises LIKE wildcards, so a declared prefix cannot sweep in neighbouring keyspaces.
-func escapeLike(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '%', '_', '\\':
-			b.WriteByte('\\')
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
+// Prefixes remain literal when bound as LIKE parameters.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 func sanitise(s string) string {
 	var b strings.Builder

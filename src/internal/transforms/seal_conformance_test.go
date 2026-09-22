@@ -3,7 +3,6 @@ package transforms_test
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -44,10 +43,10 @@ type tarHeaderVector struct {
 }
 
 type tarVector struct {
-	Name        string `json:"name"`
-	ManifestB64 string `json:"manifest_json"`
-	PayloadHex  string `json:"payload_hex"`
-	TarSHA256   string `json:"tar_sha256"`
+	Name         string `json:"name"`
+	ManifestJSON string `json:"manifest_json"`
+	PayloadHex   string `json:"payload_hex"`
+	TarSHA256    string `json:"tar_sha256"`
 }
 
 func TestConformanceContainerLayout(t *testing.T) {
@@ -57,24 +56,18 @@ func TestConformanceContainerLayout(t *testing.T) {
 		t.Logf("regenerated %s", vectorPath)
 	}
 
-	raw, err := os.ReadFile(vectorPath)
-	require.NoErrorf(t, err, "read vectors: %v", err)
 	var v containerVectors
-	require.NoError(t, json.Unmarshal(raw, &v))
+	readVectors(t, vectorPath, &v)
 
 	assert.Equalf(t, transforms.ZstdLevel, v.ZstdLevel, "zstd level drifted: vector says %d, code says %d", v.ZstdLevel, transforms.ZstdLevel)
-	want := []string{transforms.ManifestEntry, transforms.PayloadEntry}
-	for i, name := range want {
-		require.Truef(t, i <= len(v.EntryOrder) && v.EntryOrder[i] == name, "entry order drifted: %v, want %v", v.EntryOrder, want)
-	}
+	require.Equal(t, []string{transforms.ManifestEntry, transforms.PayloadEntry}, v.EntryOrder)
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
 			payload, err := hex.DecodeString(c.PayloadHex)
 			require.NoError(t, err)
-			got := tarBytesFor(t, []byte(c.ManifestB64), payload)
-			sum := sha256.Sum256(got)
-			assert.Equalf(t, c.TarSHA256, hex.EncodeToString(sum[:]), "tar layer bytes changed:\n got %s\nwant %s", hex.EncodeToString(sum[:]), c.TarSHA256)
+			got := tarBytesFor(t, []byte(c.ManifestJSON), payload)
+			assert.Equal(t, c.TarSHA256, sha256Hex(got), "tar layer bytes changed")
 		})
 	}
 }
@@ -138,70 +131,21 @@ func normalizeTar(t *testing.T, tarred []byte) []byte {
 
 func generateContainerVectors(t *testing.T) []byte {
 	t.Helper()
-
-	cases := []struct {
-		name    string
-		mutate  func(*transforms.Manifest)
-		payload []byte
-	}{
-		{"jsonl transcript", nil, []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n")},
-		{"empty payload", nil, nil},
-		{"derived enricher output", func(m *transforms.Manifest) {
-			m.Derived = true
-			m.Enricher = &transforms.EnricherRef{ID: "cursor-transcript-join", Version: 1}
-			m.DerivedFrom = []string{hexRepeat("a")}
-			m.EnrichStatus = "ok"
-			m.NativePath = "/c8cbeb0b/c8cbeb0b.jsonl.enriched.jsonl"
-		}, []byte("{\"_enrich\":{}}\n")},
-	}
-
-	out := containerVectors{
-		VectorSet:     "container",
-		VectorVersion: 1,
-		Description: "Object container layout: tar(manifest.json FIRST, payload) -> zstd level 3 -> age. " +
-			"Manifest-first is what makes a ranged GET of the object head yield the whole manifest, which " +
-			"is why no manifest sidecar object exists. Only the tar layer is byte-pinned here: zstd output " +
-			"depends on the encoder version and age is nondeterministic by design, so those layers are " +
-			"covered by round-trip and opacity tests instead. The manifest's encryption block is removed " +
-			"before hashing because recipient key IDs differ per run.",
-		LayerOrder: []string{"tar", "zstd", "age"},
-		EntryOrder: []string{transforms.ManifestEntry, transforms.PayloadEntry},
-		ZstdLevel:  transforms.ZstdLevel,
-		TarHeader:  tarHeaderVector{Mode: "0600", UIDGID: 0, Format: "USTAR", ManifestModTime: "1970-01-01T00:00:00Z"},
-	}
-
-	for _, c := range cases {
-		m := manifest()
-		if c.mutate != nil {
-			c.mutate(&m)
-		}
-		// Fill the fields Seal would compute, so the recorded manifest is the one that lands.
-		sum := sha256.Sum256(c.payload)
-		m.ShippedHash = hex.EncodeToString(sum[:])
-		m.PayloadSize = int64(len(c.payload))
-
+	var out containerVectors
+	readVectors(t, vectorPath, &out)
+	out.EntryOrder = []string{transforms.ManifestEntry, transforms.PayloadEntry}
+	out.ZstdLevel = transforms.ZstdLevel
+	for i := range out.Vectors {
+		c := &out.Vectors[i]
+		payload, err := hex.DecodeString(c.PayloadHex)
+		require.NoError(t, err)
+		var m transforms.Manifest
+		require.NoError(t, json.Unmarshal([]byte(c.ManifestJSON), &m))
+		m.ShippedHash, m.PayloadSize = sha256Hex(payload), int64(len(payload))
 		encoded, err := json.Marshal(m)
 		require.NoError(t, err)
-		tarred := tarBytesFor(t, encoded, c.payload)
-		tarSum := sha256.Sum256(tarred)
-
-		out.Vectors = append(out.Vectors, tarVector{
-			Name:        c.name,
-			ManifestB64: string(encoded),
-			PayloadHex:  hex.EncodeToString(c.payload),
-			TarSHA256:   hex.EncodeToString(tarSum[:]),
-		})
+		c.ManifestJSON = string(encoded)
+		c.TarSHA256 = sha256Hex(tarBytesFor(t, encoded, payload))
 	}
-
-	b, err := json.MarshalIndent(out, "", "  ")
-	require.NoError(t, err)
-	return append(b, '\n')
-}
-
-func hexRepeat(c string) string {
-	out := ""
-	for range 64 {
-		out += c
-	}
-	return out
+	return encodeVectors(t, out)
 }

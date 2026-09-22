@@ -43,32 +43,39 @@ func manifest() transforms.Manifest {
 	}
 }
 
+// Every input must preserve payload, provenance and the hashes exposed in plaintext metadata.
 func TestSealOpenRoundTrip(t *testing.T) {
-	id := identity(t)
-	payload := []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n")
-
-	obj, _, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-	gotM, gotPayload, err := transforms.Open(obj, id)
-	require.NoError(t, err)
-	assert.Truef(t, bytes.Equal(gotPayload, payload), "payload round trip:\n got %q\nwant %q", gotPayload, payload)
-	assert.Equalf(t, manifest().NativePath, gotM.NativePath, "native_path: %q", gotM.NativePath)
-	assert.Equalf(t, "0123456789abcdef", gotM.RunID, "run_id: %q", gotM.RunID)
-
-	// Seal computes these from the bytes it actually wrote.
-	sum := sha256.Sum256(payload)
-	assert.Equal(t, hex.EncodeToString(sum[:]), gotM.ShippedHash, "shipped_hash does not describe the payload")
-	assert.Equalf(t, int64(len(payload)), gotM.PayloadSize, "payload_size %d, want %d", gotM.PayloadSize, len(payload))
-}
-
-// A payload of zero bytes is a real case and must round-trip, not be special-cased.
-func TestSealEmptyPayload(t *testing.T) {
-	id := identity(t)
-	obj, _, err := transforms.Seal(manifest(), nil, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-	m, payload, err := transforms.Open(obj, id)
-	require.NoError(t, err)
-	assert.Truef(t, len(payload) == 0 && m.PayloadSize == 0, "empty payload became %d bytes", len(payload))
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		client  transforms.Client
+	}{
+		{"jsonl", []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"), manifest().Client},
+		{"empty", nil, manifest().Client},
+		{"metadata hash", []byte("{\"line\":\"one\"}\n"), manifest().Client},
+		{"stamped build", []byte("{}\n"), transforms.Client{
+			Version: "0.0.0-d5f735643cbd+dirty", Commit: "d5f735643cbd3c70f71d2ed52746be1cadfe3a15",
+			Modified: true, GoVersion: "go1.25.0", OS: "linux", Arch: "amd64",
+		}},
+		{"unstamped build", []byte("{}\n"), transforms.Client{Version: "unknown"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := identity(t)
+			m := manifest()
+			m.Client = tc.client
+			obj, sealed, err := transforms.Seal(m, tc.payload, []age.Recipient{id.Recipient()})
+			require.NoError(t, err)
+			got, payload, err := transforms.Open(obj, id)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.payload), string(payload))
+			assert.Equal(t, m.NativePath, got.NativePath)
+			assert.Equal(t, m.RunID, got.RunID)
+			assert.Equal(t, m.Client, got.Client)
+			assert.Equal(t, int64(len(tc.payload)), got.PayloadSize)
+			assert.Equal(t, sha256Hex(tc.payload), got.ShippedHash)
+			assert.Equal(t, got.ShippedHash, sealed.ObjectMetadata()["shipped-hash"])
+		})
+	}
 }
 
 // Manifest-first is the container contract and what makes a ranged head-fetch possible, so
@@ -329,67 +336,7 @@ func TestObjectMetadataNeverCarriesThePath(t *testing.T) {
 	}
 }
 
-// The integrity hash must reach OBJECT METADATA, not only the sealed manifest: the manifest Seal
-// returns is the one a caller builds metadata from, and objects once shipped `shipped-hash: ""`
-// in metadata while the manifest inside the ciphertext was correct.
-func TestShippedHashReachesObjectMetadata(t *testing.T) {
-	id := identity(t)
-	payload := []byte(`{"line":"one"}` + "\n")
-
-	obj, sealedM, err := transforms.Seal(manifest(), payload, []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-	assert.Equal(t, sealedM.ObjectMetadata()["shipped-hash"], sha256Hex(payload))
-
-	// And the sealed copy agrees, so decrypting and heading the object tell the same story.
-	sealed, _, err := transforms.Open(obj, id)
-	require.NoError(t, err)
-	assert.Equalf(t, sha256Hex(payload), sealed.ShippedHash, "sealed manifest shipped_hash = %q", sealed.ShippedHash)
-}
-
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// The build that sealed an object is recorded as FACTS, not a string a reader parses: commit,
-// modified and go_version make "which objects came from that build" a comparison. go_version
-// is there because a runtime-level defect is a property of the toolchain alone.
-func TestTheManifestRecordsWhichBuildSealedTheObject(t *testing.T) {
-	id, err := age.GenerateX25519Identity()
-	require.NoError(t, err)
-	m := manifest()
-	m.Client = transforms.Client{
-		Version:   "0.0.0-d5f735643cbd+dirty",
-		Commit:    "d5f735643cbd3c70f71d2ed52746be1cadfe3a15",
-		Modified:  true,
-		GoVersion: "go1.25.0",
-		OS:        "linux",
-		Arch:      "amd64",
-	}
-
-	sealed, _, err := transforms.Seal(m, []byte("{}\n"), []age.Recipient{id.Recipient()})
-	require.NoError(t, err)
-	got, _, err := transforms.Open(sealed, id)
-	require.NoError(t, err)
-
-	assert.Equalf(t, m.Client.Commit, got.Client.Commit, "commit did not survive: %q", got.Client.Commit)
-	assert.True(t, got.Client.Modified, "a build from a modified tree is recorded as clean")
-	assert.Equalf(t, "go1.25.0", got.Client.GoVersion, "go_version did not survive: %q", got.Client.GoVersion)
-}
-
-// A build with no VCS stamping must not invent one, and the schema refuses unknown fields, so
-// an empty commit has to be OMITTED rather than sent as "".
-func TestABuildWithNoStampSealsWithoutTheOptionalFields(t *testing.T) {
-	id, err := age.GenerateX25519Identity()
-	require.NoError(t, err)
-	m := manifest()
-	m.Client = transforms.Client{Version: "unknown"}
-
-	sealed, _, err := transforms.Seal(m, []byte("{}\n"), []age.Recipient{id.Recipient()})
-	require.NoErrorf(t, err, "a manifest from an unstamped build did not seal: %v", err)
-	got, _, err := transforms.Open(sealed, id)
-	require.NoError(t, err)
-	if got.Client.Commit != "" || got.Client.Modified {
-		t.Errorf("fields were invented: %+v", got.Client)
-	}
 }
