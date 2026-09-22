@@ -84,18 +84,15 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	}
 
 	if read.Truncated {
-		// A partial view, not a failed one. Rows are ordered by key, so what is missing is a
-		// suffix of the keyspace, and the units past the cap are counted as mismatches below.
-		res.Notes = append(res.Notes, fmt.Sprintf(
-			"state.vscdb row cap reached at %d rows: DB-side fields are missing for whatever "+
-				"sorts after the last key read", len(read.Rows)))
+		// A partial view, not a failed one: rows are ordered by key, so a suffix of the keyspace is missing.
+		res.Notes = append(res.Notes, fmt.Sprintf("state.vscdb row cap reached at %d rows: DB-side fields are "+
+			"missing for whatever sorts after the last key read", len(read.Rows)))
 	}
 
 	ix := indexRows(read.Rows)
 	if ix.decodeErrors > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf(
-			"%d store rows in the declared keyspaces did not decode (the store schema is vendor behaviour and drifts)",
-			ix.decodeErrors))
+		res.Notes = append(res.Notes, fmt.Sprintf("%d store rows in the declared keyspaces did not decode "+
+			"(the store schema is vendor behaviour and drifts)", ix.decodeErrors))
 	}
 
 	for _, u := range in.Units {
@@ -116,11 +113,9 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 		}
 		// An alarm like the store decode note: those blocks lose enrichment even when the object ships.
 		if d.LineDecodeErrors > 0 {
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: %d mid-file transcript lines did not decode (the line shape is vendor "+
-					"behaviour and drifts): their blocks never reached the join, and the "+
-					"derived object ships without their enrichment",
-				conv, d.LineDecodeErrors))
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: %d mid-file transcript lines did not decode (the line "+
+				"shape is vendor behaviour and drifts): their blocks never reached the join, and the derived "+
+				"object ships without their enrichment", conv, d.LineDecodeErrors))
 		}
 		switch d.Status {
 		case transforms.StatusOK:
@@ -165,9 +160,8 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	if a.mismatches > 0 {
 		d.Status = transforms.StatusMismatch
 		d.Mismatches = a.mismatches
-		return d, fmt.Sprintf("%s: %d transcript events did not align with the store; "+
-			"no derived object, raw transcript ships (the join rules are vendor behaviour and drift)",
-			conv, a.mismatches)
+		return d, fmt.Sprintf("%s: %d transcript events did not align with the store; no derived object, raw "+
+			"transcript ships (the join rules are vendor behaviour and drift)", conv, a.mismatches)
 	}
 	d.Payload = a.out
 	d.OutputHash = transforms.Hash(a.out)
@@ -183,17 +177,14 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 		infos = append(infos, fmt.Sprintf("%d transcript events extend past the store's last bubble", a.tail))
 	}
 	if a.repeats > 0 {
-		infos = append(infos, fmt.Sprintf("%d transcript events repeat calls whose bubble "+
-			"an identical earlier event already consumed", a.repeats))
+		infos = append(infos, fmt.Sprintf("%d transcript events repeat calls whose bubble an identical earlier event already consumed", a.repeats))
 	}
 	if a.ambiguous > 0 {
-		infos = append(infos, fmt.Sprintf("%d transcript events the store evidence cannot "+
-			"decide between a deduped re-run and a second unrecorded call — nothing attached "+
-			"rather than guessed", a.ambiguous))
+		infos = append(infos, fmt.Sprintf("%d transcript events the store evidence cannot decide between a deduped "+
+			"re-run and a second unrecorded call — nothing attached rather than guessed", a.ambiguous))
 	}
 	if len(infos) > 0 {
-		return d, fmt.Sprintf("%s: %s; carried native-only in the derived object",
-			conv, strings.Join(infos, "; "))
+		return d, fmt.Sprintf("%s: %s; carried native-only in the derived object", conv, strings.Join(infos, "; "))
 	}
 	return d, ""
 }

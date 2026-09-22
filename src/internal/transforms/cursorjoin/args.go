@@ -22,15 +22,12 @@ type evidence int
 const (
 	// The two sides recorded comparable values and none of them agree.
 	evidenceNegative evidence = iota
-	// Some values agree, none long enough to rule out coincidence — two searches of the same
-	// tree share their path and nothing else. Ranks below an empty record: a bubble whose
-	// values half-belong to another call has identified itself as probably that call's.
+	// Some values agree, none long enough to rule out coincidence. Ranks below an empty record: a
+	// bubble whose values half-belong to another call is probably that call's.
 	evidenceWeak
-	// One side recorded nothing able to confirm or deny — current stores write rawArgs "{}"
-	// for most terminal commands. Usable only as a positional fallback.
+	// One side recorded nothing, as current stores do for most terminal commands; position only.
 	evidenceNeutral
-	// A whole value too long to be an accident agrees while another goes unaccounted: the
-	// store recording variants of what the transcript holds. Not identity, but not silence.
+	// A value too long to be an accident agrees while another goes unaccounted: store variants.
 	evidencePartial
 	// Every comparable value agrees, at least one of them substantial.
 	evidencePositive

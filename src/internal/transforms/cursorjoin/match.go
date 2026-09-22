@@ -19,14 +19,10 @@ const (
 type matchOutcome int
 
 const (
-	// No bubble accounts for the block; the caller classifies it as mismatch or tail.
-	matchNone matchOutcome = iota
-	// The returned index is the block's bubble.
-	matchFound
-	// The store deduplicated a call already consumed with the same evidence.
-	matchRepeat
-	// Deduplication and a new argument-less call are indistinguishable; attach neither.
-	matchAmbiguous
+	matchNone      matchOutcome = iota // no bubble accounts for the block: mismatch or tail
+	matchFound                         // the returned index is the block's bubble
+	matchRepeat                        // the store deduplicated a call consumed with the same evidence
+	matchAmbiguous                     // a dedup and a new argument-less call are indistinguishable
 )
 
 // matchBlock returns the chosen bubble and its evidence for later repeat detection.

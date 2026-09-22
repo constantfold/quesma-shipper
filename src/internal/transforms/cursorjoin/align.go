@@ -72,14 +72,13 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 		if len(trimmed) == 0 {
 			continue
 		}
-		lastLineInvalid = false
-
 		record := outLine{Native: trimmed}
 		var l line
-		if err := json.Unmarshal(trimmed, &l); err != nil {
-			// A truncated tail is expected: Cursor's transcript writes are not atomic.
+		err := json.Unmarshal(trimmed, &l)
+		// A truncated tail is expected: Cursor's transcript writes are not atomic.
+		lastLineInvalid = err != nil
+		if err != nil {
 			a.lineDecodeErrors++
-			lastLineInvalid = true
 			record = outLine{NativeInvalid: string(trimmed)}
 		} else if l.Role != "" && l.Message != nil {
 			for i, blk := range l.Message.Content {
