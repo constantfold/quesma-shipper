@@ -5,25 +5,16 @@ import (
 	"unicode/utf8"
 )
 
-// Prefilter matches every rule's keywords over a value in one ASCII-case-insensitive Aho-Corasick
-// pass: a gate fires exactly when a keyword occurs under an ASCII letter-byte fold, nothing else.
+// Prefilter matches keywords in one ASCII-folded pass using an Aho-Corasick automaton.
 type Prefilter struct {
-	// classes maps a byte to its alphabet column, folded to lower case, column 0 standing
-	// for every byte no keyword contains. The reduced alphabet keeps the table in cache.
-	classes [256]uint8
-
-	// next is the flattened transition table, state*width+class; folding hasOutput into the
-	// transition saves a second load per input byte.
-	next  []uint32
-	width int
-
-	// outputs is indexed by state, failure links unioned in; read only when hasOutput fired.
-	outputs []Seen
+	root *keywordNode
 }
 
-// hasOutput marks a transition whose target completes a keyword. State ids stay below 2^31:
-// the corpora are vendored data of a few hundred keyword bytes.
-const hasOutput = uint32(1) << 31
+type keywordNode struct {
+	next [utf8.RuneSelf]*keywordNode
+	out  Seen
+	fail *keywordNode
+}
 
 // Gate identifies one registered keyword set, asked of Seen before its matcher runs.
 type Gate int32
@@ -121,112 +112,52 @@ func asciiLower(c byte) byte {
 	return c
 }
 
-// Build compiles the registered keywords into the automaton.
+// Build completes missing transitions through failure links in breadth-first order.
 func (b *PrefilterBuilder) Build() *Prefilter {
-	p := &Prefilter{}
-
-	// The alphabet is the distinct folded keyword bytes; column 0 returns to the root.
-	var used [utf8.RuneSelf]bool
+	root := &keywordNode{}
 	for _, k := range b.keywords {
+		n := root
 		for i := 0; i < len(k.folded); i++ {
-			used[k.folded[i]] = true
-		}
-	}
-	p.width = 1
-	for c := 0; c < utf8.RuneSelf; c++ {
-		if used[c] {
-			p.classes[c] = uint8(p.width)
-			p.width++
-		}
-	}
-	// The case fold lives in the table, so the scan itself never lower-cases anything.
-	for c := byte('a'); c <= 'z'; c++ {
-		p.classes[c-('a'-'A')] = p.classes[c]
-	}
-
-	type node struct {
-		next []int32
-		out  Seen
-		fail int32
-	}
-	newNode := func() *node {
-		n := &node{next: make([]int32, p.width)}
-		for i := range n.next {
-			n.next[i] = -1
-		}
-		return n
-	}
-	nodes := []*node{newNode()}
-
-	for _, k := range b.keywords {
-		cur := int32(0)
-		for i := 0; i < len(k.folded); i++ {
-			c := p.classes[k.folded[i]]
-			if nodes[cur].next[c] < 0 {
-				nodes = append(nodes, newNode())
-				nodes[cur].next[c] = int32(len(nodes) - 1)
+			c := k.folded[i]
+			if n.next[c] == nil {
+				n.next[c] = &keywordNode{}
 			}
-			cur = nodes[cur].next[c]
+			n = n.next[c]
 		}
-		nodes[cur].out.set(k.gate)
+		n.out.set(k.gate)
 	}
-
-	// Failure links in breadth-first order, resolving absent transitions into the failure
-	// target's: the table ends up a plain DFA, so a scan never chases a failure chain.
-	queue := make([]int32, 0, len(nodes))
-	for c := 0; c < p.width; c++ {
-		child := nodes[0].next[c]
-		if child < 0 {
-			nodes[0].next[c] = 0
-			continue
-		}
-		nodes[child].fail = 0
-		queue = append(queue, child)
-	}
+	queue := []*keywordNode{root}
 	for i := 0; i < len(queue); i++ {
-		u := queue[i]
-		nodes[u].out.or(&nodes[nodes[u].fail].out)
-		for c := 0; c < p.width; c++ {
-			child := nodes[u].next[c]
-			if child < 0 {
-				nodes[u].next[c] = nodes[nodes[u].fail].next[c]
+		n := queue[i]
+		for c, child := range n.next {
+			fallback := root
+			if n != root {
+				fallback = n.fail.next[c]
+			}
+			if child == nil {
+				n.next[c] = fallback
 				continue
 			}
-			nodes[child].fail = nodes[nodes[u].fail].next[c]
+			child.fail = fallback
+			child.out.or(&fallback.out)
 			queue = append(queue, child)
 		}
 	}
-
-	p.next = make([]uint32, len(nodes)*p.width)
-	p.outputs = make([]Seen, len(nodes))
-	var empty Seen
-	for i, n := range nodes {
-		p.outputs[i] = n.out
-		for c := 0; c < p.width; c++ {
-			target := n.next[c]
-			entry := uint32(target)
-			if nodes[target].out != empty {
-				entry |= hasOutput
-			}
-			p.next[i*p.width+c] = entry
-		}
-	}
-	return p
+	return &Prefilter{root: root}
 }
 
-// Scan walks the value once and reports which gates fired. It allocates nothing and the
-// tables are read-only, so a Prefilter is safe to share across goroutines.
+// Scan reads immutable transitions, so a filter is safe to share across goroutines.
 func (p *Prefilter) Scan(value string) Seen {
 	var seen Seen
-	state := uint32(0)
+	state := p.root
 	for i := 0; i < len(value); i++ {
-		// A non-ASCII byte takes column 0 and leads back to the root: a keyword spelled
-		// with a Unicode look-alike deliberately does not fire the gate.
-		entry := p.next[int(state)*p.width+int(p.classes[value[i]])]
-		state = entry &^ hasOutput
-		if entry&hasOutput != 0 {
-			seen.or(&p.outputs[state])
+		c := value[i]
+		if c >= utf8.RuneSelf {
+			state = p.root
+			continue
 		}
+		state = state.next[asciiLower(c)]
+		seen.or(&state.out)
 	}
 	return seen
 }

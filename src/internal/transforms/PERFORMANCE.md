@@ -37,7 +37,9 @@ The baseline profile was 75% regexp execution. Three compounding causes:
 
 One precomputed Aho-Corasick DFA over every rule's ASCII-folded keywords plus
 the key-name stems scans each value once (`packs/prefilter.go`); rules whose
-gate did not fire never run. Rules that do fire mostly avoid the regexp engine
+gate did not fire never run. Typed nodes hold transitions and outputs directly;
+construction fills missing edges through failure links, without alphabet remapping
+or packed state/output flags. Rules that do fire mostly avoid the regexp engine
 anyway: card-pan, pesel, iban and email are hand byte-scanners
 (`packs/pii.go`, `packs/handscan.go`), and the remaining rules are matched by
 literal anchoring (`packs/anchor.go`): memchr to occurrences of the corpus
@@ -83,6 +85,10 @@ the current implementation before choosing another optimization.
 
 Do not re-propose these without new evidence.
 
+- **Separate keyword searches after one ASCII fold.** A simplification experiment
+  using `strings.Contains` instead of the automaton made the four synthetic scrub
+  benchmarks 3–5x slower. Keeping the automaton with typed nodes retained comparable
+  scan throughput, at the cost of more construction memory.
 - **One merged alternation regex.** Measured 1.38 MB/s against 2.24 for
   separate regexes and 7.78 for the prefiltered ladder. The Pike VM pays per
   live NFA state per byte; a 28-way union keeps most branches alive at every

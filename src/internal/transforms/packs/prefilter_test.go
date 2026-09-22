@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// containsAny is the executable spec the automaton is held to: does any keyword occur in the
+// containsAny is the independent spec: does any keyword occur in the
 // value, folding ASCII letter bytes and nothing else.
 func containsAny(value string, keywords []string) bool {
 	folded := asciiLowered(value)
@@ -40,8 +40,7 @@ const (
 	testNonASCII = "é" // an ordinary accented letter, no ASCII relation at all
 )
 
-// The safety argument for the one-pass automaton: every gate must fire exactly when containsAny
-// would. A gate firing too rarely is a silently weakened scrub floor, so predicates are compared.
+// A missing gate silently weakens scrubbing; compare every gate with the independent predicate.
 func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 	var keywordSets [][]string
 	for _, r := range loadedRules(t, PatternPacks...) {
@@ -121,7 +120,7 @@ func TestPrefilterRejectsNonASCIIKeywords(t *testing.T) {
 	}
 }
 
-// Same registrations, same tables: the build stays reproducible.
+// Same registrations, same filter: the build stays reproducible.
 func TestPrefilterGatesAreDeterministic(t *testing.T) {
 	build := func() *Prefilter {
 		b := NewPrefilterBuilder()
@@ -132,9 +131,5 @@ func TestPrefilterGatesAreDeterministic(t *testing.T) {
 		}
 		return b.Build()
 	}
-	a, c := build(), build()
-	require.True(t, a.width == c.width && len(a.next) == len(c.next), "table shape differs between builds")
-	for i := range a.next {
-		require.Equalf(t, c.next[i], a.next[i], "transition %d differs between builds", i)
-	}
+	require.Equal(t, build(), build())
 }
