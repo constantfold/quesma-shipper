@@ -15,8 +15,7 @@ import (
 // fusedRules returns the loaded rules that have a slot in the shared walk.
 func fusedRules(t *testing.T) []*Rule {
 	t.Helper()
-	rules, err := Load(PIICore)
-	require.NoError(t, err)
+	rules := loadedRules(t, PIICore)
 	var out []*Rule
 	for _, r := range rules {
 		if r.fused != fusedNone {
@@ -95,8 +94,7 @@ func TestFusedScanIsIndependentOfRuleOrder(t *testing.T) {
 
 // A rule with no slot must answer the same whatever the scan holds.
 func TestNonFusedRuleIgnoresTheScan(t *testing.T) {
-	rules, err := Load(PIICore)
-	require.NoError(t, err)
+	rules := loadedRules(t, PIICore)
 	var scan ValueScan
 	scan.Reset("4111111111111111 44051401359 DE89370400440532013000")
 	scan.candidates(fusedPESEL) // force the walk, so the slots are non-empty

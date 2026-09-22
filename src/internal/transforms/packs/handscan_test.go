@@ -14,19 +14,15 @@ import (
 // scanner returns whole spans and would redact a different span than the pattern.
 func TestHandScannersEngage(t *testing.T) {
 	found := false
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		require.NoErrorf(t, err, "Load(%s): %v", pack, err)
-		for _, r := range rules {
-			if r.hand == nil && r.fused == fusedNone {
-				continue
-			}
-			assert.Equalf(t, 0, r.capture, "rule %s has a hand scanner and a capture group", r.id)
-			// A rule the regex never runs for has no business carrying an anchor.
-			assert.Truef(t, r.anchor == nil, "rule %s has both a hand scanner and an anchor", r.id)
-			if r.id == "email" {
-				found = true
-			}
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if r.hand == nil && r.fused == fusedNone {
+			continue
+		}
+		assert.Equalf(t, 0, r.capture, "rule %s has a hand scanner and a capture group", r.id)
+		// A rule the regex never runs for has no business carrying an anchor.
+		assert.Truef(t, r.anchor == nil, "rule %s has both a hand scanner and an anchor", r.id)
+		if r.id == "email" {
+			found = true
 		}
 	}
 	assert.True(t, found, `the email rule has no hand scanner: check "scanner": "email" in pii-core.json`)

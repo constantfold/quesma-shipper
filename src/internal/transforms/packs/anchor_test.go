@@ -93,14 +93,10 @@ func TestAnchorLiterals(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		require.NoError(t, err)
-		for _, r := range rules {
-			got := describeAnchor(r)
-			assert.Equal(t, want[r.id], got)
-			seen[r.id] = true
-		}
+	for _, r := range loadedRules(t, PatternPacks...) {
+		got := describeAnchor(r)
+		assert.Equal(t, want[r.id], got)
+		seen[r.id] = true
 	}
 	for id := range want {
 		assert.Truef(t, seen[id], "%s: in the table, not in any pack", id)
@@ -171,23 +167,19 @@ func TestAnchorMatchesSweep(t *testing.T) {
 		rounds = 2000
 	}
 	total := 0
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		rules, err := Load(pack)
-		require.NoError(t, err)
-		for _, r := range rules {
-			if r.anchor == nil {
-				continue
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if r.anchor == nil {
+			continue
+		}
+		alphabet := fuzzAlphabet(r)
+		for i := 0; i < rounds; i++ {
+			value := buildFuzzValue(rng, alphabet)
+			got := r.matchAnchored(value)
+			want := r.matchSweep(value)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
 			}
-			alphabet := fuzzAlphabet(r)
-			for i := 0; i < rounds; i++ {
-				value := buildFuzzValue(rng, alphabet)
-				got := r.matchAnchored(value)
-				want := r.matchSweep(value)
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("%s: %q\n anchored %v\n sweep    %v", r.id, value, got, want)
-				}
-				total++
-			}
+			total++
 		}
 	}
 	t.Logf("%d cases", total)
@@ -237,14 +229,7 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 // The hand-written half of the fuzz: a candidate the pattern rejects sitting in front of, or
 // inside, a real match. Getting the resume position wrong loses exactly these.
 func TestAnchorOverlapTraps(t *testing.T) {
-	rules := map[string]*Rule{}
-	for _, pack := range []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore} {
-		loaded, err := Load(pack)
-		require.NoError(t, err)
-		for _, r := range loaded {
-			rules[r.id] = r
-		}
-	}
+	rules := loadedRules(t, PatternPacks...)
 
 	values := []string{
 		// A rejected candidate in front of a live one, sharing a prefix.
@@ -277,12 +262,12 @@ func TestAnchorOverlapTraps(t *testing.T) {
 	}
 
 	for _, v := range values {
-		for id, r := range rules {
+		for _, r := range rules {
 			if r.anchor == nil {
 				continue
 			}
 			got, want := r.matchAnchored(v), r.matchSweep(v)
-			assert.Equalf(t, got, want, "%s on %q:\n anchored %v\n sweep    %v", id, v, got, want)
+			assert.Equalf(t, got, want, "%s on %q:\n anchored %v\n sweep    %v", r.id, v, got, want)
 		}
 	}
 }
@@ -292,15 +277,7 @@ func TestAnchorOverlapTraps(t *testing.T) {
 // unanchored and doubled input not blowing the time up. The bound is loose on purpose: a shape
 // test, not a throughput budget.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
-	rules, err := Load(CloudKeys)
-	require.NoError(t, err)
-	var pem *Rule
-	for _, r := range rules {
-		if r.id == "private-key-block" {
-			pem = r
-		}
-	}
-	require.True(t, pem != nil, "cloud-keys no longer carries private-key-block")
+	pem := ruleByID(t, CloudKeys, "private-key-block")
 	if pem.anchor != nil {
 		t.Fatal("private-key-block is anchored: its unbounded body makes a failed " +
 			"candidate cost the whole value, which is why the corpus declares \"sweep\"")

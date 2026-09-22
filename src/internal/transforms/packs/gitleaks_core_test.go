@@ -3,9 +3,6 @@ package packs
 import (
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // github-pat is written from GitHub's published token format: a documented prefix, then at least
@@ -15,7 +12,6 @@ func TestGitHubPATFollowsDocumentedFormat(t *testing.T) {
 	alnum := func(n int) string {
 		return strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n/62+1)[:n]
 	}
-	type probe struct{ in, want string }
 	tok := func(s string) probe { return probe{"out: " + s + " done", s} }
 	not := func(s string) probe { return probe{in: "out: " + s + " done"} }
 	probes := []probe{
@@ -28,29 +24,5 @@ func TestGitHubPATFollowsDocumentedFormat(t *testing.T) {
 		not("xghp_" + alnum(36)),                 // glued to a word
 		not("github_pat_" + alnum(82)),           // the fine-grained rule owns this prefix
 	}
-	rules, err := Load(GitleaksCore)
-	require.NoError(t, err)
-	var r *Rule
-	for _, x := range rules {
-		if x.id == "github-pat" {
-			r = x
-		}
-	}
-	require.True(t, r != nil, "github-pat missing from the pack")
-	for _, p := range probes {
-		spans := r.MatchScanned(p.in)
-		if p.want == "" {
-			assert.Len(t, spans, 0)
-			continue
-		}
-		found := false
-		for _, s := range spans {
-			if p.in[s.Start:s.End] == p.want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%q: want exact span, got %v", p.in, spans)
-		}
-	}
+	checkProbes(t, ruleByID(t, GitleaksCore, "github-pat"), probes)
 }

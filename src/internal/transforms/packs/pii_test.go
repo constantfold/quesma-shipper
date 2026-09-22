@@ -18,8 +18,7 @@ import (
 // piiScannerRules returns the loaded rules that carry a hand scanner.
 func piiScannerRules(t *testing.T) []*Rule {
 	t.Helper()
-	rules, err := Load(PIICore)
-	require.NoError(t, err)
+	rules := loadedRules(t, PIICore)
 	var out []*Rule
 	for _, r := range rules {
 		if r.hand != nil || r.fused != fusedNone {
@@ -202,8 +201,7 @@ func TestPIIScannersFindTheCanonicalIdentifiers(t *testing.T) {
 
 // The per-rule cost on prose with no candidate in it, which is what a transcript mostly is.
 func BenchmarkPIIRules(b *testing.B) {
-	rules, err := Load(PIICore)
-	require.NoError(b, err)
+	rules := loadedRules(b, PIICore)
 	var sb strings.Builder
 	for sb.Len() < 1<<20 {
 		fmt.Fprintf(&sb, "internal/scrub/packs/pii.go:%d: the scanner walks the value once\n", sb.Len())

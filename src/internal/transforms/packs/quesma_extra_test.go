@@ -3,9 +3,6 @@ package packs
 import (
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // Adversarial coverage for every quesma-extra rule: true tokens the rule must redact as
@@ -22,10 +19,6 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 	letters := func(n int) string { return rep("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", n) }
 	bech := func(n int) string { return rep("QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L", n) }
 
-	type probe struct {
-		in   string // the scanned value
-		want string // exact span the rule must produce; "" means it must find nothing
-	}
 	tok := func(s string) probe { return probe{in: "out: " + s + " done", want: s} }
 	not := func(s string) probe { return probe{in: "out: " + s + " done"} }
 
@@ -184,8 +177,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 		"artifactory-token": {tok("AKCp" + alnum(69)), tok("cmVmd" + alnum(59)), not("AKCp" + alnum(68))},
 	}
 
-	rules, err := Load(QuesmaExtra)
-	require.NoError(t, err)
+	rules := loadedRules(t, QuesmaExtra)
 	byID := map[string]*Rule{}
 	for _, r := range rules {
 		byID[r.id] = r
@@ -196,22 +188,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			t.Errorf("%s: in the table, not in the pack", id)
 			continue
 		}
-		for _, p := range probes {
-			spans := r.MatchScanned(p.in)
-			if p.want == "" {
-				assert.Len(t, spans, 0)
-				continue
-			}
-			found := false
-			for _, s := range spans {
-				if p.in[s.Start:s.End] == p.want {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("%s: %q: want exact span %q, got %v", id, p.in, p.want, spans)
-			}
-		}
+		checkProbes(t, r, probes)
 	}
 	for _, r := range rules {
 		if _, ok := cases[r.id]; !ok {
