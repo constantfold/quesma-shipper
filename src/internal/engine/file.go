@@ -16,7 +16,6 @@ import (
 
 // pendingPut is a sealed object waiting for an upload slot, so the compute slot can be released.
 type pendingPut struct {
-	key       Key
 	objectKey string
 	obj       []byte
 	md        map[string]string
@@ -28,7 +27,6 @@ func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resol
 	cand := disc.Candidates[job.idx]
 	res := fileResult{idx: job.idx, outcome: FileOutcome{SourceID: src.ID, NativePath: cand.Path, RelPath: cand.RelPath}}
 	out := &res.outcome
-	key := Key{SourceID: src.ID, NativePath: cand.Path}
 	fp, seen := job.fp, job.seen
 
 	if fp.Parked && o.Now().Before(fp.BackoffUntil) {
@@ -47,7 +45,7 @@ func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resol
 
 	payload, err := cand.Load(ctx)
 	if err != nil {
-		failAndBackOff(o, &res, key, fp, err.Error())
+		failAndBackOff(o, &res, fp, err.Error())
 		return res
 	}
 	raw, mtime := payload.Bytes, payload.MTime
@@ -67,7 +65,7 @@ func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resol
 			// Clears any park: the read succeeded and its hash matches one only a completed ship wrote.
 			refreshed := Fingerprint{SourceSize: cand.Size, SourceMTime: cand.MTime, SourceHash: fp.SourceHash,
 				Enricher: fp.Enricher, OutputHash: fp.OutputHash}
-			res.intent = intent{kind: intentRefresh, key: key, fp: refreshed}
+			res.commit = &refreshed
 		}
 		return res
 	}
@@ -80,7 +78,7 @@ func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resol
 	jsonl := src.Sniff != nil && src.Sniff.Kind == "jsonl"
 	scrubbed, err := scrubSource(src, raw, jsonl, o.scrub, o.scrubErr)
 	if err != nil {
-		failAndBackOff(o, &res, key, fp, "scrub failed closed: "+err.Error())
+		failAndBackOff(o, &res, fp, "scrub failed closed: "+err.Error())
 		return res
 	}
 	out.Density, out.RuleHits = scrubbed.Density(), scrubbed.RuleHits
@@ -123,7 +121,6 @@ func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload [
 		return nil
 	}
 	return &pendingPut{
-		key:       Key{SourceID: out.SourceID, NativePath: out.NativePath},
 		objectKey: out.ObjectKey,
 		obj:       obj,
 		md:        sealed.ObjectMetadata(),
@@ -133,7 +130,7 @@ func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload [
 
 // failAndBackOff parks a file: "parked" rather than "failed" because parked is what the counter and
 // the heartbeat read. There is no attempt limit: giving up silently loses data.
-func failAndBackOff(o Options, res *fileResult, key Key, fp Fingerprint, reason string) {
+func failAndBackOff(o Options, res *fileResult, fp Fingerprint, reason string) {
 	res.outcome.Decision, res.outcome.Reason = auditlog.DecisionParked, reason
 	if o.DryRun {
 		return
@@ -143,10 +140,10 @@ func failAndBackOff(o Options, res *fileResult, key Key, fp Fingerprint, reason 
 	next.Parked, next.LastError = true, reason
 	// Spread by the file's own key so correlated failures do not all wake in the same second.
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(key.SourceID))
-	_, _ = h.Write([]byte(key.NativePath))
+	_, _ = h.Write([]byte(res.outcome.SourceID))
+	_, _ = h.Write([]byte(res.outcome.NativePath))
 	next.BackoffUntil = o.Now().Add(backoffFor(next.Attempts, h.Sum64()))
-	res.intent = intent{kind: intentBackoff, key: key, fp: next}
+	res.commit = &next
 }
 
 func scrubSource(src sources.Resolved, raw []byte, jsonl bool, scrubber *transforms.Scrubber, scrubErr error) (transforms.Result, error) {

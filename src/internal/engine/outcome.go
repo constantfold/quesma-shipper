@@ -9,7 +9,7 @@ import (
 func (p *sourcePass) fold(r fileResult) {
 	p.store.applyIntent(&r)
 	// Only the first refusal or unavailable verdict counts, or rep.Failed becomes a function of
-	// GOMAXPROCS. The duplicates' intents still apply: one may have shipped before the refusal.
+	// GOMAXPROCS. The duplicates' commits still apply: one may have shipped before the refusal.
 	if (r.outcome.Fatal && p.fatal) || (r.unavailable && p.uploadHalted) {
 		return
 	}

@@ -166,7 +166,8 @@ func applyUploadOutcome(it fileResult, oc error) fileResult {
 		r.unavailable = errors.Is(oc, ErrUploadUnavailable)
 		return r
 	}
-	r.intent = intent{kind: intentShipped, key: it.pending.key, fp: it.pending.next}
+	next := it.pending.next // copied, so the commit does not keep the ciphertext alive
+	r.commit = &next
 	out.Decision = auditlog.DecisionShipped
 	if present {
 		out.Reason = alreadyPresentReason

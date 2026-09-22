@@ -23,7 +23,10 @@ type fileJob struct {
 type fileResult struct {
 	idx     int
 	outcome FileOutcome
-	intent  intent
+
+	// commit is the fingerprint the outcome asks to make durable, keyed by the outcome's path.
+	// Only the loop thread applies it.
+	commit *Fingerprint
 
 	// unit is the raw bytes staged for the enricher; pending owns ciphertext until upload or abandonment.
 	unit    *transforms.RawUnit
@@ -33,22 +36,6 @@ type fileResult struct {
 	unavailable bool
 	loadWarning string
 }
-
-// intent is the durable write a file's outcome asks for; only the loop thread applies it.
-type intent struct {
-	kind intentKind
-	key  Key
-	fp   Fingerprint
-}
-
-type intentKind int
-
-const (
-	intentNone    intentKind = iota
-	intentRefresh            // unchanged content: refresh size/mtime
-	intentShipped            // after a verified PUT
-	intentBackoff            // a read or scrub failure holds the file off
-)
 
 // sourcePass is one source's file pass. Every field belongs to the loop goroutine.
 type sourcePass struct {

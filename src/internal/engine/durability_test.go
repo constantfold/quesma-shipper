@@ -60,19 +60,11 @@ func TestARunReplacesTheStateDocumentOncePerBatchNotOncePerFile(t *testing.T) {
 	// 25 files at a batch of 10: two batches, the source-boundary flush, plus project-map's own.
 	assert.Truef(t, writes <= 6, "state document replaced %d times for %d files; batching is not working", writes, files)
 	assert.NotEqual(t, 0, writes, "the state document was never written; nothing was made durable")
-}
 
-// Everything a run shipped must be durable when the run returns, whatever exit it takes.
-func TestEverythingShippedIsDurableWhenTheRunReturns(t *testing.T) {
-	f := newFixture(t)
-	const files = 12
-	f.writeTranscripts("p/b%02d.jsonl", files)
-	require.Equal(t, files, f.run(func(o *engine.Options) { o.CommitBatch = 1000 }).Shipped)
-
+	// The five past the last full batch must be durable when the run returns, too.
 	f.reopen()
 	if rep := f.run(); rep.Shipped != 0 || rep.Unchanged != files {
-		t.Errorf("after a reload the run should ship nothing and see %d unchanged, got %+v",
-			files, rep)
+		t.Errorf("after a reload the run should ship nothing and see %d unchanged, got %+v", files, rep)
 	}
 }
 

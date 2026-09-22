@@ -71,10 +71,10 @@ func (b *commitBuffer) DropVanished(sourceID string, live map[string]bool) (int,
 // applyIntent makes a result durable. A failed commit rewrites the outcome before fold counts it,
 // so "shipped but the record was lost" reads as failed.
 func (b *commitBuffer) applyIntent(r *fileResult) {
-	if r.intent.kind == intentNone {
+	if r.commit == nil {
 		return
 	}
-	b.pending[r.intent.key] = r.intent.fp
+	b.pending[Key{SourceID: r.outcome.SourceID, NativePath: r.outcome.NativePath}] = *r.commit
 	if len(b.pending) < b.limit {
 		return
 	}
@@ -82,16 +82,16 @@ func (b *commitBuffer) applyIntent(r *fileResult) {
 	if err == nil {
 		return
 	}
-	switch r.intent.kind {
-	case intentRefresh:
+	switch r.outcome.Decision {
+	case auditlog.DecisionUnchanged:
 		r.outcome.Decision, r.outcome.Reason = auditlog.DecisionFailed, err.Error()
-	case intentShipped:
+	case auditlog.DecisionShipped:
 		r.outcome.Decision = auditlog.DecisionFailed
 		r.outcome.Reason = "upload succeeded but commit failed: " + err.Error()
 		if r.outcome.Derived {
 			r.outcome.Reason = "derived " + r.outcome.Reason
 		}
-	case intentBackoff:
+	case auditlog.DecisionParked:
 		r.outcome.Reason += " (and the backoff could not be recorded: " + err.Error() + ")"
 	}
 }

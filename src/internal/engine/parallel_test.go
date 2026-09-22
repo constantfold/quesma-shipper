@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,25 +17,6 @@ import (
 //
 // Files in a source overlap; the loop thread still owns every decision. These tests pin what
 // overlap must not change: the budget, the report's order, the fatal stop, and that it overlaps.
-
-// out.Files is index-addressed, so the report reads in candidate order however work interleaved.
-func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
-	f := newFixture(t)
-	var want []string
-	for i := 0; i < 12; i++ {
-		rel := fmt.Sprintf("p/o%02d.jsonl", i)
-		f.writeTranscript(rel, line1)
-		want = append(want, "projects/"+rel)
-	}
-
-	rep := f.run(func(o *engine.Options) { o.Workers = 8 })
-
-	files := rep.Sources[0].Files
-	require.Lenf(t, files, len(want), "want %d files in the report, got %d", len(want), len(files))
-	for i, fo := range files {
-		assert.Equalf(t, want[i], fo.RelPath, "position %d: want %s, got %s", i, want[i], fo.RelPath)
-	}
-}
 
 // peak records the most callers inside at once.
 type peak struct {

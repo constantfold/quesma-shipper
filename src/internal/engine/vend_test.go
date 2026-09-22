@@ -23,7 +23,7 @@ func workers(compute, upload int) func(*engine.Options) {
 }
 
 // Every batch is bounded; each key uploads once, receives a durable fingerprint, and a second run
-// finds everything unchanged.
+// finds everything unchanged. The report reads in candidate order however the work interleaved.
 func TestUploadBatchContract(t *testing.T) {
 	for _, tc := range []struct{ files, workers, uploadWorkers int }{
 		{5, 4, 0}, {6, 1, 1}, {40, 8, 0}, {96, 8, 3},
@@ -49,7 +49,8 @@ func TestUploadBatchContract(t *testing.T) {
 			f.port.storedOnce(t)
 			assert.Len(t, f.port.keys(), tc.files)
 			assert.Equal(t, tc.files, f.store.Len())
-			for _, fo := range rep.Sources[0].Files {
+			for i, fo := range rep.Sources[0].Files {
+				assert.Equal(t, fmt.Sprintf("projects/p/v%03d.jsonl", i), fo.RelPath)
 				_, ok := f.store.Get(engine.Key{SourceID: fo.SourceID, NativePath: fo.NativePath})
 				require.True(t, ok, "%s committed no fingerprint", fo.RelPath)
 			}
