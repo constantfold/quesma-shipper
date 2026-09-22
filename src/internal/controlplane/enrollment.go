@@ -6,33 +6,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// EnrollmentFile is where the enrollment record lives, beside the identity unit.
 const EnrollmentFile = "enrollment.json"
 
-// enrollmentSchema versions the record. A newer schema is rejected: guessing at one another version
-// wrote is how a client writes into the wrong subtree. An older one is migrated forward and persisted.
+// enrollmentSchema versions the record. A newer schema is rejected, since guessing at it is how a client
+// writes into the wrong subtree; an older one is migrated forward and persisted.
 const enrollmentSchema = 2
 
-// Enrollment is what an enrolled install remembers, persisted as one unit with the identity:
-// without that identity it grants a subtree the client can no longer name.
+// Enrollment lives beside the identity unit: without that identity it grants a subtree the client can no longer name.
 type Enrollment struct {
 	EnrollmentSchema int    `json:"enrollment_schema"`
 	InstallID        string `json:"install_id"`
 	Organization     string `json:"organization"`
 	Endpoint         string `json:"endpoint"`
-
-	// DeviceKey signs later requests. Private, so this file is 0600 and refused if it is looser.
-	DeviceKey string `json:"device_key"`
-
-	EnrolledAt string `json:"enrolled_at"`
+	DeviceKey        string `json:"device_key"` // private, so the file is 0600 and refused if looser
+	EnrolledAt       string `json:"enrolled_at"`
 }
 
-// Save writes the record atomically at 0600.
 func (e Enrollment) Save(stateDir string) error {
 	e.EnrollmentSchema = enrollmentSchema
 	return platform.WriteJSON(filepath.Join(stateDir, EnrollmentFile), e, 0o600)
@@ -62,7 +55,6 @@ func LoadEnrollment(stateDir string) (*Enrollment, error) {
 	return &e, nil
 }
 
-// PrivateKey decodes the device signing key.
 func (e Enrollment) PrivateKey() (ed25519.PrivateKey, error) {
 	b, err := base64.StdEncoding.DecodeString(e.DeviceKey)
 	if err != nil {
@@ -74,7 +66,6 @@ func (e Enrollment) PrivateKey() (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(b), nil
 }
 
-// Client binds requests to this enrollment's endpoint, identity and signing key.
 func (e Enrollment) Client() (*Client, error) {
 	key, err := e.PrivateKey()
 	if err != nil {
@@ -83,13 +74,5 @@ func (e Enrollment) Client() (*Client, error) {
 	return New(Options{Endpoint: e.Endpoint, InstallID: e.InstallID, Organization: e.Organization, DeviceKey: key})
 }
 
-// NewDeviceKey generates the request-signing keypair.
-func NewDeviceKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
-	return ed25519.GenerateKey(nil)
-}
-
-// Now is the enrollment timestamp format.
-func Now() string { return time.Now().UTC().Format(time.RFC3339) }
-
-// EncodeKey renders a key as base64, the wire and on-disk form for both halves.
+// EncodeKey is the wire and on-disk form of both key halves.
 func EncodeKey(key []byte) string { return base64.StdEncoding.EncodeToString(key) }

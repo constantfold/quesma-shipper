@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,16 +22,16 @@ func TestValidateTicketAcceptsEveryProviderDialect(t *testing.T) {
 	prepared, base := goldenPair(t, "request.json", "response.json")
 	for name, respell := range map[string]func(header string) string{
 		"gcs": func(h string) string {
-			if h == taggingHeader {
+			if h == "x-amz-tagging" {
 				return "" // gcs has no tagging header
 			}
-			return strings.Replace(h, metadataPrefix, "x-goog-meta-", 1)
+			return strings.Replace(h, "x-amz-meta-", "x-goog-meta-", 1)
 		},
 		"azure": func(h string) string {
-			if h == taggingHeader {
+			if h == "x-amz-tagging" {
 				return "x-ms-tags"
 			}
-			return "x-ms-meta-" + strings.ReplaceAll(strings.TrimPrefix(h, metadataPrefix), "-", "_")
+			return "x-ms-meta-" + strings.ReplaceAll(strings.TrimPrefix(h, "x-amz-meta-"), "-", "_")
 		},
 	} {
 		ticket := base
@@ -106,15 +107,15 @@ func TestValidateTicketRejects(t *testing.T) {
 		}},
 		{"unknown provider header", set("x-amz-acl", "public-read")},
 		{"unknown metadata header", set("x-amz-meta-operator", "someone")},
-		{"missing source hash header", drop(sourceHashHeader)},
-		{"missing ticket id header", drop(ticketIDHeader)},
-		{"source hash disagrees with the prepared object", set(sourceHashHeader, strings.Repeat("a", 64))},
-		{"ticket id header disagrees with the ticket", set(ticketIDHeader, "00000000-0000-0000-0000-000000000000")},
+		{"missing source hash header", drop("x-amz-meta-source-hash")},
+		{"missing ticket id header", drop("x-amz-meta-ticket-id")},
+		{"source hash disagrees with the prepared object", set("x-amz-meta-source-hash", strings.Repeat("a", 64))},
+		{"ticket id header disagrees with the ticket", set("x-amz-meta-ticket-id", "00000000-0000-0000-0000-000000000000")},
 		{"metadata value disagrees", set("x-amz-meta-source-id", "another-source")},
 		{"metadata the prepared object never declared", set("x-amz-meta-agent-version", "9.9.9")},
 		{"metadata dropped from the ticket", drop("x-amz-meta-source-id")},
-		{"tag outside the closed set", set(taggingHeader, "class=anything")},
-		{"empty tag value", set(taggingHeader, "")},
+		{"tag outside the closed set", set("x-amz-tagging", "class=anything")},
+		{"empty tag value", set("x-amz-tagging", "")},
 		{"emptied metadata value", set("x-amz-meta-artifact-class", "")},
 		{"mixed provider dialects", set("x-goog-meta-source-hash", base.SourceHash)},
 		{"prepared metadata outside the closed set", func(p *PreparedUpload, tk *Ticket) {
@@ -184,4 +185,40 @@ func TestValidateTicketUnknownAddressing(t *testing.T) {
 	target := goldenTarget(t)
 	target.addressing = Addressing("dns-style")
 	require.Error(t, ValidateTicket(UploadTargetList{target}, prepared, ticket), "unknown addressing was accepted")
+}
+
+// The exact-key check is a byte comparison, so the encoder must produce the store's spelling:
+// path escaping would leave "=" literal, while the signed key spelling requires %3D.
+func TestCanonicalPathEscaping(t *testing.T) {
+	for key, want := range map[string]string{
+		"=":                 "%3D",
+		"organization=acme": "organization%3Dacme",
+		"%2F+ /":            "%252F%2B%20/",
+		"a/b/c.age":         "a/b/c.age",
+		"keep-._~":          "keep-._~",
+		"space here":        "space%20here",
+		"plus+sign":         "plus%2Bsign",
+		"percent%41":        "percent%2541",
+		"colon:slash?query": "colon%3Aslash%3Fquery",
+		"café":              "caf%C3%A9",
+	} {
+		assert.Equal(t, want, canonicalPath(key), key)
+	}
+}
+
+func TestValidateKeyRejects(t *testing.T) {
+	for name, key := range map[string]string{
+		"empty":          "",
+		"leading slash":  "/v1/object.age",
+		"trailing slash": "v1/object.age/",
+		"empty segment":  "v1//object.age",
+		"dot segment":    "v1/./object.age",
+		"dotdot segment": "v1/../object.age",
+		"backslash":      `v1\object.age`,
+		"control byte":   "v1/object\n.age",
+		"too long":       strings.Repeat("a", maxKeyLength+1),
+	} {
+		assert.Error(t, validateKey(key), name)
+	}
+	require.NoError(t, validateKey("v1/organization=acme/mirror/object.age"))
 }

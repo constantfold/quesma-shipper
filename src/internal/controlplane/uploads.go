@@ -1,8 +1,7 @@
+// V2 upload authorization trades a bounded batch of object descriptors for one short-lived PUT
+// ticket each. Authorization, not acknowledgment: the local fingerprint document stays the only
+// upload-progress authority, and no ticket URL is ever logged.
 package controlplane
-
-// V2 upload authorization exchanges a bounded batch of prepared object descriptors for one
-// short-lived PUT ticket each. Authorization, not acknowledgment: the local fingerprint document
-// stays the only upload-progress authority, and no ticket URL is ever logged.
 
 import (
 	"context"
@@ -14,13 +13,13 @@ import (
 	"uuid"
 )
 
-const uploadAuthorizePath = "/v2/uploads/authorize"
+// The signed bytes are this exact prefix followed by the body, with no canonicalization.
+const (
+	uploadAuthorizePath     = "/v2/uploads/authorize"
+	uploadAuthorizePreamble = "trajectory-shipper-upload-authorize-v2\nPOST\n" + uploadAuthorizePath + "\n"
+)
 
-// uploadAuthorizePreamble domain-separates the v2 signature: the signed bytes are this exact prefix
-// followed by the body, with no canonicalization, byte-identical to the protocol fixture.
-const uploadAuthorizePreamble = "trajectory-shipper-upload-authorize-v2\nPOST\n" + uploadAuthorizePath + "\n"
-
-// AuthorizeRequest is one bounded authorization batch. The caller stamps IssuedAt, the freshness the server checks.
+// AuthorizeRequest is one bounded batch; the caller stamps IssuedAt, the freshness the server checks.
 type AuthorizeRequest struct {
 	WriterID string         `json:"writer_id"`
 	IssuedAt time.Time      `json:"issued_at"`
@@ -51,7 +50,6 @@ type UploadMetadata struct {
 	Kind            string `json:"kind,omitempty"`
 }
 
-// AuthorizeResponse is one issued ticket batch.
 type AuthorizeResponse struct {
 	Tickets []Ticket `json:"tickets"`
 }
@@ -72,10 +70,10 @@ type Ticket struct {
 	ContentLengthSigned bool `json:"content_length_signed,omitempty"`
 }
 
-// TicketHeaders is a plain map because each store has its own namespace; upload.ValidateTicket enforces the closed name set.
+// TicketHeaders is a plain map because each store has its own namespace; upload.ValidateTicket closes the set.
 type TicketHeaders map[string]string
 
-// NewWriterID mints this process's writer identity, audit only. Random per process and never persisted.
+// NewWriterID mints this process's writer identity, audit only and never persisted.
 func NewWriterID() string { return uuid.New().String() }
 
 // AuthorizeUploads exchanges prepared object descriptors for PUT tickets. 401/403 stops the run
@@ -107,8 +105,7 @@ func (c *Client) AuthorizeUploads(ctx context.Context, req AuthorizeRequest) (Au
 		return AuthorizeResponse{}, fmt.Errorf("backend: %s returned HTTP %d: %s", uploadAuthorizePath, status, reason(raw))
 	}
 
-	// Unknown response fields are ignored so the server may grow the response; every field the
-	// client acts on is validated against the prepared object before a byte leaves.
+	// Unknown fields are ignored so the response may grow; upload.ValidateTicket checks every field acted on.
 	var resp AuthorizeResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return AuthorizeResponse{}, fmt.Errorf("backend: decode %s response: %w", uploadAuthorizePath, err)

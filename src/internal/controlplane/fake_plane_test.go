@@ -64,7 +64,7 @@ func enrolled(t *testing.T, endpoint string) *controlplane.Enrollment {
 	_, priv, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
 	return &controlplane.Enrollment{InstallID: installID, Organization: "acme", Endpoint: endpoint,
-		DeviceKey: controlplane.EncodeKey(priv), EnrolledAt: controlplane.Now()}
+		DeviceKey: controlplane.EncodeKey(priv), EnrolledAt: "2026-08-03T14:22:51Z"}
 }
 
 func client(t *testing.T, endpoint string) (*controlplane.Client, ed25519.PublicKey) {

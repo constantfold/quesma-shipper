@@ -12,21 +12,14 @@ const (
 	LayerRemote                            // the org's served document, present only when enrolled
 )
 
-// IsLocal reports whether a layer is under the machine owner's control: where a deny beats a remote allow.
+// IsLocal is a layer under the machine owner's control, where a deny beats a remote allow.
 func (l Layer) IsLocal() bool {
 	return l >= LayerCompiledDefaults && l <= LayerUser
 }
 
 func (l Layer) String() string {
-	switch l {
-	case LayerCompiledDefaults:
-		return "compiled-defaults"
-	case LayerBundledCatalog:
-		return "bundled-catalog"
-	case LayerUser:
-		return "user"
-	case LayerRemote:
-		return "remote"
+	if l >= LayerCompiledDefaults && l <= LayerRemote {
+		return [...]string{"compiled-defaults", "bundled-catalog", "user", "remote"}[l-1]
 	}
 	return fmt.Sprintf("layer(%d)", int(l))
 }

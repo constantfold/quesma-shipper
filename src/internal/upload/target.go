@@ -4,6 +4,7 @@
 package upload
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -26,8 +27,7 @@ const (
 // ErrNoTarget names the origin and never the path or query: the origin is not the secret part.
 var ErrNoTarget = errors.New("upload: ticket origin is not an allowed upload target")
 
-// TargetSpec is the machine owner's declaration of one upload target: local configuration or
-// enrollment only, never an authorization response or served configuration.
+// TargetSpec is the machine owner's declaration of one target, never an authorization response or served configuration.
 type TargetSpec struct {
 	Origin            string // scheme://host[:port] and nothing else
 	Addressing        Addressing
@@ -45,7 +45,6 @@ type UploadTarget struct {
 // UploadTargetList is the machine owner's optional origin pin; empty means unpinned (see Match).
 type UploadTargetList []UploadTarget
 
-// NewUploadTarget validates one machine-owner declaration.
 func NewUploadTarget(spec TargetSpec) (UploadTarget, error) {
 	fail := func(format string, args ...any) (UploadTarget, error) {
 		return UploadTarget{}, fmt.Errorf("upload: target origin %q "+format, append([]any{spec.Origin}, args...)...)
@@ -87,7 +86,6 @@ func NewUploadTarget(spec TargetSpec) (UploadTarget, error) {
 	return UploadTarget{origin: originOf(u), addressing: spec.Addressing, pathPrefix: prefix}, nil
 }
 
-// Origin is the pinned scheme://host:port, with the port always explicit.
 func (t UploadTarget) Origin() string { return t.origin }
 
 // Match returns the entry a ticket URL belongs to. An empty list is unpinned: the ticket's own
@@ -98,14 +96,14 @@ func (l UploadTargetList) Match(rawURL string) (UploadTarget, error) {
 	return t, err
 }
 
-// match is Match keeping the parsed URL, so validation never parses a ticket twice.
+// match keeps the parsed URL, so validation never parses a ticket twice.
 func (l UploadTargetList) match(rawURL string) (UploadTarget, *url.URL, error) {
 	u, err := parseTicketURL(rawURL)
 	if err != nil {
 		return UploadTarget{}, nil, err
 	}
 	if len(l) == 0 {
-		// https only: with no pinned entry there is no opt-in to read, and a presigned URL in cleartext is exposed on the wire.
+		// https only: with no pinned entry there is no opt-in to read, and a cleartext presigned URL is exposed on the wire.
 		if u.Scheme != "https" {
 			return UploadTarget{}, nil, errors.New("upload: ticket url is http and no upload targets are configured: " +
 				"only a configured upload_targets entry may admit a non-https origin")
@@ -141,19 +139,12 @@ func parseTicketURL(raw string) (*url.URL, error) {
 }
 
 func originOf(u *url.URL) string {
-	port := u.Port()
-	switch {
-	case port != "":
-	case strings.EqualFold(u.Scheme, "http"):
-		port = "80"
-	default:
-		port = "443"
-	}
-	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+	scheme := strings.ToLower(u.Scheme)
+	port := cmp.Or(u.Port(), map[string]string{"http": "80"}[scheme], "443")
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
 
-// validatePathPrefix keeps the bucket where the addressing says; escapes would make the exact-key
-// comparison ambiguous, so a prefix must be literal.
+// validatePathPrefix keeps the bucket where the addressing says, literal so the exact-key comparison stays unambiguous.
 func validatePathPrefix(addressing Addressing, prefix string) (string, error) {
 	switch addressing {
 	case VirtualHosted:

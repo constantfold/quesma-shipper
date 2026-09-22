@@ -61,8 +61,11 @@ func printRunSummary(out io.Writer, rep formats.Report, adviseDrain bool) {
 		}
 	}
 	if rep.Truncated {
-		fmt.Fprintf(w, "  note\tmax_files_per_run reached; %d left, %.0f%% of this tick's work shipped\n",
-			rep.Remaining, completeness(rep.Shipped, rep.Remaining))
+		shipped := 100.0
+		if n := rep.Shipped + rep.Remaining; n > 0 {
+			shipped = 100 * float64(rep.Shipped) / float64(n)
+		}
+		fmt.Fprintf(w, "  note\tmax_files_per_run reached; %d left, %.0f%% of this tick's work shipped\n", rep.Remaining, shipped)
 		if adviseDrain && rep.Shipped > 0 {
 			fmt.Fprintf(w, "  \tflush the rest now with `quesma-shipper run --once --drain`\n")
 		}
@@ -154,12 +157,4 @@ func ruleSummary(hits map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s×%d", id, hits[id]))
 	}
 	return strings.Join(parts, ", ")
-}
-
-// completeness is the percentage of this tick's work that shipped.
-func completeness(shipped, remaining int) float64 {
-	if shipped+remaining <= 0 {
-		return 100
-	}
-	return 100 * float64(shipped) / float64(shipped+remaining)
 }

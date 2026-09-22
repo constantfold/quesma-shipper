@@ -23,8 +23,7 @@ import (
 // maxResponseBytes bounds what the client will read: a larger response is a bug or a hostile server.
 const maxResponseBytes = 4 << 20
 
-// Client facts sent on every request as headers, so the server knows which build is talking even
-// on a request it is about to refuse. OS and boot time ("macOS 26.5.1", RFC3339) are best-effort.
+// Client facts sent on every request, even one the server is about to refuse; OS and boot time are best-effort.
 const (
 	VersionHeader = "X-Shipper-Version"
 	OSHeader      = "X-Shipper-OS"
@@ -32,31 +31,23 @@ const (
 )
 
 var (
-	ErrNotEnrolled = errors.New("backend: this install is not enrolled")
-
-	// ErrUnsupportedVersion is the 409 case: the server has no config this client can execute.
-	ErrUnsupportedVersion = errors.New("backend: server has no config this client can execute")
+	ErrNotEnrolled        = errors.New("backend: this install is not enrolled")
+	ErrUnsupportedVersion = errors.New("backend: server has no config this client can execute") // HTTP 409
 
 	// ErrAuthorizeUnavailable is authorize answering 429 or 5xx: the batch commits nothing and a later run retries it.
 	ErrAuthorizeUnavailable = errors.New("backend: upload authorization is unavailable")
 )
 
-// Client talks to the control plane.
 type Client struct {
-	endpoint string
-	http     *http.Client
-
-	installID    string
-	organization string
-	deviceKey    ed25519.PrivateKey
+	o    Options
+	http *http.Client
 }
 
-// Options configures the client. DeviceKey signs requests after enrollment.
 type Options struct {
 	Endpoint     string
 	InstallID    string
 	Organization string
-	DeviceKey    ed25519.PrivateKey
+	DeviceKey    ed25519.PrivateKey // signs requests after enrollment
 }
 
 // New builds a client. An empty endpoint is an error rather than a no-op: that caller has a bug.
@@ -64,24 +55,18 @@ func New(o Options) (*Client, error) {
 	if o.Endpoint == "" {
 		return nil, errors.New("backend: no endpoint configured")
 	}
-	return &Client{
-		endpoint: strings.TrimSuffix(o.Endpoint, "/"),
-		http: &http.Client{
-			// A hung control plane costs one timeout rather than a tick.
-			Timeout: 30 * time.Second,
-			// Following a redirect would strip the device signature or replay it against a host the operator never named.
-			CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-				return fmt.Errorf("backend: refusing redirect to %s", req.URL.Host)
-			},
+	o.Endpoint = strings.TrimSuffix(o.Endpoint, "/")
+	return &Client{o: o, http: &http.Client{
+		// A hung control plane costs one timeout rather than a tick.
+		Timeout: 30 * time.Second,
+		// Following a redirect would strip the device signature or replay it against a host the operator never named.
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return fmt.Errorf("backend: refusing redirect to %s", req.URL.Host)
 		},
-		installID:    o.InstallID,
-		organization: o.Organization,
-		deviceKey:    o.DeviceKey,
-	}, nil
+	}}, nil
 }
 
-// ConfigRequest says which build is asking and which config schema versions it can execute.
-// Not a minimum version: a floor can brick a fleet that cannot move.
+// ConfigRequest names the config schema versions this build can execute; never a floor, which can brick a fleet that cannot move.
 type ConfigRequest struct {
 	AgentVersion   string `json:"agent_version"`
 	ConfigVersions []int  `json:"config_versions"`
@@ -104,14 +89,12 @@ type EnrollResponse struct {
 	Organization string `json:"organization"`
 }
 
-// ConfigResponse carries the org's served YAML verbatim. ExpiresAt lets the client keep collecting
-// on a cached config and stamp config_expired rather than halting, which would lose data.
+// ConfigResponse carries the org's served YAML verbatim; past ExpiresAt a cached copy still collects, stamped config_expired.
 type ConfigResponse struct {
 	Config    []byte    `json:"config"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// Enroll registers this install.
 func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse, error) {
 	var out EnrollResponse
 	if err := c.post(ctx, "/v1/enroll", req, &out, false); err != nil {
@@ -123,9 +106,8 @@ func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse
 	return &out, nil
 }
 
-// FetchConfig returns the served config parsed, beside the raw response the cache stores verbatim
-// (re-encoding would drop every field this build does not know). A document that does not parse
-// is refused here: a config that partly applied is worse than none.
+// FetchConfig returns the parsed document beside the raw response, which the cache stores verbatim so
+// fields this build does not know survive. A document that does not parse is refused whole.
 func (c *Client) FetchConfig(ctx context.Context, req ConfigRequest) (*config.Document, ConfigResponse, error) {
 	var out ConfigResponse
 	if err := c.post(ctx, "/v1/config", req, &out, true); err != nil {
@@ -165,10 +147,10 @@ func (c *Client) post(ctx context.Context, path string, body, out any, signed bo
 // exchange sends one JSON POST and returns its status and bounded body. A signed request carries
 // a detached signature over preamble+payload; v1 routes sign the body alone and pass "".
 func (c *Client) exchange(ctx context.Context, path, preamble string, payload []byte, signed bool) (int, []byte, error) {
-	if signed && (c.installID == "" || c.organization == "" || len(c.deviceKey) == 0) {
+	if signed && (c.o.InstallID == "" || c.o.Organization == "" || len(c.o.DeviceKey) == 0) {
 		return 0, nil, ErrNotEnrolled
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.o.Endpoint+path, bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, fmt.Errorf("backend: build request: %w", err)
 	}
@@ -183,9 +165,9 @@ func (c *Client) exchange(ctx context.Context, path, preamble string, payload []
 	}
 	if signed {
 		// The server scopes by the install id in its authenticated record, never this header, so a wider scope is unrequestable.
-		sig := ed25519.Sign(c.deviceKey, append([]byte(preamble), payload...))
+		sig := ed25519.Sign(c.o.DeviceKey, append([]byte(preamble), payload...))
 		req.Header.Set("Authorization", fmt.Sprintf("Shipper-Device org=%s, install=%s, sig=%s",
-			c.organization, c.installID, EncodeKey(sig)))
+			c.o.Organization, c.o.InstallID, EncodeKey(sig)))
 	}
 
 	resp, err := c.http.Do(req)
@@ -200,12 +182,11 @@ func (c *Client) exchange(ctx context.Context, path, preamble string, payload []
 	return resp.StatusCode, raw, nil
 }
 
-// credentialsRefused wraps the sentinel the engine stops the run on; it cannot match on prose.
+// credentialsRefused wraps the sentinel the engine stops the run on.
 func credentialsRefused(path string, status int) error {
 	return fmt.Errorf("backend: %s refused this install's credentials (HTTP %d): %w", path, status, formats.ErrCredentialsRefused)
 }
 
-// reason renders a failure body as a bounded one-line diagnostic.
 func reason(raw []byte) string {
 	s := strings.TrimSpace(string(raw))
 	if len(s) <= 200 {

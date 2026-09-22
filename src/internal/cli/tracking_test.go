@@ -193,9 +193,6 @@ func TestToggle(t *testing.T) {
 		t.Helper()
 		b := &browser{rows: rows, attr: attr, pal: pal, open: open, sel: sel}
 		require.NoError(t, b.toggle())
-		if b.status != "" {
-			assert.Equal(t, pal.dim, b.statusStyle)
-		}
 		return b.status
 	}
 

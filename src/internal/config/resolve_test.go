@@ -140,19 +140,23 @@ func TestSpecFingerprintCoversOnlyReadAffectingFields(t *testing.T) {
 func TestEnricherEnablementAuthority(t *testing.T) {
 	const join = "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: "
 	for _, tc := range []struct {
-		name   string
-		layers func(t *testing.T) []config.LayeredDocument
-		want   bool
+		name, local, served string
+		want                bool
 	}{
-		{"local disable", func(t *testing.T) []config.LayeredDocument { return []config.LayeredDocument{user(t, join+"false")} }, false},
-		{"local enable", func(t *testing.T) []config.LayeredDocument { return []config.LayeredDocument{user(t, join+"true")} }, true},
-		{"remote disable", func(t *testing.T) []config.LayeredDocument { return []config.LayeredDocument{remote(t, join+"false")} }, false},
-		{"remote cannot undo local disable", func(t *testing.T) []config.LayeredDocument {
-			return []config.LayeredDocument{user(t, join+"false"), remote(t, join+"true")}
-		}, false},
+		{"local disable", "false", "", false},
+		{"local enable", "true", "", true},
+		{"remote disable", "", "false", false},
+		{"remote cannot undo local disable", "false", "true", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			eff := resolved(t, fakeHome(t), tc.layers(t)...)
+			var layers []config.LayeredDocument
+			if tc.local != "" {
+				layers = append(layers, user(t, join+tc.local))
+			}
+			if tc.served != "" {
+				layers = append(layers, remote(t, join+tc.served))
+			}
+			eff := resolved(t, fakeHome(t), layers...)
 			assert.Equal(t, tc.want, sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"])
 		})
 	}

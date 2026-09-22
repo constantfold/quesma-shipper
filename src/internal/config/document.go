@@ -24,7 +24,7 @@ type Document struct {
 	Mode          *Mode            `yaml:"mode"`
 	Sources       []SourceOverride `yaml:"sources"`
 
-	// Sink and CrashReport are read and discarded so an older config.yaml with those blocks still parses.
+	// Read and discarded so an older config.yaml with these blocks still parses.
 	Sink        map[string]any `yaml:"send"`
 	CrashReport map[string]any `yaml:"crash_report"`
 
@@ -42,14 +42,13 @@ type Document struct {
 	TelemetryEndpoint *string `yaml:"telemetry_endpoint"`
 }
 
-// Autoupdate switches self-update at daemon startup; off is free from any layer, re-enabling is not.
+// Autoupdate: off is free from any layer, re-enabling is not.
 type Autoupdate struct {
 	Enabled *bool `yaml:"enabled"`
 }
 
-// Mode is the scheduling shape: Schedule is a Go duration such as "15m".
 type Mode struct {
-	Schedule *string `yaml:"schedule"`
+	Schedule *string `yaml:"schedule"` // a Go duration such as "15m"
 }
 
 // SourceOverride adjusts a compiled source. It cannot create one: an id absent from the catalog is refused.
@@ -73,19 +72,16 @@ type UploadTarget struct {
 	AllowLoopbackHTTP bool   `yaml:"allow_loopback_http"`
 }
 
-// Scrub carries the detection-rule surface. Both lists only grow: additions make scrubbing stricter.
+// Scrub lists only grow across layers: additions make scrubbing stricter.
 type Scrub struct {
 	RulePacks      []string `yaml:"rule_packs"`
 	SecretKeyNames []string `yaml:"secret_key_names"`
 }
 
-// Encryption is the recipient surface: who can read what this install ships.
+// Encryption is who can read what this install ships: age keys beside the install's own, unioned across layers.
 type Encryption struct {
-	// AdditionalRecipients are age public keys sealed to alongside the install's own. Union across layers.
-	AdditionalRecipients []string `yaml:"additional_recipients"`
-
-	// IncludeInstallRecipient keeps the install's own key in the set. Absent means true.
-	IncludeInstallRecipient *bool `yaml:"include_install_recipient"`
+	AdditionalRecipients    []string `yaml:"additional_recipients"`
+	IncludeInstallRecipient *bool    `yaml:"include_install_recipient"` // absent means true
 }
 
 // ParseDocument decodes the machine owner's own file. Unknown fields are refused: a typo must not be a silent no-op.
@@ -111,7 +107,6 @@ func parseDocument(raw []byte, knownFields bool) (*Document, error) {
 	return &d, nil
 }
 
-// LayeredDocument pairs a document with the layer it came from.
 type LayeredDocument struct {
 	Layer Layer
 	Doc   *Document
