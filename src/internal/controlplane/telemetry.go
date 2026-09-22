@@ -13,7 +13,7 @@ import (
 	"uuid"
 )
 
-// TelemetryPath is the one route the telemetry signature is valid for: the control plane builds
+// TelemetryPath is the only route the telemetry signature is valid for: the control plane builds
 // the same preamble from the same literal, so a served path that differs is refused locally.
 const TelemetryPath = "/v1/telemetry"
 

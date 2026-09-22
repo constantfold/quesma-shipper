@@ -38,21 +38,18 @@ func applyDocument(eff *Effective, ld LayeredDocument) *RejectionError {
 	}
 	if d.Autoupdate != nil && d.Autoupdate.Enabled != nil {
 		if *d.Autoupdate.Enabled && !l.IsLocal() {
-			return reject("autoupdate.enabled",
-				"a non-local layer may turn self-update off but never on: re-enabling over a local refusal is a widen")
+			return reject("autoupdate.enabled", "a non-local layer may turn self-update off but never on: re-enabling over a local refusal is a widen")
 		}
 		eff.AutoupdateEnabled = *d.Autoupdate.Enabled
 		eff.setOrigin("autoupdate.enabled", l)
 	}
 	if d.TelemetryEndpoint != nil {
 		if l.IsLocal() {
-			return reject("telemetry_endpoint",
-				"served by the control plane only: it names a route on the control plane this install is enrolled with")
+			return reject("telemetry_endpoint", "served by the control plane only: it names a route on the control plane this install is enrolled with")
 		}
 		endpoint := strings.TrimSpace(*d.TelemetryEndpoint)
 		if endpoint != "" && !strings.HasPrefix(endpoint, "/") {
-			return reject("telemetry_endpoint",
-				"must be a path beginning with /, resolved against the enrolled control-plane origin, never a URL")
+			return reject("telemetry_endpoint", "must be a path beginning with /, resolved against the enrolled control-plane origin, never a URL")
 		}
 		eff.TelemetryEndpoint = endpoint
 		eff.setOrigin("telemetry_endpoint", l)
@@ -66,8 +63,7 @@ func applyDocument(eff *Effective, ld LayeredDocument) *RejectionError {
 	}
 	if len(d.UploadTargets) > 0 {
 		if !l.IsLocal() {
-			return reject("upload_targets",
-				"machine-owner only: a presigned ticket authorizes itself, so this pin is the only control on destinations")
+			return reject("upload_targets", "machine-owner only: a presigned ticket authorizes itself, so this pin is the only control on destinations")
 		}
 		// Replaced, not unioned: two layers each holding half an allowlist would mean no file says where this machine writes.
 		eff.UploadTargets = slices.Clone(d.UploadTargets)

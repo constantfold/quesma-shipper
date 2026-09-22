@@ -212,17 +212,9 @@ func TestRulebookMatchesResolver(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(raw, &rb))
 	probes := rulebookProbes()
-
-	var documented []string
-	for _, f := range rb.Fields {
-		documented = append(documented, f.Field)
-	}
-	for name := range probes {
-		assert.Contains(t, documented, name, "probe has no row in the shipper-protocol authority rulebook")
-	}
-
 	for _, f := range rb.Fields {
 		probe, ok := probes[f.Field]
+		delete(probes, f.Field)
 		if !ok {
 			t.Errorf("rulebook row %q has no probe: the row is documentation, not contract", f.Field)
 			continue
@@ -260,4 +252,5 @@ func TestRulebookMatchesResolver(t *testing.T) {
 			}
 		})
 	}
+	assert.Empty(t, probes, "these probes have no row in the shipper-protocol authority rulebook")
 }

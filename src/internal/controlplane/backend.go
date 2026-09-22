@@ -81,7 +81,7 @@ func New(o Options) (*Client, error) {
 }
 
 // ConfigRequest says which build is asking and which config schema versions it can execute.
-// Not a min-version pin: a floor can brick a fleet that cannot move.
+// Not a minimum version: a floor can brick a fleet that cannot move.
 type ConfigRequest struct {
 	AgentVersion   string `json:"agent_version"`
 	ConfigVersions []int  `json:"config_versions"`
