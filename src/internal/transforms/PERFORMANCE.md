@@ -33,7 +33,7 @@ The baseline profile was 75% regexp execution. Three compounding causes:
   proportional to the number of live NFA states. It has no lazy DFA, which is
   the machine that makes C++ RE2, Rust's regex and Hyperscan fast.
 
-## How the fix works
+## Current implementation
 
 One precomputed Aho-Corasick DFA over every rule's ASCII-folded keywords plus
 the key-name stems scans each value once (`packs/prefilter.go`); rules whose
@@ -44,12 +44,18 @@ literal anchoring (`packs/anchor.go`): memchr to occurrences of the corpus
 keywords, confirm with a `\A`-anchored regex. Dispatch order is hand scanner,
 then anchored, then linear sweep. (Amended 2026-08-17: anchoring originally
 derived the required head literal from the `regexp/syntax` tree; the
-derivation was replaced by the corpus `keywords` field, with the four rules
-whose keywords are not match heads declaring `"sweep": true`.)
-Around the matchers: the JSONL walk parses its own JSON with exact
-encoding/json v1 acceptance (`jsonwalk.go`), objects are parallel slices on a
-node arena rather than maps, strings re-serialize through a hand escaper, and
-entropy scoring uses a narrow histogram with precomputed log tables.
+derivation was replaced by corpus `keywords`; rules with interior keywords or
+known anchoring cost cliffs declare `"sweep": true`.)
+The JSONL walk uses Go's `encoding/json/jsontext` decoder and records edits
+against the original bytes (`jsonwalk.go`). Only changed strings are quoted
+again; unchanged fields, whitespace and line endings are copied verbatim.
+Duplicate names and invalid UTF-8 retain encoding/json v1 acceptance.
+
+Entropy candidates use a narrow histogram and the calibrated Shannon sum in
+ascending byte order. There is one scoring formula: no approximate score,
+rounding band, precomputed logarithm table or distinct-symbol rejection floor.
+The grid scan still skips short runs; independent byte-walk and wide-histogram
+references check candidates, exact scores and threshold decisions.
 
 Keyword matching folds ASCII letter bytes and nothing else. (Amended
 2026-08-17: the DFA originally folded the two runes Unicode lowercases into
@@ -57,7 +63,7 @@ ASCII, U+212A KELVIN SIGN and U+0130, in-scan, and U+017F widened the
 key-name gate; review judged the corner unrealistic and the handling was
 removed as an accepted narrowing.)
 
-## Where the CPU goes now
+## Historical CPU profile
 
 Profile of the final stage on the real corpus (78.8 MB/s run):
 
@@ -70,11 +76,8 @@ Profile of the final stage on the real corpus (78.8 MB/s run):
 | 10% | memchr (line splitting, anchor candidate hunts) |
 | 10% | the hand JSON parse and the fused PII walk |
 
-No single dominant target remains. Known headroom, each worth maybe 5-15%
-end to end and deliberately left for separate changes: `visitStrings`
-child-path concatenation (about 41% of remaining allocations),
-`splitKeyWords` per-key allocations, memchr skip loops inside the DFA scan,
-and fusing the entropy candidate walk into the PII classification pass.
+This profile predates the jsontext walk and direct entropy scorer. Re-profile
+the current implementation before choosing another optimization.
 
 ## Tried and refuted
 
@@ -86,9 +89,9 @@ Do not re-propose these without new evidence.
   position, forfeits the literal-prefix skip, and disqualifies the fast
   small-pattern engines. The one-scan idea won one layer down instead: the
   automaton is the single DFA pass, built over literals where a DFA is cheap.
-- **ASCII-only case folding in the prefilter.** A reviewer constructed a
-  concrete missed secret via U+212A folding into the k of "token". The DFA
-  folds the two dangerous runes in-scan instead.
+- **Unicode folding in the prefilter.** A review found a missed secret via
+  U+212A folding into the k of "token". Unicode folding was added and later
+  removed by the accepted narrowing described above; current gates fold ASCII.
 - **Window-scoped regex execution.** Superseded by literal anchoring, which
   reaches the same goal with a per-rule soundness derivation instead of
   window-size heuristics.
@@ -98,8 +101,7 @@ Do not re-propose these without new evidence.
   allocation win without the hazard.
 - **Anchoring `private-key-block`.** Its unbounded lazy tail made candidate
   verification quadratic (up to 481x on a flood of unterminated PEM headers).
-  The anchor derivation refuses unbounded-tail patterns; that rule keeps the
-  linear sweep, and a regression test pins the decision.
+  The corpus marks that rule `"sweep": true`; a regression test pins the decision.
 
 ## Verification record
 
@@ -123,9 +125,8 @@ Do not re-propose these without new evidence.
   reference regexes and the sweep matcher survive as test-only references with
   differential tests. Deleting one of those tests removes the only thing
   holding a fast path to its specification.
-- JSON acceptance parity is pinned to encoding/json v1. A GOEXPERIMENT=jsonv2
-  toolchain fails `jsonwalk_test.go` loudly rather than drifting; that is a
-  decision to make, not a bug to chase.
+- `jsonwalk_test.go` compares JSON acceptance with `encoding/json.Valid` and
+  checks source preservation, duplicate keys, invalid UTF-8 and dirty strings.
 - The anchor derivation table is pinned per rule, so a corpus edit that
   changes a rule's execution path shows up as a visible test diff.
 - Config surface: negative `EntropyConfig.MinLength` and empty or non-ASCII

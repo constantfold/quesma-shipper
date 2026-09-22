@@ -1,7 +1,6 @@
 package transforms
 
 import (
-	"math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -9,8 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The grid scan and the tabulated score are only allowed to be faster, never different; each is
-// held to the shape it replaced.
+// The optimized scan must find the same candidates as a byte walk.
 
 // refMatch is the byte-at-a-time run walk the grid scan replaced: every byte inspected, every
 // maximal in-class run of at least minRun emitted.
@@ -84,18 +82,10 @@ func TestEntropyGridScanFindsTheSameRunsAsTheByteWalk(t *testing.T) {
 	}
 }
 
-// entropyEstSlack is only sound if the rearranged score tracks the exact one far more closely
-// than the slack, so measure the gap rather than assume it. It also proves the band is not
-// swallowing the corpus, since a candidate inside it is paid for twice.
-func TestEntropyEstimateTracksTheExactScore(t *testing.T) {
+// Scoring retains the original summation order, including long, uneven candidates.
+func TestEntropyExactScoreMatchesTheWideHistogram(t *testing.T) {
 	rng := rand.New(rand.NewSource(37))
-	alphabet := make([]byte, 0, entropySymbols)
-	for c := 0; c < 256; c++ {
-		if isCandidateByte(byte(c)) {
-			alphabet = append(alphabet, byte(c))
-		}
-	}
-	worst := 0.0
+	alphabet := candidateAlphabet()
 	for i := 0; i < 200000; i++ {
 		n := 1 + rng.Intn(400)
 		width := 1 + rng.Intn(len(alphabet))
@@ -109,12 +99,6 @@ func TestEntropyEstimateTracksTheExactScore(t *testing.T) {
 		for j := 0; j < len(s); j++ {
 			counts[uint(entropyClass[s[j]]&^entropyHexBit)]++
 		}
-		total := float64(len(s))
-		gap := math.Abs(estimateEntropyBits(&counts, total) - exactEntropyBits(&counts, total))
-		if gap > worst {
-			worst = gap
-		}
+		require.Equal(t, refShannonBits(s), exactEntropyBits(&counts, float64(len(s))), "candidate %q", s)
 	}
-	// Three orders below the slack, on the widest candidates the matcher scores.
-	require.Truef(t, worst <= entropyEstSlack/1000, "estimate drifts from the exact score by %g, slack is %g", worst, entropyEstSlack)
 }

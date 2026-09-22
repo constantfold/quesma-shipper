@@ -41,10 +41,6 @@ type entropyMatcher struct {
 	// Candidate length floor, at least 1: a zero-length candidate scores no entropy.
 	minRun int
 
-	// Distinct-symbol floors from entropyFloor: below them a candidate is rejected
-	// without entering the logarithm loop.
-	minDistinct, minDistinctHex int
-
 	// Substrings whose delimited presence marks a candidate as the scrubber's own
 	// output rather than a secret; see Match.
 	skip []string
@@ -58,10 +54,8 @@ func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
 		skip = append(skip, username)
 	}
 	return &entropyMatcher{
-		cfg:            cfg,
-		minRun:         max(cfg.MinLength, 1),
-		minDistinct:    entropyFloor(cfg.MinBitsPerChar),
-		minDistinctHex: entropyFloor(cfg.MinBitsPerCharHex),
+		cfg:    cfg,
+		minRun: max(cfg.MinLength, 1),
 		// "/" is deliberately NOT in the candidate class: with it a candidate is a
 		// whole path prefix, 55% of all redaction hits on a real archive. The accepted residual, a std-base64 secret whose slashes split it
 		// under MinLength, is pinned in TestBareBase64WithSlashIsAKnownEscape.
@@ -113,18 +107,6 @@ func buildEntropyClass() [256]uint8 {
 // isHexByte marks the runs that earn MinBitsPerCharHex rather than MinBitsPerChar.
 func isHexByte(c byte) bool {
 	return isDigit(c) || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
-}
-
-// entropyFloor is the smallest distinct-symbol count that could reach threshold: d
-// symbols cannot score above log2(d). The 1e-9 slack sits three orders above the sum's
-// rounding, so nothing the exact loop would accept is dropped.
-func entropyFloor(threshold float64) int {
-	for d := 1; d <= entropySymbols; d++ {
-		if math.Log2(float64(d)) >= threshold-1e-9 {
-			return d
-		}
-	}
-	return entropySymbols + 1
 }
 
 func (m *entropyMatcher) RuleID() string { return "generic-entropy" }
@@ -198,12 +180,9 @@ func containsDelimited(s, sub string) bool {
 	return false
 }
 
-// clears scores a candidate against the threshold its alphabet earns, hex or base64.
-// exactEntropyBits, which the thresholds were fitted against, decides inside the slack
-// band. The histogram is a local, so a shared *Scrubber stays safe across goroutines.
+// clears uses the calibrated Shannon sum, in symbol order, for both alphabets.
 func (m *entropyMatcher) clears(candidate string) bool {
 	var counts [entropyHistSlots]int32
-	distinct := 0
 	// Accumulating class bytes makes the hex verdict one AND per byte instead of a
 	// branch mixed-alphabet candidates mispredict.
 	hexAll := uint8(0xff)
@@ -211,44 +190,16 @@ func (m *entropyMatcher) clears(candidate string) bool {
 		class := entropyClass[candidate[i]]
 		hexAll &= class
 		slot := uint(class &^ entropyHexBit)
-		if counts[slot] == 0 {
-			distinct++
-		}
 		counts[slot]++
 	}
-	threshold, floor := m.cfg.MinBitsPerChar, m.minDistinct
+	threshold := m.cfg.MinBitsPerChar
 	if hexAll&entropyHexBit != 0 {
-		threshold, floor = m.cfg.MinBitsPerCharHex, m.minDistinctHex
+		threshold = m.cfg.MinBitsPerCharHex
 	}
-	if threshold <= 0 || distinct < floor {
+	if threshold <= 0 {
 		return false
 	}
-	total := float64(len(candidate))
-	est := estimateEntropyBits(&counts, total)
-	if est >= threshold+entropyEstSlack {
-		return true
-	}
-	if est < threshold-entropyEstSlack {
-		return false
-	}
-	// The estimate cannot name the side, so pay for the arithmetic that defines it.
-	return exactEntropyBits(&counts, total) >= threshold
-}
-
-// estimateEntropyBits rearranges the sum to H = log2(T) - (1/T)*sum(c*log2(c)), whose
-// only logarithms are of small integers a table can answer. Exact in the reals but not
-// in float64, so its answer is trusted only away from the threshold (entropyEstSlack).
-func estimateEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
-	weighted := 0.0
-	for _, c := range counts[:entropySymbols+1] {
-		n := uint(c)
-		if n < log2SmallMax {
-			weighted += nLog2Table[n]
-			continue
-		}
-		weighted += float64(n) * math.Log2(float64(n))
-	}
-	return math.Log2(total) - weighted/total
+	return exactEntropyBits(&counts, float64(len(candidate))) >= threshold
 }
 
 // exactEntropyBits is the Shannon sum as the calibrated thresholds were fitted against:
@@ -256,7 +207,7 @@ func estimateEntropyBits(counts *[entropyHistSlots]int32, total float64) float64
 // associate, so that order is a correctness property.
 func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	h := 0.0
-	for _, c := range counts {
+	for _, c := range counts[:entropySymbols+1] {
 		if c == 0 {
 			continue
 		}
@@ -264,21 +215,4 @@ func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 		h -= p * math.Log2(p)
 	}
 	return h
-}
-
-// entropyEstSlack is how far from the threshold the estimate may decide alone: the two
-// computations differ by ~5e-13 at worst, and the band falls through to exactEntropyBits.
-const entropyEstSlack = 1e-9
-
-// log2SmallMax bounds the table; above it math.Log2 runs for that one slot.
-const log2SmallMax = 1024
-
-var nLog2Table = buildNLog2Table()
-
-// nLog2Table holds n*log2(n), the rearranged sum's per-slot term, with slot 0 zero.
-func buildNLog2Table() (nLog2 [log2SmallMax]float64) {
-	for i := 1; i < log2SmallMax; i++ {
-		nLog2[i] = float64(i) * math.Log2(float64(i))
-	}
-	return nLog2
 }

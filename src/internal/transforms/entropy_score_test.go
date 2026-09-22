@@ -75,12 +75,7 @@ func TestEntropyClassTableMatchesTheByteTests(t *testing.T) {
 // a redaction that appears or disappears.
 func TestEntropyScoreIsBitIdenticalToTheWideHistogram(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
-	alphabet := make([]byte, 0, entropySymbols)
-	for c := 0; c < 256; c++ {
-		if isCandidateByte(byte(c)) {
-			alphabet = append(alphabet, byte(c))
-		}
-	}
+	alphabet := candidateAlphabet()
 	m := newEntropyMatcher(DefaultEntropyConfig(), "")
 	for i := 0; i < 200000; i++ {
 		n := 1 + rng.Intn(200)
@@ -96,17 +91,11 @@ func TestEntropyScoreIsBitIdenticalToTheWideHistogram(t *testing.T) {
 	}
 }
 
-// Thresholds are configuration, so the distinct-symbol floor must hold at values sitting exactly
-// on a log2(d) boundary, where the shortcut has least room.
-func TestEntropyFloorHoldsAtBoundaryThresholds(t *testing.T) {
+// Configured thresholds must preserve decisions at and around log2(d) boundaries.
+func TestEntropyDecisionsHoldAtBoundaryThresholds(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
-	alphabet := make([]byte, 0, entropySymbols)
+	alphabet := candidateAlphabet()
 	hex := []byte("0123456789abcdefABCDEF")
-	for c := 0; c < 256; c++ {
-		if isCandidateByte(byte(c)) {
-			alphabet = append(alphabet, byte(c))
-		}
-	}
 	var thresholds []float64
 	for d := 1; d <= entropySymbols; d++ {
 		v := math.Log2(float64(d))
@@ -121,7 +110,7 @@ func TestEntropyFloorHoldsAtBoundaryThresholds(t *testing.T) {
 			if i%2 == 0 {
 				pool = hex
 			}
-			// Uniform draws over exactly d symbols: closest to the log2(d) ceiling the floor comes from.
+			// Uniform draws over d symbols land closest to the log2(d) boundary.
 			d := 1 + rng.Intn(len(pool))
 			n := d * (1 + rng.Intn(4))
 			buf := make([]byte, 0, n)
@@ -167,4 +156,14 @@ func TestContainsDelimitedMatchesTheNaiveScan(t *testing.T) {
 			t.Fatalf("containsDelimited(%q, %q) = %v, want %v", s, sub, got, want)
 		}
 	}
+}
+
+func candidateAlphabet() []byte {
+	alphabet := make([]byte, 0, entropySymbols)
+	for c := 0; c < 256; c++ {
+		if isCandidateByte(byte(c)) {
+			alphabet = append(alphabet, byte(c))
+		}
+	}
+	return alphabet
 }
