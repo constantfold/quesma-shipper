@@ -12,6 +12,8 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 	protocol "github.com/QuesmaOrg/shipper-protocol"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The authority rulebook in the shipper-protocol module bounds a served config's authority; this file makes it executable, and a row without a probe fails.
@@ -87,8 +89,11 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			if eff.OrganizationID != "acme" {
 				t.Errorf("served org did not become the organization id: %q", eff.OrganizationID)
 			}
-			_, err = resolveLayers(t, config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, envelope)})
-			mustReject(t, err, "envelope in a local file")
+			// A local org would relabel where this machine writes.
+			for _, y := range []string{envelope, "org: acme\n", "issued_at: 2026-01-01T00:00:00Z\n"} {
+				_, err = resolveLayers(t, user(t, y))
+				mustReject(t, err, "envelope in a local file")
+			}
 		}},
 
 		"config_version": {
@@ -132,8 +137,17 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			reject: "drain_deadline: -5m\n",
 		},
 
+		// A served config that could move the state directory would silently defeat a pause.
 		"state_dir": {
 			reject: "state_dir: /var/lib/shipper\n",
+			custom: func(t *testing.T) {
+				_, err := resolveLayers(t, served(t, "state_dir: /tmp/somewhere-else\n"))
+				var rej *config.RejectionError
+				require.ErrorAs(t, err, &rej)
+				assert.Equal(t, "state_dir", rej.Field)
+				// The machine owner's own file must still set it, or the field is settable by nobody.
+				assert.Equal(t, "/tmp/mine", resolved(t, fakeHome(t), user(t, "state_dir: /tmp/mine\n")).StateDir)
+			},
 		},
 
 		"upload_targets": {
@@ -195,32 +209,25 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 		}},
 
 		"structural_exempt": {
-			accept: "structural_exempt:\n  claude-jsonl:\n    - message.id\n",
+			accept: "structural_exempt:\n  claude-code: [acmeInternalTraceId]\n",
 			verify: func(t *testing.T, eff *config.Effective) {
-				if !slices.Contains(eff.StructuralEx["claude-jsonl"], "message.id") {
-					t.Error("served exemption did not merge")
-				}
-				for k := range transforms.CompiledExemptions() {
-					if _, ok := eff.StructuralEx[k]; !ok {
-						t.Errorf("served exemptions replaced the compiled baseline: %s gone", k)
+				assert.Contains(t, eff.StructuralEx["claude-code"], "acmeInternalTraceId")
+				for k, compiled := range transforms.CompiledExemptions() {
+					for _, p := range compiled {
+						assert.Contains(t, eff.StructuralEx[k], p, "served exemptions displaced the compiled baseline")
 					}
 				}
 			},
 		},
 
 		"encryption.additional_recipients": {custom: func(t *testing.T) {
-			eff, err := resolveLayers(t,
-				config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "encryption:\n  additional_recipients:\n    - "+probeRecipientA+"\n")},
-				served(t, "encryption:\n  additional_recipients:\n    - "+probeRecipientB+"\n"),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, r := range []string{probeRecipientA, probeRecipientB} {
-				if !slices.Contains(eff.AdditionalRecipients, r) {
-					t.Errorf("union lost recipient %s", r)
-				}
-			}
+			eff := resolved(t, fakeHome(t),
+				user(t, "encryption:\n  additional_recipients: ["+probeRecipientA+"]\n"),
+				served(t, "encryption:\n  additional_recipients: ["+probeRecipientB+", "+probeRecipientA+"]\n"))
+			// Union in first-seen order, no duplicates; not mentioning include_install_recipient keeps it.
+			assert.Equal(t, []string{probeRecipientA, probeRecipientB}, eff.AdditionalRecipients)
+			assert.Equal(t, config.LayerRemote, eff.Provenance["encryption.additional_recipients"].Layer)
+			assert.True(t, eff.IncludeInstallRecipient)
 		}},
 
 		"encryption.include_install_recipient": {
@@ -229,6 +236,7 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 				if eff.IncludeInstallRecipient {
 					t.Error("served withhold did not apply")
 				}
+				assert.Equal(t, []string{probeRecipientA}, eff.AdditionalRecipients)
 			},
 			// Withhold with no reader would seal objects no key can open.
 			reject: "encryption:\n  include_install_recipient: false\n",
@@ -241,7 +249,12 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 					t.Error("served disable did not apply")
 				}
 			},
-			// The asymmetry on this field is pinned by TestLocalDenyBeatsRemoteAllow in resolve_test.go.
+			custom: func(t *testing.T) {
+				eff := resolved(t, fakeHome(t),
+					user(t, "sources:\n  - id: claude-code-transcripts\n    enabled: false\n"),
+					served(t, "sources:\n  - id: claude-code-transcripts\n    enabled: true\n"))
+				assert.False(t, sourceByID(t, eff, "claude-code-transcripts").Enabled, "a remote enable must not undo a local disable")
+			},
 		},
 
 		"sources[].roots / include / exclude": {
@@ -268,30 +281,14 @@ func rulebookProbes(t *testing.T) map[string]rulebookProbe {
 			},
 		},
 
-		"sources[].enrichers{}": {custom: func(t *testing.T) {
-			// Disable applies from the served document.
-			eff, err := resolveLayers(t, served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"] {
-				t.Error("served enricher disable did not apply")
-			}
-			// A served enable over a local disable is ignored, not honored.
-			eff, err = resolveLayers(t,
-				config.LayeredDocument{Layer: config.LayerUser, Doc: doc(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n")},
-				served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: true\n"),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"] {
-				t.Error("served enable overrode a local enricher disable")
-			}
-			// Attaching an enricher the catalog does not know is refused, not ignored.
-			_, err = resolveLayers(t, served(t, "sources:\n  - id: cursor-transcripts\n    enrichers:\n      exfiltrate-everything: true\n"))
-			mustReject(t, err, "attaching an unregistered enricher")
-		}},
+		"sources[].enrichers{}": {
+			accept: "sources:\n  - id: cursor-transcripts\n    enrichers:\n      cursor-transcript-join: false\n",
+			verify: func(t *testing.T, eff *config.Effective) {
+				assert.False(t, sourceByID(t, eff, "cursor-transcripts").Enrichers["cursor-transcript-join"])
+			},
+			// Attaching an enricher the catalog does not know is refused, not ignored; TestEnricherEnablementAuthority covers the asymmetry.
+			reject: "sources:\n  - id: cursor-transcripts\n    enrichers:\n      exfiltrate-everything: true\n",
+		},
 
 		"a source id not in the compiled catalog": {
 			reject: "sources:\n  - id: no-such-source\n    enabled: false\n",
