@@ -51,18 +51,13 @@ func ApplyUserPlaceholder(s, username string) string {
 
 	var b strings.Builder
 	for i := 0; i < len(s); {
-		if !strings.HasPrefix(s[i:], username) {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
-		leftOK := i == 0 || !isAlnum(s[i-1])
-		end := i + len(username)
-		rightOK := end == len(s) || !isAlnum(s[end])
-		if leftOK && rightOK {
-			b.WriteString(UserPlaceholder)
-			i = end
-			continue
+		if strings.HasPrefix(s[i:], username) {
+			end := i + len(username)
+			if (i == 0 || !isAlnum(s[i-1])) && (end == len(s) || !isAlnum(s[end])) {
+				b.WriteString(UserPlaceholder)
+				i = end
+				continue
+			}
 		}
 		b.WriteByte(s[i])
 		i++

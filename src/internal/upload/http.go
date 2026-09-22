@@ -147,8 +147,5 @@ func sanitizeReason(body string) string {
 		return r
 	}, strings.TrimSpace(body))
 	oneLine := []rune(strings.Join(strings.Fields(cleaned), " "))
-	if len(oneLine) > maxReasonRunes {
-		oneLine = oneLine[:maxReasonRunes]
-	}
-	return string(oneLine)
+	return string(oneLine[:min(len(oneLine), maxReasonRunes)])
 }
