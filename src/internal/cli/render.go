@@ -103,29 +103,29 @@ func renderSections(w io.Writer, p palette, secs []app.Section) {
 		}
 
 		for _, row := range sec.Rows {
-			pad := strings.Repeat(" ", max(width-utf8.RuneCountInString(row.Head()), 0))
-			label := row.Head() + pad
-			if row.Name {
-				label = p.bold + row.Label + p.reset
-				if row.Tag != "" {
-					label += " " + p.cyan + row.Tag + p.reset
+			style, reset, glyph := "", "", p.glyph(row.Sev)
+			if row.Sev == app.SevDim {
+				style, reset, glyph = p.dim, p.reset, "-"
+			}
+			var line string
+			if row.Sub {
+				detail := row.Detail
+				if label := strings.TrimSpace(row.Label); label != "" {
+					detail = label + ": " + detail
 				}
-				label += pad
+				line = fixIndent + p.paint(detail, style)
+			} else {
+				label := row.Head()
+				if row.Name {
+					label = p.bold + row.Label + p.reset
+					if row.Tag != "" {
+						label += " " + p.cyan + row.Tag + p.reset
+					}
+				}
+				label += strings.Repeat(" ", max(width-utf8.RuneCountInString(row.Head()), 0))
+				line = strings.TrimRight(fmt.Sprintf("  %s  %s  %s", glyph, label, p.paint(row.Detail, style)), " ")
 			}
-			line := strings.TrimRight(fmt.Sprintf("  %s  %s  %s", p.glyph(row.Sev), label, p.paint(row.Detail, "")), " ")
-			sub := row.Detail
-			if l := strings.TrimSpace(row.Label); l != "" {
-				sub = l + ": " + sub
-			}
-			switch {
-			case row.Sub && row.Sev == app.SevDim:
-				line = p.dim + fixIndent + p.paint(sub, p.dim) + p.reset
-			case row.Sub:
-				line = fixIndent + p.paint(sub, "")
-			case row.Sev == app.SevDim:
-				line = p.dim + strings.TrimRight(fmt.Sprintf("  -  %s  %s", label, p.paint(row.Detail, p.dim)), " ") + p.reset
-			}
-			fmt.Fprintln(w, line)
+			fmt.Fprintln(w, style+line+reset)
 			for i, fix := range strings.Split(row.Fix, "\n") {
 				if fix == "" {
 					continue

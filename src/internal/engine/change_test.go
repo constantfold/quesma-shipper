@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,68 +98,51 @@ func TestAnUnchangedFileIsNotReadTwice(t *testing.T) {
 	assert.Equal(t, "size and mtime unchanged", reason)
 }
 
-// Per-file unchanged entries would grow the log at scan rate, so one aggregate replaces them.
-func TestUnchangedFilesAuditAsOneAggregateEntry(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscript("p/a.jsonl", line1)
-	f.writeTranscript("p/b.jsonl", line2)
-	f.writeTranscript("p/c.jsonl", line1)
+// Stat-only skips coalesce; files read to verify their hash retain a per-file audit entry.
+func TestUnchangedFileAudit(t *testing.T) {
+	for _, read := range []bool{false, true} {
+		t.Run(fmt.Sprintf("read=%t", read), func(t *testing.T) {
+			f := newFixture(t)
+			path := f.writeTranscript("p/a.jsonl", line1)
+			f.writeTranscript("p/b.jsonl", line2)
+			count := 2
+			if !read {
+				f.writeTranscript("p/c.jsonl", line1)
+				count++
+			}
+			require.Equal(t, count, f.run().Shipped)
+			if read {
+				// A new mtime under identical bytes forces the content-hash check.
+				later := time.Now().Add(time.Hour)
+				require.NoError(t, os.Chtimes(path, later, later))
+			}
+			f.reopen()
+			require.Equal(t, count, f.run().Unchanged)
 
-	require.Equal(t, 3, f.run().Shipped)
-	f.reopen()
-	require.Equal(t, 3, f.run().Unchanged)
-
-	entries, err := auditlog.Tail(f.log.Path(), 0)
-	require.NoError(t, err)
-	perFile, aggregates := 0, 0
-	var reason string
-	for _, e := range entries {
-		if e.Decision != auditlog.DecisionUnchanged {
-			continue
-		}
-		if e.File != "" {
-			perFile++
-		} else {
-			aggregates++
-			reason = e.Reason
-		}
+			entries, err := auditlog.Tail(f.log.Path(), 0)
+			require.NoError(t, err)
+			var perFile, aggregate []auditlog.Entry
+			for _, e := range entries {
+				if e.Decision != auditlog.DecisionUnchanged {
+					continue
+				}
+				if e.File == "" {
+					aggregate = append(aggregate, e)
+				} else {
+					perFile = append(perFile, e)
+				}
+			}
+			require.Len(t, aggregate, 1, "stat-only skips must coalesce")
+			if read {
+				require.Len(t, perFile, 1)
+				assert.Equal(t, path, perFile[0].File)
+				assert.NotZero(t, perFile[0].BytesIn)
+			} else {
+				assert.Empty(t, perFile)
+				assert.Equal(t, "3 files unchanged by size and mtime, not opened; per-file entries elided", aggregate[0].Reason)
+			}
+		})
 	}
-	assert.Equalf(t, 0, perFile, "%d per-file unchanged entries; the elision is not happening", perFile)
-	require.Equalf(t, 1, aggregates, "%d aggregate unchanged entries, want exactly 1", aggregates)
-	assert.Equal(t, reason, "3 files unchanged by size and mtime, not opened; per-file entries elided")
-}
-
-// Only files the run never opened are elided; one it READ keeps its per-file entry.
-func TestAReadButUnchangedFileKeepsItsPerFileAuditEntry(t *testing.T) {
-	f := newFixture(t)
-	path := f.writeTranscript("p/a.jsonl", line1)
-	f.writeTranscript("p/b.jsonl", line2)
-
-	require.Equal(t, 2, f.run().Shipped)
-
-	// A new mtime under identical bytes: the pre-filter cannot clear it, so the run reads it.
-	later := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(path, later, later))
-	f.reopen()
-	require.Equal(t, 2, f.run().Unchanged)
-
-	entries, err := auditlog.Tail(f.log.Path(), 0)
-	require.NoError(t, err)
-	perFile, aggregates := 0, 0
-	for _, e := range entries {
-		if e.Decision != auditlog.DecisionUnchanged {
-			continue
-		}
-		if e.File == "" {
-			aggregates++
-			continue
-		}
-		perFile++
-		assert.Equalf(t, path, e.File, "per-file unchanged entry for %s, want %s", e.File, path)
-		assert.NotEqual(t, int64(0), e.BytesIn, "the per-file entry must carry the bytes the run read")
-	}
-	assert.Equalf(t, 1, perFile, "%d per-file unchanged entries, want exactly 1: the file the run read", perFile)
-	assert.Equalf(t, 1, aggregates, "%d aggregate entries, want 1: the file the pre-filter passed over", aggregates)
 }
 
 // After a spec change preview must report the same would-ship as a real sync, persisting nothing.
