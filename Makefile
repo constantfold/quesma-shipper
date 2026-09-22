@@ -74,9 +74,7 @@ test: ## Run the unit suite
 race: ## Run the unit suite under the race detector
 	cd $(MODULE) && go test -race $(PKG)
 
-# The full local tier measures the shipped binary through a latency-shaped MinIO path. The HTTP
-# protocol peer only verifies device signatures and issues presigned tickets; it models no control
-# plane product. The full corpus is intentionally manual because it costs minutes.
+# Both tiers measure the shipped binary against a latency-shaped MinIO; the full corpus costs minutes, so it is manual.
 PERF_SKIP = docker info >/dev/null 2>&1 || { echo "docker is not available; skipping $@"; exit 0; }
 
 .PHONY: perf
@@ -84,8 +82,7 @@ perf: ## Run the full local performance tier (needs Docker)
 	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && \
 		go test -tags perf -count=1 -timeout 30m -v ./perf/
 
-# The same instruments and budgets on the PR-sized corpus. The extra three tests prove that the
-# proxy and resource observations used by the measured scenarios are live.
+# The PR-sized corpus, plus the three tests proving the proxy and resource instruments are live.
 .PHONY: perf-smoke
 perf-smoke: ## Run the CI-sized performance tier (needs Docker)
 	@$(PERF_SKIP); cd $(MODULE) && go vet -tags perf ./perf/ && go test -tags perf -count=1 -timeout 10m -v -run \
