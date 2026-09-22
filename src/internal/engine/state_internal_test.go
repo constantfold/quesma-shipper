@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +25,9 @@ func TestAnUnloadableDocumentIsDiscardedAndReplaced(t *testing.T) {
 		{name: "invalid JSON", body: "{not json"},
 		{name: "state_schema mismatch", body: `{"state_schema": 2, "entries": []}`},
 		{name: "checksum mismatch", body: `{"state_schema": 1, "checksum": "deadbeef", "entries": []}`},
-		{name: "another install", body: `{"state_schema": 1, "install_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", "entries": []}`},
+		// Its entries name objects under another key root, so not one may survive into this install.
+		{name: "another install", body: `{"state_schema": 1, "install_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", ` +
+			`"entries": [{"source_id": "s", "native_path": "/x/a.jsonl", "source_hash": "` + strings.Repeat("a", 64) + `"}]}`},
 		{name: "negative attempts", body: `{"state_schema": 1, "entries": [{"source_id": "s", "native_path": "/x/a.jsonl", "attempts": -5}]}`},
 		{name: "oversize", body: valid, maxBytes: 8},
 		{name: "unreadable", body: valid, unreadable: true},
