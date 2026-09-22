@@ -137,10 +137,7 @@ func LastRun(stateDir string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
-	if err != nil {
-		return time.Time{}
-	}
+	t, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
 	return t
 }
 

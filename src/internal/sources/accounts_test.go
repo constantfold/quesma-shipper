@@ -36,16 +36,10 @@ func accountFixture(t *testing.T) Request {
 	}
 }
 
-func accountFile(t *testing.T, path, body string) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
-	require.NoError(t, os.WriteFile(path, []byte(body), 0600))
-}
-
 func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 	req := accountFixture(t)
 	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"dev@example.org","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`))
-	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"workspace-1","id_token":"x.`+claims+`.x"}}`)
+	writeFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"workspace-1","id_token":"x.`+claims+`.x"}}`)
 	calls := 0
 	p := accounts{client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -76,7 +70,7 @@ func TestAccountSnapshotsPreserveProviderJSONInMemory(t *testing.T) {
 
 func TestAccountDiscoveryDoesNotFetchOrWrite(t *testing.T) {
 	req := accountFixture(t)
-	accountFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture"}}`)
+	writeFile(t, filepath.Join(req.Env.Home, ".codex", "auth.json"), `{"tokens":{"access_token":"fixture"}}`)
 	p := accounts{client: &http.Client{Transport: accountTransport(func(*http.Request) (*http.Response, error) {
 		t.Fatal("discovery fetched account data")
 		return nil, nil
@@ -133,8 +127,8 @@ func TestClaudeUsesActiveCredentialsAndPreservesLocalAccount(t *testing.T) {
 	home := filepath.Join(req.Env.Home, "other-claude")
 	req.Source.Root = home
 	req.Env.Lookup = func(k string) (string, bool) { return home, k == "CLAUDE_CONFIG_DIR" }
-	accountFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"organizationType":"max","future":42},"unrelated":"not collected"}`)
-	accountFile(t, filepath.Join(home, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"correct","scopes":["user:profile"]}}`)
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"oauthAccount":{"organizationType":"max","future":42},"unrelated":"not collected"}`)
+	writeFile(t, filepath.Join(home, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"correct","scopes":["user:profile"]}}`)
 	calls := 0
 	p := accounts{keychain: func(context.Context, string) ([]byte, error) { return nil, errors.New("locked") }, client: &http.Client{Transport: accountTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -165,7 +159,7 @@ func TestAccountBucketUsesCollectionInterval(t *testing.T) {
 		t.Run(interval.String(), func(t *testing.T) {
 			req := accountFixture(t)
 			req.Interval = interval
-			accountFile(t, filepath.Join(req.Source.Root, "auth.json"), `{}`)
+			writeFile(t, filepath.Join(req.Source.Root, "auth.json"), `{}`)
 			d, err := (&accounts{}).discover(req)
 			if interval <= 0 {
 				require.Error(t, err, "accepted nonpositive interval")
@@ -193,7 +187,7 @@ func TestCandidateLoadLimitsAndCancellation(t *testing.T) {
 	req := accountFixture(t)
 	req.Source.MaxFileBytes = 1
 	path := filepath.Join(req.Source.Root, "auth.json")
-	accountFile(t, path, `{}`)
+	writeFile(t, path, `{}`)
 	d, err := (&accounts{}).discover(req)
 	require.NoError(t, err)
 	for _, load := range []func(context.Context) (Payload, error){fileLoader(path, 1), d.Candidates[0].Load} {

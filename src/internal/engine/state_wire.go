@@ -156,9 +156,7 @@ func load(stateDir string, maxBytes int64) (Document, error) {
 		out.SourceSpecs = map[string]string{}
 	}
 	if doc.UpdatedAt != "" {
-		if t, err := time.Parse(time.RFC3339, doc.UpdatedAt); err == nil {
-			out.UpdatedAt = t
-		}
+		out.UpdatedAt, _ = time.Parse(time.RFC3339, doc.UpdatedAt)
 	}
 	for _, e := range doc.Entries {
 		if e.Attempts < 0 {
@@ -175,14 +173,10 @@ func load(stateDir string, maxBytes int64) (Document, error) {
 			Enricher:   e.Enricher,
 		}
 		if e.SourceMTime != "" {
-			if t, err := time.Parse(time.RFC3339, e.SourceMTime); err == nil {
-				fp.SourceMTime = t
-			}
+			fp.SourceMTime, _ = time.Parse(time.RFC3339, e.SourceMTime)
 		}
 		if e.BackoffUntil != "" {
-			if t, err := time.Parse(time.RFC3339, e.BackoffUntil); err == nil {
-				fp.BackoffUntil = t
-			}
+			fp.BackoffUntil, _ = time.Parse(time.RFC3339, e.BackoffUntil)
 		}
 		out.Entries[Key{
 			SourceID:   e.SourceID,
