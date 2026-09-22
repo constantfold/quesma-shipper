@@ -126,3 +126,28 @@ func lastFailureRows(stateDir string, now time.Time, verbose bool) []Row {
 	detail := fmt.Sprintf("%s, %s: %s", Ago(at, now), latest.Kind, latest.Message)
 	return []Row{{Sev: SevDim, Label: "last failure", Detail: detail}}
 }
+
+func (up familyUpload) row(name string, now time.Time) Row {
+	detail := ""
+	switch {
+	case up.recorded && up.shipped > 0:
+		detail = fmt.Sprintf("%s, %s sent", Ago(up.at, now), CountNoun(up.shipped, "file"))
+	case up.recorded:
+		detail = fmt.Sprintf("%s, nothing new", Ago(up.at, now))
+	default:
+		detail = "none yet"
+	}
+	if up.failed > 0 {
+		detail += fmt.Sprintf(", %d failed", up.failed)
+	}
+	if up.pending > 0 {
+		detail += fmt.Sprintf(", %s changed since", CountNoun(up.pending, "file"))
+	}
+	row := Row{Sev: SevDim, Sub: true, Label: "  last upload", Detail: detail}
+	if up.failed > 0 {
+		row.Sev = SevWarn
+		row.Brief = name + ": upload failures"
+		row.Fix = "`quesma-shipper log` shows each file's outcome"
+	}
+	return row
+}

@@ -154,28 +154,7 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 	}
 
 	if collecting && (up.recorded || up.pending > 0) && (verbose || up.failed > 0) {
-		detail := ""
-		switch {
-		case up.recorded && up.shipped > 0:
-			detail = fmt.Sprintf("%s, %s sent", Ago(up.at, now), CountNoun(up.shipped, "file"))
-		case up.recorded:
-			detail = fmt.Sprintf("%s, nothing new", Ago(up.at, now))
-		default:
-			detail = "none yet"
-		}
-		if up.failed > 0 {
-			detail += fmt.Sprintf(", %d failed", up.failed)
-		}
-		if up.pending > 0 {
-			detail += fmt.Sprintf(", %s changed since", CountNoun(up.pending, "file"))
-		}
-		row := Row{Sev: SevDim, Sub: true, Label: "  last upload", Detail: detail}
-		if up.failed > 0 {
-			row.Sev = SevWarn
-			row.Brief = name + ": upload failures"
-			row.Fix = "`quesma-shipper log` shows each file's outcome"
-		}
-		issues = append([]Row{row}, issues...)
+		issues = append([]Row{up.row(name, now)}, issues...)
 	}
 	for _, issue := range issues {
 		if issue.Sev == SevWarn {

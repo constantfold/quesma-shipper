@@ -317,13 +317,11 @@ func event(at time.Time, kind, message string) formats.FailureEvent {
 }
 
 // Nineteen consecutive failed ticks used to leave doctor entirely green.
-func TestFailureRowsReportConsecutiveFailures(t *testing.T) {
+func TestFailureRowsContract(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 9, 17, 13, 0, 0, 0, time.UTC)
 
-	if rows := failureRows(dir, now); rows != nil {
-		t.Fatalf("a store with no failure record produced %d rows", len(rows))
-	}
+	require.Nil(t, failureRows(dir, now), "a store with no failure record produces no row")
 
 	seedFailures(t, dir, 19, event(now.Add(-15*time.Minute), formats.FailureTick,
 		"state: document belongs to a different install"))
@@ -335,35 +333,24 @@ func TestFailureRowsReportConsecutiveFailures(t *testing.T) {
 	assert.Containsf(t, got.Fix, "different install", "fix %q must carry the reason the runs failed", got.Fix)
 
 	seedFailures(t, dir, 0)
-	if rows := failureRows(dir, now); rows != nil {
-		t.Errorf("a healthy install produced %d rows", len(rows))
-	}
-}
+	assert.Nil(t, failureRows(dir, now), "a healthy install produces no row")
 
-// A failed self-update in the log used to be blamed for a streak of refused uploads.
-func TestFailureRowsIgnoreUncountedEvents(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Date(2026, 9, 17, 13, 0, 0, 0, time.UTC)
-
+	// An uncounted update must not displace the cause or date of a failing streak.
 	seedFailures(t, dir, 5,
 		event(now.Add(-30*time.Minute), formats.FailureTick,
 			"the run shipped nothing: all 3 attempted uploads failed: connection refused"),
 		event(now.Add(-1*time.Minute), formats.FailureUpdate, "self-update from v1.2.3 did not happen"))
 
-	rows := failureRows(dir, now)
+	rows = failureRows(dir, now)
 	require.Lenf(t, rows, 1, "got %d rows, want 1", len(rows))
 	assert.NotContainsf(t, rows[0].Fix, "self-update", "fix %q blamed an uncounted event for the streak", rows[0].Fix)
 	assert.Containsf(t, rows[0].Fix, "connection refused", "fix %q lost the reason the runs actually failed", rows[0].Fix)
 	assert.Containsf(t, rows[0].Detail, "30 min ago", "detail %q dated the streak from an uncounted event", rows[0].Detail)
-}
 
-// The count is still true once the bounded log has evicted every counted event; only the reason goes.
-func TestFailureRowsSurviveALogWithNoCountedEvent(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Now()
+	// Once every counted event is evicted, keep the streak without inventing a cause.
 	seedFailures(t, dir, 3, event(now, formats.FailureUpdate, "update failed"))
 
-	rows := failureRows(dir, now)
+	rows = failureRows(dir, now)
 	require.Lenf(t, rows, 1, "got %d rows, want 1", len(rows))
 	assert.NotContainsf(t, rows[0].Fix, "update failed", "fix %q fell back to an uncounted event", rows[0].Fix)
 }

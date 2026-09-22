@@ -100,34 +100,31 @@ func discoveryRows(src config.ResolvedSource, d sources.Discovery) []Row {
 	if d.Deferred {
 		return []Row{{Sev: SevDim, Label: src.ID, Detail: d.Reason}}
 	}
-	var rows []Row
-	state := string(d.Health)
+	head := Row{Sev: SevWarn, Label: src.ID, Detail: string(d.Health) + ", " + d.Reason}
 	switch d.Health {
 	case sources.Collected:
-		detail := fmt.Sprintf("%s - %d candidate(s)", state, len(d.Candidates))
+		head.Sev = SevOK
+		head.Detail = fmt.Sprintf("%s - %d candidate(s)", d.Health, len(d.Candidates))
 		if d.AgentVersion != "" {
-			detail += ", agent " + d.AgentVersion
+			head.Detail += ", agent " + d.AgentVersion
 		}
 		if d.Sniff != "" && d.Sniff != sources.SniffOK {
-			rows = append(rows, Row{Sev: SevWarn, Label: src.ID,
-				Detail: detail + ", sniff " + string(d.Sniff),
-				Fix:    "the agent's format may have changed under this build, `quesma-shipper preview` shows what would ship"})
+			head.Sev = SevWarn
+			head.Detail += ", sniff " + string(d.Sniff)
+			head.Fix = "the agent's format may have changed under this build, `quesma-shipper preview` shows what would ship"
+		}
+	case sources.AgentAbsent:
+		head.Sev = SevDim
+	case sources.RootPresentNoMatch:
+		if d.Ignored {
+			head.Sev = SevDim
 		} else {
-			rows = append(rows, Row{Sev: SevOK, Label: src.ID, Detail: detail})
+			head.Fix = "the store may have moved, files there are not collected"
 		}
-	default:
-		// Every health other than Collected reports the same line and differs only in severity and fix.
-		sev, fix := SevWarn, ""
-		switch {
-		case d.Health == sources.AgentAbsent, d.Health == sources.RootPresentNoMatch && d.Ignored:
-			sev = SevDim
-		case d.Health == sources.RootPresentNoMatch:
-			fix = "the store may have moved, files there are not collected"
-		case d.Health == sources.MatchPresentUnreadable:
-			fix = "fix permissions on the store, or the agent changed its format under this build"
-		}
-		rows = append(rows, Row{Sev: sev, Label: src.ID, Detail: state + ", " + d.Reason, Fix: fix})
+	case sources.MatchPresentUnreadable:
+		head.Fix = "fix permissions on the store, or the agent changed its format under this build"
 	}
+	rows := []Row{head}
 
 	if d.Unreadable > 0 && d.Health != sources.MatchPresentUnreadable {
 		rows = append(rows, Row{Sev: SevWarn, Label: "  unreadable",
