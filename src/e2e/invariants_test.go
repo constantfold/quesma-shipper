@@ -20,61 +20,93 @@ const (
 	cursorSource = "cursor-transcripts"
 )
 
-// Invariants, not goldens: each states a property that must hold for any input, so it keeps
-// meaning the same thing as the fixtures grow. Goldens live next door.
-
-func TestNoShippedByteCarriesASeededSecret(t *testing.T) {
-	// The one failure here that is a disaster rather than a bug, so it goes first.
+// These checks inspect one unchanged fixture; only the final subtest starts a second sync.
+func TestClaudeCollectionContract(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Second)
 	w := stageWorld(t)
 	username := realUsername(t)
 	stageClaude(t, w, username)
-	runOneShot(t)
+	firstOut := runOneShot(t)
+	after := time.Now().UTC().Add(time.Second)
+	collected := collect(t, w)
 
-	for _, o := range collect(t, w) {
-		for _, secret := range []string{seededGitHubToken, seededAWSKey, seededShapelessSecret} {
-			assert.NotContainsf(t, string(o.Payload), secret, "%s: a seeded secret survived redaction: %s", o.Key, secret)
-		}
-	}
-}
-
-// The counts are the product: a redaction rule widened to catch "tokens" would take every usage
-// figure with it while the run looked healthy.
-func TestTokenCountsSurviveRedaction(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	runOneShot(t)
-
-	var seen bool
-	for _, o := range bySourceID(mirrorObjects(collect(t, w)), claudeSource) {
-		for _, want := range []string{`"input_tokens":120`, `"output_tokens":340`, `"cache_read_input_tokens":9000`} {
-			if strings.Contains(string(o.Payload), want) {
-				seen = true
-			} else if strings.Contains(string(o.Payload), "input_tokens") {
-				t.Errorf("%s: usage numbers were altered; wanted %s", o.Key, want)
+	t.Run("NoShippedByteCarriesASeededSecret", func(t *testing.T) {
+		for _, o := range collected {
+			for _, secret := range []string{seededGitHubToken, seededAWSKey, seededShapelessSecret} {
+				assert.NotContainsf(t, string(o.Payload), secret, "%s: a seeded secret survived redaction: %s", o.Key, secret)
 			}
 		}
-	}
-	require.True(t, seen, "no usage numbers in any shipped payload; this test would pass vacuously")
-}
-
-func TestNoShippedByteCarriesTheOSUsername(t *testing.T) {
-	w := stageWorld(t)
-	username := realUsername(t)
-	stageClaude(t, w, username)
-	runOneShot(t)
-
-	objects := mirrorObjects(collect(t, w))
-	require.NotEqual(t, 0, len(objects), "nothing was collected; the rest of this test would pass vacuously")
-	for _, o := range objects {
-		// Both shapes the stores use, and from the manifest's native_path as well as the payload.
-		assert.NotContainsf(t, string(o.Payload), username, "%s: the OS username survived in the payload", o.Key)
-		assert.NotContains(t, o.Manifest.NativePath, username)
-		// Only where the fixture planted one: the sidecar's native path is the state directory,
-		// which sits under home on a real machine but not here.
-		if isTranscript(o) && !strings.Contains(o.Manifest.NativePath, "__USER__") {
-			t.Errorf("%s: native_path carries no placeholder: %s", o.Key, o.Manifest.NativePath)
+	})
+	t.Run("TokenCountsSurviveRedaction", func(t *testing.T) {
+		var seen bool
+		for _, o := range bySourceID(mirrorObjects(collected), claudeSource) {
+			if !strings.Contains(string(o.Payload), "input_tokens") {
+				continue
+			}
+			seen = true
+			for _, want := range []string{`"input_tokens":120`, `"output_tokens":340`, `"cache_read_input_tokens":9000`} {
+				assert.Contains(t, string(o.Payload), want, o.Key)
+			}
 		}
-	}
+		require.True(t, seen, "no usage numbers in any shipped payload; this test would pass vacuously")
+	})
+	t.Run("NoShippedByteCarriesTheOSUsername", func(t *testing.T) {
+		objects := mirrorObjects(collected)
+		require.NotEqual(t, 0, len(objects), "nothing was collected; the rest of this test would pass vacuously")
+		for _, o := range objects {
+			// Both shapes the stores use, and from the manifest's native_path as well as the payload.
+			assert.NotContainsf(t, string(o.Payload), username, "%s: the OS username survived in the payload", o.Key)
+			assert.NotContains(t, o.Manifest.NativePath, username)
+			// Only where the fixture planted one: the sidecar's native path is the state directory,
+			// which sits under home on a real machine but not here.
+			if isTranscript(o) && !strings.Contains(o.Manifest.NativePath, "__USER__") {
+				t.Errorf("%s: native_path carries no placeholder: %s", o.Key, o.Manifest.NativePath)
+			}
+		}
+	})
+	t.Run("EveryObjectCarriesBothHashesAndItsOwnPayload", func(t *testing.T) {
+		for _, o := range mirrorObjects(collected) {
+			assert.NotEqual(t, "", o.Manifest.SourceHash)
+			// An empty shipped_hash once shipped in every object, unnoticed because Seal took the
+			// manifest by value.
+			assert.NotEqual(t, "", o.Manifest.ShippedHash)
+			if o.Manifest.SourceHash == o.Manifest.ShippedHash && o.Manifest.Redaction != nil &&
+				o.Manifest.Redaction.Density > 0 {
+				t.Errorf("%s: redaction changed bytes but both hashes are equal", o.Key)
+			}
+			assert.Equal(t, int64(len(o.Payload)), o.Manifest.PayloadSize)
+		}
+	})
+	t.Run("SealedAtIsAReadableTimeFromThisRun", func(t *testing.T) {
+		for _, o := range collected {
+			got, err := time.Parse(time.RFC3339, o.Manifest.SealedAt)
+			if err != nil {
+				t.Errorf("%s: sealed_at %q does not parse: %v", o.Key, o.Manifest.SealedAt, err)
+				continue
+			}
+			if got.Before(before) || got.After(after) {
+				t.Errorf("%s: sealed_at %s is outside this run (%s..%s)", o.Key, got, before, after)
+			}
+		}
+	})
+	t.Run("EveryShippedLineLandsInTheRunLog", func(t *testing.T) {
+		console := shippedSources(firstOut)
+		require.NotEqual(t, 0, len(console), "the run shipped nothing; the rest of this test would pass vacuously")
+		logged := runLogLines(t, w)
+		for _, line := range strings.Split(firstOut, "\n") {
+			if strings.HasPrefix(line, "[") {
+				assert.Contains(t, logged, line, "per-file output must also reach the run log")
+			}
+		}
+	})
+	t.Run("UnchangedSync", func(t *testing.T) {
+		require.Equal(t, 1, countOf(shippedFromLog(t, w), claudeSource), firstOut)
+		require.Contains(t, firstOut, "sealed of")
+		secondOut := runOneShot(t)
+		assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource), "the new run log must not retain the first sync's upload")
+		assert.NotZero(t, summary(t, secondOut)["unchanged"], secondOut)
+		assert.NotContains(t, secondOut, "sealed of")
+	})
 }
 
 // Objects whose paths came from an agent's own store, the only place a username can appear.
@@ -107,56 +139,6 @@ func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
 		}
 		assert.Truef(t, strings.HasPrefix(o.Key, w.KeyRoot+"/"), "%s: outside this install's subtree %s", o.Key, w.KeyRoot)
 	}
-}
-
-func TestEveryObjectCarriesBothHashesAndItsOwnPayload(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	runOneShot(t)
-
-	for _, o := range mirrorObjects(collect(t, w)) {
-		assert.NotEqual(t, "", o.Manifest.SourceHash)
-		// An empty shipped_hash once shipped in every object, unnoticed because Seal took the
-		// manifest by value.
-		assert.NotEqual(t, "", o.Manifest.ShippedHash)
-		if o.Manifest.SourceHash == o.Manifest.ShippedHash && o.Manifest.Redaction != nil &&
-			o.Manifest.Redaction.Density > 0 {
-			t.Errorf("%s: redaction changed bytes but both hashes are equal", o.Key)
-		}
-		assert.Equal(t, int64(len(o.Payload)), o.Manifest.PayloadSize)
-	}
-}
-
-func TestSealedAtIsAReadableTimeFromThisRun(t *testing.T) {
-	// Not pinned, since app takes it from time.Now(), but a field nothing checks is one that can
-	// quietly become empty.
-	before := time.Now().UTC().Add(-time.Second)
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	runOneShot(t)
-	after := time.Now().UTC().Add(time.Second)
-
-	for _, o := range collect(t, w) {
-		got, err := time.Parse(time.RFC3339, o.Manifest.SealedAt)
-		if err != nil {
-			t.Errorf("%s: sealed_at %q does not parse: %v", o.Key, o.Manifest.SealedAt, err)
-			continue
-		}
-		if got.Before(before) || got.After(after) {
-			t.Errorf("%s: sealed_at %s is outside this run (%s..%s)", o.Key, got, before, after)
-		}
-	}
-}
-
-func TestASecondRunShipsNothing(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	firstOut := runOneShot(t)
-	require.Equalf(t, 1, countOf(shippedFromLog(t, w), claudeSource), "the first run did not ship the transcript; the rest would pass vacuously:\n%s", firstOut)
-
-	secondOut := runOneShot(t)
-	assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource))
-	assert.NotEqualf(t, 0, summary(t, secondOut)["unchanged"], "nothing was reported unchanged:\n%s", secondOut)
 }
 
 func TestTouchingEveryFileShipsNothing(t *testing.T) {
@@ -233,52 +215,6 @@ func TestATranscriptTheStoreDoesNotKnowShipsRawAndSaysSo(t *testing.T) {
 	require.Lenf(t, objects, 1, "want the raw transcript alone, got %d objects", len(objects))
 	assert.True(t, !objects[0].Manifest.Derived, "a derived object was produced from a store that knows nothing about it")
 	assert.NotEqual(t, 0, len(objects[0].Payload), "the raw transcript shipped empty")
-}
-
-// The shipper rewrites its own project map every run and reads it straight back, so an otherwise
-// idle run still moves bytes: counting those would put the throughput line under every summary.
-func TestAnIdleSyncPrintsNoThroughputLine(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-
-	require.Contains(t, runOneShot(t), "sealed of")
-	assert.NotContains(t, runOneShot(t), "sealed of")
-}
-
-// The console is budgeted and the log is not, so the log is only worth falling back to if
-// everything is in it.
-func TestEveryShippedLineLandsInTheRunLog(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	out := runOneShot(t)
-
-	console := shippedSources(out)
-	require.NotEqual(t, 0, len(console), "the run shipped nothing; the rest of this test would pass vacuously")
-	logged := runLogLines(t, w)
-	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "[") {
-			continue
-		}
-		if !slices.Contains(logged, line) {
-			t.Errorf("a per-file line never reached the run log:\n%s\nlog:\n%s",
-				line, strings.Join(logged, "\n"))
-		}
-	}
-}
-
-// One fixed name, truncated as it opens: the file answers "what did the last sync do" and an
-// appending log would answer a different question at unbounded length.
-func TestTheRunLogIsTruncatedEachSync(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	runOneShot(t)
-	first := runLogLines(t, w)
-	require.Equalf(t, 1, countOf(shippedSources(strings.Join(first, "\n")), claudeSource), "the first sync did not log the transcript; the rest would pass vacuously:\n%s", strings.Join(first, "\n"))
-
-	// A second sync over unchanged input says nothing, so that line can only be the first run's.
-	runOneShot(t)
-	second := runLogLines(t, w)
-	assert.Equal(t, 0, countOf(shippedSources(strings.Join(second, "\n")), claudeSource))
 }
 
 // The log belongs to whichever sync holds the lock. A manual sync during a scheduled one is

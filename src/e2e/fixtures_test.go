@@ -19,7 +19,7 @@ import (
 // generation it represents; a vendor changing shape gets a NEW builder, never an edit to this one.
 
 // Deliberately planted in the fixtures: the engine falls back to os/user when the state directory
-// is a temp path naming nobody, and this is what makes TestNoShippedByteCarriesTheOSUsername real.
+// is a temp path naming nobody, and this makes the username-redaction contract exercise a real username.
 func realUsername(t *testing.T) string {
 	t.Helper()
 	u, err := user.Current()

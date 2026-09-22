@@ -238,3 +238,12 @@ func planOf(eff *config.Effective) engine.Plan {
 		ConfigExpired:  eff.ConfigExpired,
 	}
 }
+
+func (f *fixture) openObject(t *testing.T, key string) (*fakeObject, transforms.Manifest, []byte) {
+	t.Helper()
+	obj, ok := f.port.get(key)
+	require.True(t, ok, "missing stored object %s", key)
+	manifest, payload, err := transforms.Open(obj.Body, f.unit.Identity)
+	require.NoError(t, err, "open stored object %s", key)
+	return obj, manifest, payload
+}

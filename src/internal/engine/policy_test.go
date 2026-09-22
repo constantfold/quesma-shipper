@@ -11,7 +11,6 @@ import (
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 // preview computes everything that would leave the machine and does neither upload nor commit.
@@ -79,9 +78,7 @@ func TestConfigExpiryIsStampedOnEveryManifest(t *testing.T) {
 			f.writeTranscript("p/s2.jsonl", line2)
 			require.Equal(t, 2, f.run().Shipped)
 			for _, k := range f.port.keys() {
-				obj, _ := f.port.get(k)
-				m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-				require.NoError(t, err)
+				_, m, _ := f.openObject(t, k)
 				assert.Equal(t, expired, m.ConfigExpired, k)
 			}
 		})

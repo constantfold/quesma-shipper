@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 // Appending two lines re-ships the file whole onto the SAME key, adding a version.
@@ -30,12 +29,11 @@ func TestAppendTwoLinesOverwritesTheSameKey(t *testing.T) {
 	if got := f.port.keys(); len(got) != 1 || got[0] != keysAfterFirst[0] {
 		t.Errorf("keys changed: %v, want %v", got, keysAfterFirst)
 	}
-	obj, _ := f.port.get(keysAfterFirst[0])
+	obj, _, payload := f.openObject(t, keysAfterFirst[0])
 	assert.Equalf(t, 2, obj.Versions, "expected version 2, got %d — history is noncurrent versions", obj.Versions)
 
 	// Both lines must be present: the whole file ships, not a delta.
-	_, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-	require.NoError(t, err)
+
 	assert.Truef(t, strings.Contains(string(payload), `"uuid":"u1"`) && strings.Contains(string(payload), `"uuid":"a1"`), "the re-shipped object is not the whole file: %s", payload)
 }
 

@@ -14,7 +14,6 @@ import (
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
@@ -47,9 +46,7 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	keys := f.port.keys()
 	require.Lenf(t, keys, 1, "history keys %v", keys)
 	for _, key := range keys {
-		obj, _ := f.port.get(key)
-		manifest, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		_, manifest, payload := f.openObject(t, key)
 		require.Truef(t, !manifest.Derived && manifest.Enricher == nil && manifest.Gather == "account" && manifest.PayloadMTime != nil, "not a collector: %+v", manifest)
 		lines := bytes.Split(payload, []byte("\n"))
 		require.Truef(t, len(lines) == 3 && len(lines[2]) == 0, "expected two newline-terminated records: %s", payload)
@@ -104,9 +101,7 @@ func TestSourceScrubSetting(t *testing.T) {
 			rep := runEnrich(t, f, o)
 			require.Equalf(t, 1, rep.Shipped, "shipped: %+v", rep)
 			for _, key := range f.port.keys() {
-				obj, _ := f.port.get(key)
-				m, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-				require.NoError(t, err)
+				_, m, payload := f.openObject(t, key)
 				if tc.wantRaw {
 					require.True(t, string(payload) == raw && m.Redaction == nil, "disabled scrub changed bytes or reported redaction")
 				} else if bytes.Contains(payload, []byte("dev@example.org")) || bytes.Contains(payload, []byte("fixture-secret")) || m.Redaction == nil {

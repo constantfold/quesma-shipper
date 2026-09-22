@@ -14,7 +14,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 func TestCollectsAndShips(t *testing.T) {
@@ -26,9 +25,7 @@ func TestCollectsAndShips(t *testing.T) {
 	require.Lenf(t, f.port.keys(), 1, "expected 1 object, got %v", f.port.keys())
 
 	// The object must be a real sealed container that opens with this install's identity.
-	obj, _ := f.port.get(f.port.keys()[0])
-	m, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-	require.NoErrorf(t, err, "the shipped object must open: %v", err)
+	obj, m, payload := f.openObject(t, f.port.keys()[0])
 	assert.Containsf(t, m.NativePath, "s1.jsonl", "manifest native_path: %q", m.NativePath)
 	assert.Containsf(t, string(payload), `"uuid":"u1"`, "payload lost its identifiers: %s", payload)
 	assert.Equalf(t, "trajectory", m.ArtifactClass, "artifact class %q", m.ArtifactClass)
@@ -43,9 +40,7 @@ func TestPayloadIsScrubbedAndTheGraphSurvives(t *testing.T) {
 			`"message":{"content":[{"type":"text","text":"key ghp_abcdefghijklmnopqrstuvwxyz0123456789"}]}}`+"\n")
 
 	f.run()
-	obj, _ := f.port.get(f.port.keys()[0])
-	m, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-	require.NoError(t, err)
+	_, m, payload := f.openObject(t, f.port.keys()[0])
 
 	assert.NotContains(t, string(payload), "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the secret reached the sink")
 	assert.Contains(t, string(payload), `"uuid":"u1"`, "an exempt identifier was redacted; the graph would not reassemble")
@@ -129,15 +124,14 @@ func TestObjectMetadataCarriesTheIntegrityHash(t *testing.T) {
 
 	require.NotEqual(t, 0, len(f.port.keys()), "nothing shipped")
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
+		obj, m, _ := f.openObject(t, k)
 		got := obj.Metadata["shipped-hash"]
 		if got == "" {
 			t.Errorf("%s: shipped-hash is empty in object metadata", k)
 			continue
 		}
 		// It must describe the payload actually sealed, which the manifest inside states too.
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+
 		assert.Equalf(t, m.ShippedHash, got, "%s: metadata shipped-hash %s disagrees with the sealed manifest's %s", k, got, m.ShippedHash)
 	}
 }

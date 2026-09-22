@@ -139,33 +139,40 @@ func runEnrich(t *testing.T, f *fixture, o engine.Options) engine.Report {
 	return rep
 }
 
-// THE PAIR GATE: raw and derived ship together, and the derived object names its input.
-func TestARawAndDerivedPairShipTogether(t *testing.T) {
+// A raw/derived pair preserves its provenance while excluding database rows and credentials.
+func TestEnrichedPairContract(t *testing.T) {
 	f := newFixture(t)
 	db := cursorFixture(t, f)
-
 	rep := runEnrich(t, f, enrichOpts(t, f, db, true))
-	require.Equalf(t, 2, rep.Shipped, "expected a raw + derived pair, shipped %d: %+v", rep.Shipped, rep.Sources)
+	require.Equal(t, 2, rep.Shipped, "raw and derived must both ship")
+	require.NotEmpty(t, f.port.keys(), "nothing shipped, so this test proves nothing")
 
 	var rawManifest, derivedManifest transforms.Manifest
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		obj, m, payload := f.openObject(t, k)
+		for _, secret := range []string{sessionToken, blobKey, unusedRowMarker} {
+			assert.NotContains(t, string(obj.Body), secret, "%s ciphertext", k)
+			assert.NotContains(t, string(payload), secret, "%s payload", k)
+			for name, value := range obj.Metadata {
+				assert.NotContains(t, value, secret, "%s metadata %s", k, name)
+			}
+		}
+		assert.NotEqual(t, "sqlite_rows", m.Gather, k)
+		assert.NotContains(t, m.NativePath, "state.vscdb", k)
 		if m.Derived {
 			derivedManifest = m
+			assert.Equal(t, "true", obj.Metadata["derived"], k)
+			assert.NotEmpty(t, obj.Metadata["artifact-class"], k)
 		} else {
 			rawManifest = m
+			assert.Empty(t, obj.Metadata["derived"], k)
 		}
 	}
 	require.NotEqual(t, "", rawManifest.SourceHash, "no raw object shipped")
 	require.True(t, derivedManifest.Derived, "no derived object shipped")
 
 	// derived_from carries the raw object's source hash, the only link downstream can verify.
-	if len(derivedManifest.DerivedFrom) != 1 || derivedManifest.DerivedFrom[0] != rawManifest.SourceHash {
-		t.Errorf("derived_from = %v, want the raw source_hash %s",
-			derivedManifest.DerivedFrom, rawManifest.SourceHash)
-	}
+	assert.Equal(t, []string{rawManifest.SourceHash}, derivedManifest.DerivedFrom)
 	assert.Truef(t, derivedManifest.Enricher != nil && derivedManifest.Enricher.ID == "cursor-transcript-join" && derivedManifest.Enricher.Version == 4, "enricher = %+v", derivedManifest.Enricher)
 	assert.Equalf(t, string(transforms.StatusOK), derivedManifest.EnrichStatus, "enrich_status = %q", derivedManifest.EnrichStatus)
 
@@ -175,35 +182,6 @@ func TestARawAndDerivedPairShipTogether(t *testing.T) {
 	assert.Containsf(t, p.DBPath, "state.vscdb", "db_provenance path = %q", p.DBPath)
 	// A real path on someone's machine, so the username placeholder applies here too.
 	assert.NotContainsf(t, p.DBPath, "/Users/"+os.Getenv("USER")+"/", "db_provenance leaks the username: %q", p.DBPath)
-}
-
-// THE NO-ROWS GATE. The single most important invariant.
-func TestNoSQLiteRowsReachTheSink(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-
-	runEnrich(t, f, enrichOpts(t, f, db, true))
-
-	require.NotEqual(t, 0, len(f.port.keys()), "nothing shipped, so this test proves nothing")
-	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-
-		// The ciphertext itself first: the decrypted payload alone would miss a metadata leak.
-		assert.Truef(t, !bytesContain(obj.Body, sessionToken, blobKey, unusedRowMarker), "%s: a store secret or unused row field is in the ciphertext", k)
-		for mk, mv := range obj.Metadata {
-			assert.Truef(t, !containsAny(mv, sessionToken, blobKey, unusedRowMarker), "%s: metadata %s leaks a store value", k, mk)
-		}
-
-		m, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
-		// The session token shares the database, so this pins the key deny into the shipping path.
-		assert.Truef(t, !containsAny(string(payload), sessionToken), "%s: a Cursor session token reached the sink", k)
-		assert.Truef(t, !containsAny(string(payload), blobKey), "%s: a blob encryption key reached the sink", k)
-		// The derived object is a join of named fields, never a dump of rows.
-		assert.Truef(t, !containsAny(string(payload), unusedRowMarker), "%s: an unused store row field reached the sink", k)
-		// And nothing may claim to be a database row.
-		assert.Truef(t, m.Gather != "sqlite_rows" && !strings.Contains(m.NativePath, "state.vscdb"), "%s: an object claims to carry database rows: gather=%q path=%q", k, m.Gather, m.NativePath)
-	}
 }
 
 // THE OUTPUT-HASH PAIR: unchanged output does not re-ship, changed output does.
@@ -235,9 +213,7 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 
 	found := false
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		_, m, payload := f.openObject(t, k)
 		if m.Derived && strings.Contains(string(payload), "A LATE RESULT ARRIVED") {
 			found = true
 		}
@@ -267,9 +243,7 @@ func TestDisablingTheEnricherLeavesAByteIdenticalRawRun(t *testing.T) {
 
 	// And no derived object at all when disabled.
 	for _, k := range without.port.keys() {
-		obj, _ := without.port.get(k)
-		m, _, err := transforms.Open(obj.Body, without.unit.Identity)
-		require.NoError(t, err)
+		_, m, _ := without.openObject(t, k)
 		assert.Truef(t, !m.Derived, "a disabled enricher still produced %s", k)
 	}
 }
@@ -289,9 +263,7 @@ func TestAMismatchShipsRawOnlyAndRaisesTheAlarm(t *testing.T) {
 	// Raw ships regardless, which keeps a drifted join from becoming a collection outage.
 	require.Equalf(t, 1, rep.Shipped, "shipped %d, want the raw object only: %+v", rep.Shipped, rep.Sources)
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		_, m, _ := f.openObject(t, k)
 		assert.Truef(t, !m.Derived, "a mismatched join still shipped a derived object: %s", k)
 	}
 
@@ -356,33 +328,9 @@ func TestTheDerivedPayloadIsScrubbed(t *testing.T) {
 	runEnrich(t, f, enrichOpts(t, f, db, true))
 
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		_, payload, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		_, _, payload := f.openObject(t, k)
 		assert.NotContainsf(t, string(payload), planted, "%s: a secret in a tool result shipped unredacted", k)
 	}
-}
-
-// The derived object is flagged in plaintext metadata, so an erasure sweep needs only a HEAD.
-func TestTheDerivedObjectIsFlaggedInMetadata(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-	runEnrich(t, f, enrichOpts(t, f, db, true))
-
-	var flagged bool
-	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
-		if !m.Derived {
-			assert.Equalf(t, "", obj.Metadata["derived"], "%s: a raw object is flagged derived", k)
-			continue
-		}
-		flagged = true
-		assert.Equal(t, "true", obj.Metadata["derived"])
-		assert.NotEqualf(t, "", obj.Metadata["artifact-class"], "%s: derived object carries no artifact-class metadata", k)
-	}
-	require.True(t, flagged, "no derived object shipped")
 }
 
 // The recompute window: an unchanged transcript is still read while it is recent.
@@ -422,25 +370,10 @@ func rawManifests(t *testing.T, f *fixture) []transforms.Manifest {
 	t.Helper()
 	var out []transforms.Manifest
 	for _, k := range f.port.keys() {
-		obj, _ := f.port.get(k)
-		m, _, err := transforms.Open(obj.Body, f.unit.Identity)
-		require.NoError(t, err)
+		_, m, _ := f.openObject(t, k)
 		if !m.Derived {
 			out = append(out, m)
 		}
 	}
 	return out
-}
-
-func bytesContain(b []byte, needles ...string) bool {
-	return containsAny(string(b), needles...)
-}
-
-func containsAny(s string, needles ...string) bool {
-	for _, n := range needles {
-		if strings.Contains(s, n) {
-			return true
-		}
-	}
-	return false
 }
