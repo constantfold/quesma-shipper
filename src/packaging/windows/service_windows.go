@@ -185,7 +185,7 @@ func ServiceState(ctx context.Context) Status {
 	}
 	st.Installed = true
 	st.Loaded = doc.enabled()
-	st.Program = programFromTask(doc.Actions.Exec.Command)
+	st.Program = programFromTask(doc.Command)
 	if st.Loaded {
 		st.Detail = "registered and enabled at user logon"
 	} else {

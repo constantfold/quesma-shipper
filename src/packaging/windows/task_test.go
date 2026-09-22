@@ -35,7 +35,7 @@ func TestTaskRunsAsTheInteractiveUserAndSurvivesUpdates(t *testing.T) {
 	}
 	doc, err := parseTask([]byte(raw))
 	require.NoError(t, err)
-	require.Truef(t, doc.enabled() && doc.Actions.Exec.Command == taskRunner(spec.Executable), "parsed task = %+v", doc)
+	require.Truef(t, doc.enabled() && doc.Command == taskRunner(spec.Executable), "parsed task = %+v", doc)
 }
 
 func TestParseTaskAcceptsSchtasksUTF16Output(t *testing.T) {
@@ -48,7 +48,7 @@ func TestParseTaskAcceptsSchtasksUTF16Output(t *testing.T) {
 	}
 	doc, err := parseTask(encoded)
 	require.NoError(t, err)
-	require.Truef(t, doc.enabled() && doc.Actions.Exec.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
+	require.Truef(t, doc.enabled() && doc.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
 }
 
 // Windows 11 26200 writes single-byte text that still declares UTF-16, with no BOM and a doubled
@@ -61,7 +61,7 @@ func TestParseTaskAcceptsSingleByteOutputThatDeclaresUTF16(t *testing.T) {
 		`<Actions><Exec><Command>C:\shipper.exe</Command></Exec></Actions></Task>`
 	doc, err := parseTask([]byte(raw))
 	require.NoError(t, err)
-	require.Truef(t, doc.enabled() && doc.Actions.Exec.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
+	require.Truef(t, doc.enabled() && doc.Command == `C:\shipper.exe`, "parsed task = %+v", doc)
 	assert.True(t, legacyTaskIsOurs(doc, "S-1-5-21-7-1001"), "the principal did not survive the encoding fixup, so a legacy task cannot be retired")
 }
 
@@ -91,7 +91,7 @@ func TestTaskXMLForSchtasksIsUTF16AndRoundTrips(t *testing.T) {
 	}
 	doc, err := parseTask(encoded)
 	require.NoError(t, err)
-	require.Equalf(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Actions.Exec.Command, "parsed command = %q", doc.Actions.Exec.Command)
+	require.Equalf(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Command, "parsed command = %q", doc.Command)
 }
 
 func TestTaskXMLIsWellFormed(t *testing.T) {

@@ -27,18 +27,13 @@ const taskRunnerName = "quesma-shipper-supervisor.exe"
 func taskName(userSID string) string { return legacyTaskName + " - " + userSID }
 
 func taskRunner(executable string) string {
-	if slash := strings.LastIndexAny(executable, `\/`); slash >= 0 {
-		return executable[:slash+1] + taskRunnerName
-	}
-	return taskRunnerName
+	dir := executable[:strings.LastIndexAny(executable, `\/`)+1]
+	return dir + taskRunnerName
 }
 
 func programFromTask(command string) string {
 	slash := strings.LastIndexAny(command, `\/`)
-	base := command
-	if slash >= 0 {
-		base = command[slash+1:]
-	}
+	base := command[slash+1:]
 	if strings.EqualFold(base, taskRunnerName) {
 		return command[:slash+1] + "quesma-shipper.exe"
 	}
@@ -99,41 +94,28 @@ func renderTask(spec Spec, userSID, userName string) string {
 }
 
 type taskDocument struct {
-	Settings struct {
-		Enabled *bool `xml:"Enabled"`
-	} `xml:"Settings"`
-	Actions struct {
-		Exec struct {
-			Command string `xml:"Command"`
-		} `xml:"Exec"`
-	} `xml:"Actions"`
-	Principals struct {
-		Principal struct {
-			UserID string `xml:"UserId"`
-		} `xml:"Principal"`
-	} `xml:"Principals"`
+	Enabled *bool  `xml:"Settings>Enabled"`
+	Command string `xml:"Actions>Exec>Command"`
+	UserID  string `xml:"Principals>Principal>UserId"`
 }
 
 // enabled treats an absent Settings/Enabled as enabled. Task Scheduler stores no element for a
 // setting left at its default, so reading a missing one as false calls a healthy task disabled.
 func (d taskDocument) enabled() bool {
-	return d.Settings.Enabled == nil || *d.Settings.Enabled
+	return d.Enabled == nil || *d.Enabled
 }
 
 // legacyTaskIsOurs reports whether the pre-rename task belongs to this user: another user's task is
 // neither ours to retire nor, without their permissions, deletable.
 func legacyTaskIsOurs(doc taskDocument, userSID string) bool {
-	owner := doc.Principals.Principal.UserID
-	return owner != "" && strings.EqualFold(owner, userSID)
+	return doc.UserID != "" && strings.EqualFold(doc.UserID, userSID)
 }
 
 func parseTask(raw []byte) (taskDocument, error) {
 	raw = taskXMLUTF8(raw)
 	var doc taskDocument
-	if err := xml.Unmarshal(raw, &doc); err != nil {
-		return doc, err
-	}
-	return doc, nil
+	err := xml.Unmarshal(raw, &doc)
+	return doc, err
 }
 
 // taskXMLForSchtasks emits the Unicode file format expected by schtasks /Create /XML.
