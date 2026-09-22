@@ -63,12 +63,9 @@ func portAgainst(t *testing.T, fn http.HandlerFunc) *vendPort {
 	client, err := controlplane.New(controlplane.Options{Endpoint: srv.URL, InstallID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
 		Organization: "acme", DeviceKey: key})
 	require.NoError(t, err)
-	target, err := upload.NewUploadTarget(upload.TargetSpec{
-		Origin: srv.URL, Addressing: upload.PathStyle, PathPrefix: "/b", AllowLoopbackHTTP: true,
-	})
+	target, err := upload.NewUploadTarget(upload.TargetSpec{Origin: srv.URL, Addressing: upload.PathStyle, PathPrefix: "/b", AllowLoopbackHTTP: true})
 	require.NoError(t, err)
-	return &vendPort{client: client, uploader: upload.New(), targets: upload.UploadTargetList{target},
-		writerID: "writer", now: time.Now}
+	return &vendPort{client: client, uploader: upload.New(), targets: upload.UploadTargetList{target}, writerID: "writer", now: time.Now}
 }
 
 // An already-present object gets no PUT, while the absent one in the same batch is still sent.
@@ -97,13 +94,8 @@ func TestAnAlreadyPresentAnswerSkipsThePutAndTheRestStillShips(t *testing.T) {
 
 // A metadata name outside the closed set fails the batch rather than disagree with the sealed manifest.
 func TestUploadMetadataRefusesAnythingOutsideTheClosedSet(t *testing.T) {
-	md, _, err := uploadMetadata(map[string]string{
-		"manifest-version": "1",
-		"source-id":        "claude-code-transcripts",
-		"shipped-hash":     "abc",
-		"artifact-class":   "trajectory",
-		"derived":          "true",
-	})
+	md, _, err := uploadMetadata(map[string]string{"manifest-version": "1", "source-id": "claude-code-transcripts",
+		"shipped-hash": "abc", "artifact-class": "trajectory", "derived": "true"})
 	require.NoErrorf(t, err, "the manifest's own metadata was refused: %v", err)
 	assert.Truef(t, md.ManifestVersion == "1" && md.SourceID == "claude-code-transcripts" && md.Derived == "true", "metadata did not map across: %+v", md)
 

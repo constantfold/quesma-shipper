@@ -106,14 +106,11 @@ func TestFailuresWithoutResolvedConfig(t *testing.T) {
 		count  int
 	}{
 		{"panic", func() { RecordPanic("enroll", "runtime error: index out of range [3] with length 0") },
-			formats.FailureEvent{Kind: formats.FailurePanic,
-				Message: "panic in enroll: runtime error: index out of range [3] with length 0"}, 0},
+			formats.FailureEvent{Kind: formats.FailurePanic, Message: "panic in enroll: runtime error: index out of range [3] with length 0"}, 0},
 		{"startup", func() { RecordStartupFailure("sync", "cccccccccccccccc", errors.New("unparseable")) },
-			formats.FailureEvent{Kind: formats.FailureInit, RunID: "cccccccccccccccc",
-				Message: "sync could not start: unparseable"}, 1},
+			formats.FailureEvent{Kind: formats.FailureInit, RunID: "cccccccccccccccc", Message: "sync could not start: unparseable"}, 1},
 		{"update", func() { RecordUpdateFailure("self-update from 1.2.3 did not happen: tuf: no such target") },
-			formats.FailureEvent{Kind: formats.FailureUpdate,
-				Message: "self-update from 1.2.3 did not happen: tuf: no such target"}, 0},
+			formats.FailureEvent{Kind: formats.FailureUpdate, Message: "self-update from 1.2.3 did not happen: tuf: no such target"}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -136,7 +133,7 @@ func TestFailuresWithoutResolvedConfig(t *testing.T) {
 // Re-enrollment clears the prior failure streak while retaining the discard warning.
 func TestARecoveringRunClearsTheStreakItInherited(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		r := &Runtime{eff: &config.Effective{StateDir: dir}, runID: "aaaaaaaaaaaaaaaa"}
 		r.JudgeTick(errors.New("state: document belongs to another install"), formats.Report{}, false, platform.Delta{})
 	}
@@ -210,7 +207,7 @@ func watchFires(r *Runtime, n, want int) {
 		r.WatchStalledTick(ctx, n, time.Millisecond, fired)
 		close(done)
 	}()
-	for i := 0; i < want; i++ {
+	for range want {
 		<-fired
 	}
 	cancel()

@@ -47,14 +47,8 @@ func TestToUploadTicketFeedsValidation(t *testing.T) {
 		Metadata: map[string]string{"manifest-version": "3", "artifact-class": "trajectory", "kind": "mirror"}}
 	issued := controlplane.Ticket{TicketID: "ticket-1", ObjectID: prepared.ObjectID, Method: "PUT", ExpiresAt: time.Unix(1750000000, 0).UTC(),
 		URL: "https://acme.s3.example.com/organization%3Dacme/source%3Dclaude-code/object.age?X-Amz-Signature=deadbeef",
-		RequiredHeaders: controlplane.TicketHeaders{
-			"x-amz-meta-source-hash":      prepared.SourceHash,
-			"x-amz-meta-ticket-id":        "ticket-1",
-			"x-amz-meta-manifest-version": "3",
-			"x-amz-meta-artifact-class":   "trajectory",
-			"x-amz-meta-kind":             "mirror",
-			"x-amz-tagging":               "class=trajectory",
-		},
+		RequiredHeaders: controlplane.TicketHeaders{"x-amz-meta-source-hash": prepared.SourceHash, "x-amz-meta-ticket-id": "ticket-1",
+			"x-amz-meta-manifest-version": "3", "x-amz-meta-artifact-class": "trajectory", "x-amz-meta-kind": "mirror", "x-amz-tagging": "class=trajectory"},
 		ContentLength: int64(len(prepared.Body)), ContentLengthSigned: true,
 	}
 

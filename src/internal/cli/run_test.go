@@ -93,13 +93,6 @@ func TestUpdateRestartWarnings(t *testing.T) {
 	}
 }
 
-// Loaded is a detection result and can be wrong, so an installed service is always restarted.
-func TestRestartWantedIgnoresWhetherTheServiceReportsItselfLoaded(t *testing.T) {
-	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: true}))
-	assert.True(t, restartWanted(packaging.ServiceStatus{Installed: true, Loaded: false}))
-	assert.False(t, restartWanted(packaging.ServiceStatus{}), "no service entry, nothing to restart")
-}
-
 // Dev builds never self-update, the env switch wins, and one hop per boot; loud skips say why.
 func TestTheBootGateKeepsItsPromises(t *testing.T) {
 	release := app.Build{Version: "0.0.1-123.abcdef123456", Release: true}

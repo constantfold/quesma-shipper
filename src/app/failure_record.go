@@ -51,9 +51,6 @@ func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*form
 
 // RecordCrash skips the latest crashed run when it is rediscovered on restart before delivery.
 func RecordCrash(crash *formats.LastCrash) {
-	if crash == nil {
-		return
-	}
 	appendWithoutRuntime("crash", func(dir string, rec *formats.FailureRecord) bool {
 		for i := len(rec.Recent) - 1; i >= 0; i-- {
 			if rec.Recent[i].Kind == formats.FailureCrash {
@@ -77,9 +74,6 @@ func RecordPanic(verb string, cause any) {
 
 // RecordStartupFailure covers collection that failed before a Runtime existed.
 func RecordStartupFailure(verb, runID string, cause error) {
-	if cause == nil {
-		return
-	}
 	recordWithoutRuntime(runID, formats.FailureInit, fmt.Sprintf("%s could not start: %v", verb, cause))
 }
 

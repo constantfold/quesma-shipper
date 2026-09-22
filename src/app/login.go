@@ -15,10 +15,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
-type LoginResult struct {
-	Organization string
-	Machine      string
-}
+type LoginResult struct{ Organization, Machine string }
 
 var ErrAlreadyLoggedIn = errors.New("already logged in")
 
@@ -87,11 +84,8 @@ func LocalDev() (config.Paths, *identity.Unit, error) {
 
 func loadOrMintIdentity(stateDir string) (*identity.Unit, error) {
 	unit, err := identity.Load(stateDir)
-	if err == nil {
-		return unit, nil
+	if errors.Is(err, os.ErrNotExist) {
+		return identity.Mint(stateDir)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	return identity.Mint(stateDir)
+	return unit, err
 }

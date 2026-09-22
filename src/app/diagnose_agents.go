@@ -3,6 +3,7 @@ package app
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -131,8 +132,7 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 	}
 
 	head := Row{Sev: SevOK, Label: name, Name: true, Tag: sniffed}
-	switch {
-	case collecting:
+	if collecting {
 		head.Detail = CountNoun(files, "file")
 		if verbose && len(parts) > 1 {
 			head.Detail += " (" + strings.Join(parts, ", ") + ")"
@@ -140,21 +140,15 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 		if h := claudeHeadline(probes, verbose); h != "" {
 			head.Detail = h
 		}
-	default:
-		head.Sev = SevWarn
-		head.Detail = "present but nothing is collected"
-		head.Brief = name + ": nothing collected"
+	} else {
+		head.Sev, head.Detail, head.Brief = SevWarn, "present but nothing is collected", name+": nothing collected"
 	}
 
 	if collecting && (up.recorded || up.pending > 0) && (verbose || up.failed > 0) {
 		issues = append([]Row{up.row(name, now)}, issues...)
 	}
-	for _, issue := range issues {
-		if issue.Sev == SevWarn {
-			head.Sev = SevWarn
-			head.Rollup = true
-			break
-		}
+	if slices.ContainsFunc(issues, func(r Row) bool { return r.Sev == SevWarn }) {
+		head.Sev, head.Rollup = SevWarn, true
 	}
 	rows = append(append([]Row{head}, issues...), deferred...)
 	return append(rows, disabled...), collecting, files

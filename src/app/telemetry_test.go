@@ -52,8 +52,7 @@ func telemetryRuntime(t *testing.T, record formats.FailureRecord) *Runtime {
 	body, err := json.Marshal(record)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, lastFailureFile), body, 0o600))
-	return &Runtime{eff: &config.Effective{StateDir: dir, TelemetryEndpoint: "/v1/telemetry"}, hostname: "ci-runner-3",
-		build: Build{Version: "0.0.3"}}
+	return &Runtime{eff: &config.Effective{StateDir: dir, TelemetryEndpoint: "/v1/telemetry"}, hostname: "ci-runner-3", build: Build{Version: "0.0.3"}}
 }
 
 // The collector reads these field names from the signed body verbatim.
@@ -69,12 +68,8 @@ func TestTheEventCarriesTheFieldsTheCollectorReads(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(body, &got))
 
-	for field, want := range map[string]any{
-		"event":                InstallHealthEvent,
-		"hostname":             "ci-runner-3",
-		"client_version":       "0.0.3",
-		"consecutive_failures": float64(2),
-	} {
+	for field, want := range map[string]any{"event": InstallHealthEvent, "hostname": "ci-runner-3", "client_version": "0.0.3",
+		"consecutive_failures": float64(2)} {
 		assert.Equal(t, want, got[field], field)
 	}
 	assert.Equal(t, []any{map[string]any{

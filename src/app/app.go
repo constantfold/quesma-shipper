@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"syscall"
+	"time"
 
 	"filippo.io/age"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
+	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
 // Runtime is everything a flush needs, assembled once.
@@ -106,9 +108,10 @@ func NewFrom(build Build, eff *config.Effective, paths config.Paths, remote cont
 	client, upErr := newControlPlaneClient(paths.StateDir)
 	if upErr == nil {
 		telemetry = client
-		var port *vendPort
-		if port, upErr = newUploadPort(client, eff); upErr == nil {
-			up = port
+		// No allowlist is needed: without upload_targets, tickets decide, https only and exact key.
+		var targets upload.UploadTargetList
+		if targets, upErr = uploadTargets(eff); upErr == nil {
+			up = &vendPort{client: client, uploader: upload.New(), targets: targets, writerID: controlplane.NewWriterID(), now: time.Now}
 		}
 	}
 
@@ -117,9 +120,8 @@ func NewFrom(build Build, eff *config.Effective, paths config.Paths, remote cont
 		return nil, err
 	}
 	hostname, _ := os.Hostname()
-	return &Runtime{eff: eff, unit: unit, upload: up, uploadErr: upErr, telemetry: telemetry,
-		hostname: hostname, log: log, build: build,
-		remote: remote, env: env, recipients: recipients}, nil
+	return &Runtime{eff: eff, unit: unit, upload: up, uploadErr: upErr, telemetry: telemetry, hostname: hostname,
+		log: log, build: build, remote: remote, env: env, recipients: recipients}, nil
 }
 
 // recipientsFor refuses rather than seal to fewer readers than the operator configured.

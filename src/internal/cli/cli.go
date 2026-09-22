@@ -84,8 +84,7 @@ func Root(b app.Build, out, errOut io.Writer) *cobra.Command {
 }
 
 func ErrorLine(err error, w io.Writer) string {
-	p := paletteFor(w)
-	return app.Name + ": " + p.names(err.Error(), "")
+	return app.Name + ": " + paletteFor(w).names(err.Error(), "")
 }
 
 func HelpPointer(w io.Writer) string { return more(paletteFor(w), app.Name+" --help") }

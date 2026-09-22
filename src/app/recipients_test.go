@@ -30,9 +30,7 @@ func TestRecipientsFor(t *testing.T) {
 		{"invalid additional key", true, []string{"not-an-age-key"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := recipientsFor(&config.Effective{
-				IncludeInstallRecipient: tc.install, AdditionalRecipients: tc.additional,
-			}, unit)
+			got, err := recipientsFor(&config.Effective{IncludeInstallRecipient: tc.install, AdditionalRecipients: tc.additional}, unit)
 			if tc.want == nil {
 				require.Error(t, err)
 				return

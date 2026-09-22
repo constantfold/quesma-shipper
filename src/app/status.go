@@ -44,9 +44,8 @@ func CurrentStatus(build Build) (Status, error) {
 	}
 	st.StateDir = paths.StateDir
 	st.Destination = DescribeDestination(eff)
-	if _, err := identity.Load(paths.StateDir); err == nil {
-		st.LoggedIn = true
-	}
+	_, idErr := identity.Load(paths.StateDir)
+	st.LoggedIn = idErr == nil
 	if enr, err := controlplane.LoadEnrollment(paths.StateDir); err == nil {
 		st.Organization, st.Endpoint = enr.Organization, enr.Endpoint
 	}

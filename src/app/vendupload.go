@@ -47,15 +47,6 @@ func newControlPlaneClient(stateDir string) (*controlplane.Client, error) {
 	return enrollment.Client()
 }
 
-// newUploadPort needs no allowlist: without upload_targets, tickets decide, https only and exact key.
-func newUploadPort(client *controlplane.Client, eff *config.Effective) (*vendPort, error) {
-	targets, err := uploadTargets(eff)
-	if err != nil {
-		return nil, err
-	}
-	return &vendPort{client: client, uploader: upload.New(), targets: targets, writerID: controlplane.NewWriterID(), now: time.Now}, nil
-}
-
 // AuthorizeAndUpload authorizes the batch whole or not at all; past that, objects succeed or fail alone.
 func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
 	// Failures before the tickets carry no per-object information: one verdict for the group.
@@ -110,10 +101,7 @@ func (p *vendPort) send(ctx context.Context, obj engine.PreparedObject, issued c
 	if err := upload.ValidateTicket(p.targets, upload.PreparedUpload(obj), ticket); err != nil {
 		return err
 	}
-	if err := p.uploader.Upload(ctx, ticket, obj.Body); err != nil {
-		return p.classifyPut(err, ticket)
-	}
-	return nil
+	return p.classifyPut(p.uploader.Upload(ctx, ticket, obj.Body), ticket)
 }
 
 func (p *vendPort) request(batch []engine.PreparedObject) (controlplane.AuthorizeRequest, error) {

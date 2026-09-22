@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -21,18 +22,15 @@ const (
 
 // progressStream shows the first per-file lines, then a bar or periodic counter; all go to the run log.
 type progressStream struct {
-	out     io.Writer // the console, always present: warnings go here even under --quiet
-	log     io.Writer // nil until the log opens, and again if writing to it fails
-	logFile *os.File
-	logPath string
-	quiet   bool
-	tty     bool
+	out        io.Writer // the console, always present: warnings go here even under --quiet
+	log        io.Writer // nil until the log opens, and again if writing to it fails
+	logFile    *os.File
+	logPath    string
+	quiet, tty bool
 
-	lines   int  // per-file lines already shown on the console
-	noticed bool // whether the switch-over notice has been printed
-	decided int
-	sent    int
-	errors  int
+	lines                 int  // per-file lines already shown on the console
+	noticed               bool // whether the switch-over notice has been printed
+	decided, sent, errors int
 
 	frame string
 }
@@ -101,11 +99,7 @@ func (s *progressStream) emit(sourceID string, done, total int, f formats.FileOu
 func (s *progressStream) Stderr() io.Writer { return barWriter{s} }
 
 func (s *progressStream) notice() string {
-	where := "the summary below"
-	if s.logPath != "" {
-		where = s.logPath
-	}
-	return fmt.Sprintf("  … %d lines shown; the rest of this run is in %s", consoleLineBudget, where)
+	return fmt.Sprintf("  … %d lines shown; the rest of this run is in %s", consoleLineBudget, cmp.Or(s.logPath, "the summary below"))
 }
 
 func (s *progressStream) draw(frame string) {
