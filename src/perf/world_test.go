@@ -83,6 +83,14 @@ func stageWorld(t *testing.T) *world {
 	return stageWorldIn(t, perfOrg, storeEndpoint, perfBucket)
 }
 
+// A world whose child sees smokeGOMAXPROCS cores, the machine every smoke scenario runs on.
+func stageSmokeWorld(t *testing.T) *world {
+	t.Helper()
+	w := stageWorld(t)
+	w.gomaxprocs = smokeGOMAXPROCS
+	return w
+}
+
 func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
 	t.Helper()
 	root := t.TempDir()
@@ -117,7 +125,6 @@ func (w *world) reset(t *testing.T) {
 	seedIdentity(t, w)
 	writeClientConfig(t, w)
 	seedEnrollment(t, w)
-	allowUploadTarget(t, w)
 }
 
 func seedIdentity(t *testing.T, w *world) {
@@ -130,25 +137,19 @@ func seedIdentity(t *testing.T, w *world) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	unit := map[string]any{
+	writeJSON(t, filepath.Join(dir, "identity.json"), map[string]any{
 		"identity_schema": 1,
 		"install_id":      w.installID,
 		"age_identity":    testAgeIdentity,
 		"age_recipient":   id.Recipient().String(),
 		"name_key":        testNameKey,
 		"created_at":      fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.Marshal(unit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 0600: Load refuses a unit any wider.
-	if err := os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	})
 }
 
-// Carries no send block on purpose: the destination arrives in the signed document.
+// Carries no send block on purpose: the destination arrives in the signed document. The upload
+// target is the machine owner's half of the presigned path: this list alone decides whether a
+// ticket's origin may be spoken to, and no served layer can add to it.
 func writeClientConfig(t *testing.T, w *world) {
 	t.Helper()
 	dir := filepath.Join(w.Config, "trajectory-shipper")
@@ -157,7 +158,13 @@ func writeClientConfig(t *testing.T, w *world) {
 	}
 	body := "config_version: 1\n" +
 		// The 64-file default would truncate the corpus; this must stay above corpusFiles.
-		"max_files_per_run: 100000\n"
+		"max_files_per_run: 100000\n" +
+		// The proxy serves plain HTTP, and the client refuses a cleartext origin nobody opted into.
+		"upload_targets:\n" +
+		"  - origin: " + w.origin + "\n" +
+		"    addressing: path-style\n" +
+		"    path_prefix: /" + w.bucket + "\n" +
+		"    allow_loopback_http: true\n"
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -170,41 +177,25 @@ func seedEnrollment(t *testing.T, w *world) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer.register(w.installID, w.org, pub, w.origin, w.bucket)
-	record := map[string]any{
+	peer.register(perfInstall{id: w.installID, org: w.org, key: pub, origin: w.origin, bucket: w.bucket})
+	writeJSON(t, filepath.Join(w.State, "trajectory-shipper", "enrollment.json"), map[string]any{
 		"enrollment_schema": 2,
 		"install_id":        w.installID,
 		"organization":      w.org,
-		"endpoint":          peer.url,
+		"endpoint":          peer.server.URL,
 		"device_key":        base64.StdEncoding.EncodeToString(private),
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(w.State, "trajectory-shipper", "enrollment.json")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	})
 }
 
-// The machine owner's half of the presigned path: this list alone decides whether a ticket's origin
-// may be spoken to, and no served layer can add to it.
-func allowUploadTarget(t *testing.T, w *world) {
+// 0600: the shipper refuses identity and enrollment files any wider.
+func writeJSON(t *testing.T, path string, v any) {
 	t.Helper()
-	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
-	body, err := os.ReadFile(path)
+	raw, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("no user config to pin an upload target in: %v", err)
+		t.Fatal(err)
 	}
-	// The proxy serves plain HTTP, and the client refuses a cleartext origin nobody opted into.
-	block := "upload_targets:\n" +
-		"  - origin: " + w.origin + "\n" +
-		"    addressing: path-style\n" +
-		"    path_prefix: /" + w.bucket + "\n" +
-		"    allow_loopback_http: true\n"
-	if err := os.WriteFile(path, append(body, block...), 0o600); err != nil {
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -225,18 +216,14 @@ func buildBinaries() {
 		return
 	}
 	buildDir = dir
-	build := func(out, moduleDir, pkg string) error {
-		cmd := exec.Command("go", "build", "-o", out, pkg)
-		cmd.Dir = moduleDir
-		// The REAL home: see realHome.
-		cmd.Env = append(os.Environ(), "HOME="+realHome)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("build %s: %v: %s", pkg, err, b)
-		}
-		return nil
-	}
 	shipperPath = filepath.Join(dir, "quesma-shipper")
-	buildErr = build(shipperPath, "..", "./cmd/quesma-shipper")
+	cmd := exec.Command("go", "build", "-o", shipperPath, "./cmd/quesma-shipper")
+	cmd.Dir = ".."
+	// The REAL home: see realHome.
+	cmd.Env = append(os.Environ(), "HOME="+realHome)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		buildErr = fmt.Errorf("build ./cmd/quesma-shipper: %v: %s", err, b)
+	}
 }
 
 // The client under measurement, built once for the whole tier.
@@ -250,39 +237,26 @@ func shipperBinary(t *testing.T) string {
 }
 
 // Package level, so there is no t.TempDir to do it: every run would otherwise leak two binaries.
-func removeBinaries() {
-	if buildDir != "" {
-		_ = os.RemoveAll(buildDir)
-	}
-}
+func removeBinaries() { _ = os.RemoveAll(buildDir) }
 
 // --- the child's world -------------------------------------------------------
 
 // Everything this world tells the child about itself, and nothing inherited; separate from childEnv
 // because a launcher such as sudo resets what it was called with. It names no store and no credential.
 func (w *world) childVars() []string {
-	vars := []string{
+	// extraEnv last, so a scenario's own limit wins over anything above it.
+	return append([]string{
 		"HOME=" + w.Home,
 		"XDG_CONFIG_HOME=" + w.Config,
 		"XDG_STATE_HOME=" + w.State,
 		fmt.Sprintf("GOMAXPROCS=%d", w.gomaxprocs),
-	}
-	// Last, so a scenario's own limit wins over anything above it.
-	return append(vars, w.extraEnv...)
+	}, w.extraEnv...)
 }
 
 // This process's environment minus anything that would move the measurement, then this world's own
 // variables on top: an exported GOMEMLIMIT or SHIPPER_* would retune the run with nothing to show it.
 func (w *world) childEnv() []string {
-	inherited := os.Environ()
-	env := make([]string, 0, len(inherited)+len(w.childVars()))
-	for _, kv := range inherited {
-		if measuredVar(kv) {
-			continue
-		}
-		env = append(env, kv)
-	}
-	return append(env, w.childVars()...)
+	return append(slices.DeleteFunc(os.Environ(), measuredVar), w.childVars()...)
 }
 
 // Variables that must reach the child from this world or not at all; childVars names the wanted ones.
@@ -305,13 +279,6 @@ func (w *world) mustSync(t *testing.T) childObservation {
 		t.Fatalf("quesma-shipper run --once: %v\n%s", obs.Err, obs.Output)
 	}
 	return obs
-}
-
-// One sync as a user would run it: what it printed and how long it took.
-func (w *world) runSync(t *testing.T) (string, time.Duration) {
-	t.Helper()
-	obs := w.mustSync(t)
-	return obs.Output, obs.Elapsed
 }
 
 // The run's own counters, read from its summary row; counting objects in the store cannot answer

@@ -41,16 +41,6 @@ var (
 	corpusErr    error
 )
 
-func buildCorpusMaster() {
-	dir, err := os.MkdirTemp("", "shipper-perf-corpus")
-	if err != nil {
-		corpusErr = err
-		return
-	}
-	corpusMaster = dir
-	corpusBytes, corpusErr = writeCorpus(dir, corpusFiles)
-}
-
 // One seeded source across the whole run: file i is the same file wherever it is written.
 func writeCorpus(root string, n int) (int, error) {
 	rng := rand.New(rand.NewSource(corpusSeed))
@@ -89,16 +79,16 @@ func stageCorpusFiles(t *testing.T, w *world, n int) int {
 	return bytes
 }
 
-func removeCorpusMaster() {
-	if corpusMaster != "" {
-		_ = os.RemoveAll(corpusMaster)
-	}
-}
+func removeCorpusMaster() { _ = os.RemoveAll(corpusMaster) }
 
 // stageCorpus hardlinks the whole backlog into w and returns how many files it staged.
 func stageCorpus(t *testing.T, w *world) int {
 	t.Helper()
-	corpusOnce.Do(buildCorpusMaster)
+	corpusOnce.Do(func() {
+		if corpusMaster, corpusErr = os.MkdirTemp("", "shipper-perf-corpus"); corpusErr == nil {
+			corpusBytes, corpusErr = writeCorpus(corpusMaster, corpusFiles)
+		}
+	})
 	if corpusErr != nil {
 		t.Fatalf("build the corpus master: %v", corpusErr)
 	}

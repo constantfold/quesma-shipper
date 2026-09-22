@@ -86,7 +86,7 @@ func smokeBigFileAcceptance(t *testing.T) {
 		w := stageCappedWorld(t, acceptanceBudget)
 		// The compiled 256 MiB source ceiling would skip this fixture rather than ship it.
 		raiseMaxFileBytes(t, w, acceptanceFileBytes*2)
-		staged := stageIncompressibleFile(t, w, 0, acceptanceFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, acceptanceFileBytes, 0)
 		runUnderBudget(t, w, acceptanceScenario, resourceBudget{memory: acceptanceBudget}, 1, staged)
 	})
 }
@@ -97,7 +97,7 @@ func smokeBigFile(t *testing.T) {
 	t.Run("S3-big-file", func(t *testing.T) {
 		requireMemoryCap(t)
 		w := stageCappedWorld(t, bigFileBudget)
-		staged := stageIncompressibleFile(t, w, 0, bigFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, bigFileBytes, 0)
 		runUnderBudget(t, w, bigFileScenario, resourceBudget{memory: bigFileBudget}, 1, staged)
 	})
 }
@@ -109,8 +109,7 @@ func smokeBigFile(t *testing.T) {
 // deliberately: a hard cap would turn a broken gate into a kill and a soft limit would hide one.
 func smokeInFlightCap(t *testing.T) {
 	t.Run("S4-in-flight-cap", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
+		w := stageSmokeWorld(t)
 		w.extraEnv = append(w.extraEnv,
 			fmt.Sprintf("%s=%d", envMaxInFlightBytes, inFlightCap))
 
@@ -118,7 +117,8 @@ func smokeInFlightCap(t *testing.T) {
 
 		staged := 0
 		for i := range inFlightFiles {
-			staged += stageIncompressibleFile(t, w, i, inFlightFileBytes)
+			n, _ := stageIncompressibleFile(t, w, i, inFlightFileBytes, 0)
+			staged += n
 		}
 		t.Logf("%s: %d files of %d bytes under a %d byte in-flight cap, so no two can be "+
 			"admitted together", inFlightScenario, inFlightFiles, inFlightFileBytes, inFlightCap)
@@ -153,9 +153,8 @@ func assertInFlightCapIsWired(t *testing.T, w *world) {
 // budget on either single-line scenario, deliberately, because none has ever been calibrated.
 func smokeSingleLine(t *testing.T) {
 	t.Run("S6-single-line-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged := stageSingleLineFile(t, w, singleLineFileBytes)
+		w := stageSmokeWorld(t)
+		staged, _ := stageSingleLineFile(t, w, "-Users-perf-work-oneline", singleLineFileBytes, "")
 		runUnderBudget(t, w, singleLineScenario, resourceBudget{memory: singleLineBudget}, 1, staged)
 	})
 }
@@ -164,9 +163,9 @@ func smokeSingleLine(t *testing.T) {
 // at once: the corner singleLineDirtyBudget is deliberately higher for.
 func smokeSingleLineSecrets(t *testing.T) {
 	t.Run("S7-single-line-secret-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged, secrets := stageSingleLineSecretFile(t, w, singleLineFileBytes)
+		w := stageSmokeWorld(t)
+		staged, secrets := stageSingleLineFile(t, w, "-Users-perf-work-oneline-secrets",
+			singleLineFileBytes, corpusGitHubToken)
 		runUnderBudget(t, w, singleLineSecretScenario,
 			resourceBudget{memory: singleLineDirtyBudget}, 1, staged)
 
@@ -203,27 +202,9 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 		float64(c.up+c.down)/float64(logical), c.requests, objects)
 
 	// Recorded before anything is judged: a breach with no row is one nobody can calibrate against.
-	recordResult(t, perfResult{
-		Scenario:        scenario,
-		CorpusFiles:     files,
-		CorpusBytes:     logical,
-		ChildGOMAXPROCS: w.gomaxprocs,
-		// These are not timed against it, but a row that hid the shaping would be compared with
-		// one measured on an unshaped wire.
-		ShapedRTTMillis:   smokeRTT.Milliseconds(),
-		RepSeconds:        []float64{obs.Elapsed.Seconds()},
-		BestSeconds:       obs.Elapsed.Seconds(),
-		ProxiedBytesUp:    c.up,
-		ProxiedBytesDown:  c.down,
-		S3Requests:        c.requests,
-		Objects:           objects,
-		PeakRSSBytes:      obs.PeakRSS,
-		PeakRSSSource:     obs.PeakRSSSource,
-		MemoryBudgetBytes: budget.memory,
-		CPUSeconds:        obs.CPUSeconds,
-		CPUBudgetSeconds:  budget.cpu,
-		ExitStatus:        obs.exitStatus(),
-	})
+	row := singleRun(obs, c, objects).row(w, scenario, files, logical, budget.memory)
+	row.CPUBudgetSeconds = budget.cpu
+	recordResult(t, row)
 
 	// The timeout first: both arrive as a SIGKILL and only one of them is about memory.
 	if obs.TimedOut {
@@ -269,8 +250,7 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 // environment across, so a scenario must not change the machine after this returns.
 func stageCappedWorld(t *testing.T, budget int64) *world {
 	t.Helper()
-	w := stageWorld(t)
-	w.gomaxprocs = smokeGOMAXPROCS
+	w := stageSmokeWorld(t)
 	hard := budget * memoryCapHeadroom
 	w.extraEnv = append(w.extraEnv,
 		fmt.Sprintf("GOMEMLIMIT=%d", hard*memoryLimitNumerator/memoryLimitDenominator))
@@ -309,9 +289,6 @@ const memoryHogOvershoot = 4
 // Touching 512 MiB takes well under a second, so a probe still going has found something to say.
 const memoryCapProbeTimeout = 2 * time.Minute
 
-// Separates "this developer's machine cannot cap memory" from "the machine this tier targets cannot".
-const ciEnv = "GITHUB_ACTIONS"
-
 var (
 	capOnce sync.Once
 	capErr  error
@@ -329,7 +306,8 @@ func requireMemoryCap(t *testing.T) {
 	if capErr == nil {
 		return
 	}
-	if os.Getenv(ciEnv) == "true" {
+	// Separates "this developer's machine cannot cap memory" from "the machine this tier targets cannot".
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Fatalf("no enforceable memory cap on this CI runner, where it is a precondition "+
 			"rather than an option: %v", capErr)
 	}
@@ -372,13 +350,10 @@ func probeMemoryCap() error {
 		return fmt.Errorf("a capped child ran as uid %s, not %s: it would leave a world this "+
 			"test cannot clean up", got, want)
 	}
-	return probeMemoryCapKills()
-}
 
-// The half of the probe nothing else can stand in for: a ceiling the kernel accepts but does not
-// enforce produces a scope that starts, runs and caps nothing, so something deliberately over-budget
-// has to die inside one. The hog is this test binary, whose appetite the harness knows.
-func probeMemoryCapKills() error {
+	// The half of the probe nothing else can stand in for: a ceiling the kernel accepts but does not
+	// enforce produces a scope that starts, runs and caps nothing, so something deliberately
+	// over-budget has to die inside one. The hog is this test binary, whose appetite the harness knows.
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("no path to this test binary to run a hog with: %v", err)
@@ -387,12 +362,12 @@ func probeMemoryCapKills() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), memoryCapProbeTimeout)
 	defer cancel()
-	argv := append(memoryCapArgs(memoryCapProbeBytes, []string{
+	argv = append(memoryCapArgs(memoryCapProbeBytes, []string{
 		fmt.Sprintf("%s=%d", memoryHogEnv, want),
 	}), self)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.WaitDelay = waitDelay
-	out, err := cmd.CombinedOutput()
+	out, err = cmd.CombinedOutput()
 
 	if err == nil {
 		return fmt.Errorf("a child that touched %d bytes under a %d byte cap exited cleanly: "+
@@ -404,10 +379,11 @@ func probeMemoryCapKills() error {
 		return fmt.Errorf("the hog left no process state behind: %v: %s",
 			err, strings.TrimSpace(string(out)))
 	}
-	ws, ok := st.Sys().(syscall.WaitStatus)
-	killed := (ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL) ||
-		st.ExitCode() == 128+int(syscall.SIGKILL)
-	if !killed {
+	obs := childObservation{ExitCode: st.ExitCode()}
+	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		obs.Signal = ws.Signal()
+	}
+	if !obs.Killed() {
 		return fmt.Errorf("a child that touched %d bytes under a %d byte cap ended %v rather "+
 			"than being killed: %s", want, memoryCapProbeBytes, err, strings.TrimSpace(string(out)))
 	}
@@ -476,8 +452,6 @@ const (
 	_ = uint(32 - len(memguardSeedText))
 )
 
-var memguardSeed = [32]byte([]byte(memguardSeedText))
-
 const (
 	// 64 symbols, so one random byte masked to six bits picks one.
 	memguardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -493,21 +467,11 @@ const (
 
 // Streamed through a buffered writer, never assembled in memory: this measures what the child holds,
 // and a harness building a 500 MB string first would be the biggest process in the measurement.
-func stageIncompressibleFile(t *testing.T, w *world, index int, target int64) int {
+// Returns the transcript's writer and cwd, and the call that commits it.
+func createFixture(t *testing.T, w *world, slug, session string) (*bufio.Writer, string, func()) {
 	t.Helper()
-	written, _ := stageIncompressibleValue(t, w, index, target, 0)
-	return written
-}
-
-// The writer behind it; with secretEvery above zero it plants a secret pair every secretEvery-th line
-// and reports how many carry one, so a run's redaction count can be checked exactly.
-func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, secretEvery int) (int, int) {
-	t.Helper()
-	slug := fmt.Sprintf("-Users-perf-work-bulk-%d", index)
-	session := corpusSessionID(index)
 	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
 	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
-
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -516,13 +480,29 @@ func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, s
 		t.Fatal(err)
 	}
 	bw := bufio.NewWriterSize(f, 1<<20)
-
-	written := 0
-	n, err := fmt.Fprintf(bw, corpusFirstLine, session, cwd)
-	if err != nil {
-		t.Fatalf("write %s: %v", path, err)
+	return bw, cwd, func() {
+		if err := bw.Flush(); err != nil {
+			t.Fatalf("flush %s: %v", path, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close %s: %v", path, err)
+		}
+		// The pre-filter compares size and mtime, so the stamp cannot be the wall clock.
+		if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
+			t.Fatal(err)
+		}
 	}
-	written += n
+}
+
+// With secretEvery above zero it plants a secret pair every secretEvery-th line and reports how
+// many carry one, so a run's redaction count can be checked exactly.
+func stageIncompressibleFile(t *testing.T, w *world, index int, target int64, secretEvery int) (int, int) {
+	t.Helper()
+	session := corpusSessionID(index)
+	bw, cwd, finish := createFixture(t, w, fmt.Sprintf("-Users-perf-work-bulk-%d", index), session)
+
+	// bufio's errors are sticky: finish reports any the unchecked writes hit.
+	written, _ := fmt.Fprintf(bw, corpusFirstLine, session, cwd)
 
 	src := rand.NewChaCha8(memguardStreamSeed(index))
 	fill := make([]byte, memguardLineFill)
@@ -541,65 +521,33 @@ func stageIncompressibleValue(t *testing.T, w *world, index int, target int64, s
 		}
 		n, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a%d","sessionId":%q,"cwd":%q,"message":{"id":"m%d","model":"claude-opus-5","content":[{"type":"text","text":%q}],"usage":{"input_tokens":120,"output_tokens":340}}}`+"\n",
 			line, session, cwd, line, text)
+		// Checked anyway: a writer that stopped growing would loop forever.
 		if err != nil {
-			t.Fatalf("write %s: %v", path, err)
+			t.Fatalf("write the fixture: %v", err)
 		}
 		written += n
 	}
-	if err := bw.Flush(); err != nil {
-		t.Fatalf("flush %s: %v", path, err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close %s: %v", path, err)
-	}
-	// The pre-filter compares size and mtime, so the stamp cannot be the wall clock.
-	if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
-		t.Fatal(err)
-	}
+	finish()
 	return written, secretLines
 }
 
 const singleLineChunk = 390 * (memguardRun + 1)
 
-func stageSingleLineFile(t *testing.T, w *world, target int64) int {
-	t.Helper()
-	written, _ := stageSingleLineValue(t, w, "-Users-perf-work-oneline", target, "")
-	return written
-}
-
-func stageSingleLineSecretFile(t *testing.T, w *world, target int64) (int, int) {
-	t.Helper()
-	return stageSingleLineValue(t, w, "-Users-perf-work-oneline-secrets", target, corpusGitHubToken)
-}
-
-func stageSingleLineValue(t *testing.T, w *world, slug string, target int64, secret string) (int, int) {
+// The whole target in one JSON string; a non-empty secret precedes every chunk of fill.
+func stageSingleLineFile(t *testing.T, w *world, slug string, target int64, secret string) (int, int) {
 	t.Helper()
 	session := corpusSessionID(0)
-	cwd := "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")
-	path := filepath.Join(w.Home, ".claude", "projects", slug, session+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bw := bufio.NewWriterSize(f, 1<<20)
+	bw, cwd, finish := createFixture(t, w, slug, session)
 
 	tail := `"}],"usage":{"input_tokens":120,"output_tokens":340}}}` + "\n"
-	written, err := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a1","sessionId":%q,"cwd":%q,"message":{"id":"m1","model":"claude-opus-5","content":[{"type":"text","text":"`, session, cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Unchecked writes are reported by finish; the fill's is checked, or a dead writer loops forever.
+	written, _ := fmt.Fprintf(bw, `{"type":"assistant","uuid":"a1","sessionId":%q,"cwd":%q,"message":{"id":"m1","model":"claude-opus-5","content":[{"type":"text","text":"`, session, cwd)
 	src := rand.NewChaCha8(memguardStreamSeed(0))
 	fill := make([]byte, singleLineChunk)
 	secrets := 0
 	for int64(written+len(tail)) < target {
 		if secret != "" {
-			n, err := bw.WriteString(secret + " ")
-			if err != nil {
-				t.Fatal(err)
-			}
+			n, _ := bw.WriteString(secret + " ")
 			written += n
 			secrets++
 		}
@@ -610,26 +558,14 @@ func stageSingleLineValue(t *testing.T, w *world, slug string, target int64, sec
 		}
 		written += n
 	}
-	n, err := bw.WriteString(tail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	written += n
-	if err := bw.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, fixtureMTime, fixtureMTime); err != nil {
-		t.Fatal(err)
-	}
-	return written, secrets
+	n, _ := bw.WriteString(tail)
+	finish()
+	return written + n, secrets
 }
 
 // A stream per file, so a store that deduplicated identical payloads could not make this look cheap.
 func memguardStreamSeed(index int) [32]byte {
-	seed := memguardSeed
+	seed := [32]byte([]byte(memguardSeedText))
 	seed[len(seed)-1] ^= byte(index)
 	seed[len(seed)-2] ^= byte(index >> 8)
 	return seed
@@ -644,8 +580,8 @@ func memguardFill(t *testing.T, src *rand.ChaCha8, buf []byte) {
 	for i := range buf {
 		if i%(memguardRun+1) == memguardRun {
 			buf[i] = ' '
-			continue
+		} else {
+			buf[i] = memguardAlphabet[buf[i]&63]
 		}
-		buf[i] = memguardAlphabet[buf[i]&63]
 	}
 }
