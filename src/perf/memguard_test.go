@@ -59,7 +59,7 @@ func smokeBigFileAcceptance(t *testing.T) {
 		w := stageCappedWorld(t, acceptanceBudget)
 		// The compiled 256 MiB source ceiling would skip this fixture rather than ship it.
 		raiseMaxFileBytes(t, w, acceptanceFileBytes*2)
-		staged := stageIncompressibleFile(t, w, 0, acceptanceFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, acceptanceFileBytes, 0)
 		runUnderBudget(t, w, acceptanceScenario, resourceBudget{memory: acceptanceBudget}, 1, staged)
 	})
 }
@@ -69,7 +69,7 @@ func smokeBigFile(t *testing.T) {
 	t.Run("S3-big-file", func(t *testing.T) {
 		requireMemoryCap(t)
 		w := stageCappedWorld(t, bigFileBudget)
-		staged := stageIncompressibleFile(t, w, 0, bigFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, bigFileBytes, 0)
 		runUnderBudget(t, w, bigFileScenario, resourceBudget{memory: bigFileBudget}, 1, staged)
 	})
 }
@@ -77,16 +77,15 @@ func smokeBigFile(t *testing.T) {
 // No cgroup or GOMEMLIMIT: either could mask whether admission serializes these files.
 func smokeInFlightCap(t *testing.T) {
 	t.Run("S4-in-flight-cap", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		w.extraEnv = append(w.extraEnv,
-			fmt.Sprintf("%s=%d", envMaxInFlightBytes, inFlightCap))
+		w := stageSmokeWorld(t)
+		w.extraEnv = append(w.extraEnv, fmt.Sprintf("%s=%d", envMaxInFlightBytes, inFlightCap))
 
 		assertInFlightCapIsWired(t, w)
 
 		staged := 0
 		for i := range inFlightFiles {
-			staged += stageIncompressibleFile(t, w, i, inFlightFileBytes)
+			n, _ := stageIncompressibleFile(t, w, i, inFlightFileBytes, 0)
+			staged += n
 		}
 		t.Logf("%s: %d files of %d bytes under a %d byte in-flight cap, so no two can be "+
 			"admitted together", inFlightScenario, inFlightFiles, inFlightFileBytes, inFlightCap)
@@ -117,9 +116,8 @@ func assertInFlightCapIsWired(t *testing.T, w *world) {
 // One large JSON string forces a whole decoded value; its CPU cost has no calibrated budget.
 func smokeSingleLine(t *testing.T) {
 	t.Run("S6-single-line-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged := stageSingleLineFile(t, w, singleLineFileBytes)
+		w := stageSmokeWorld(t)
+		staged, _ := stageSingleLineFile(t, w, "-Users-perf-work-oneline", singleLineFileBytes, "")
 		runUnderBudget(t, w, singleLineScenario, resourceBudget{memory: singleLineBudget}, 1, staged)
 	})
 }
@@ -127,11 +125,9 @@ func smokeSingleLine(t *testing.T) {
 // Secrets add replacement and quoted-output copies, covered by singleLineDirtyBudget.
 func smokeSingleLineSecrets(t *testing.T) {
 	t.Run("S7-single-line-secret-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged, secrets := stageSingleLineSecretFile(t, w, singleLineFileBytes)
-		runUnderBudget(t, w, singleLineSecretScenario,
-			resourceBudget{memory: singleLineDirtyBudget}, 1, staged)
+		w := stageSmokeWorld(t)
+		staged, secrets := stageSingleLineFile(t, w, "-Users-perf-work-oneline-secrets", singleLineFileBytes, corpusGitHubToken)
+		runUnderBudget(t, w, singleLineSecretScenario, resourceBudget{memory: singleLineDirtyBudget}, 1, staged)
 
 		assertRuleHits(t, w, corpusSessionID(0), map[string]int{"github-pat": secrets})
 	})

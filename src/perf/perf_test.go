@@ -40,7 +40,7 @@ const (
 
 const (
 	// How toxiproxy reaches MinIO; there is no host-mapped alternative, which is the point.
-	minioAlias = "minio"
+	minioUpstream = "minio:9000"
 
 	// The shipper's listener and the harness's: any ports but 8474, which is the API.
 	proxyListenPort  = "8666"
@@ -53,17 +53,13 @@ const (
 )
 
 var (
-	minioAccess string
-	minioSecret string
-
 	// Kept for the isolation assertions, which ask the container what it published.
-	minioCtr testcontainers.Container
+	minioCtr *tcminio.MinioContainer
 
 	// Lists over the unshaped admin proxy, so its traffic never lands on the shipper's counters.
 	adminS3 *awss3.Client
 
-	// The harness's route and the shipper's: the origin every ticket is presigned against.
-	adminEndpoint string
+	// The shipper's route: the origin every ticket is presigned against.
 	storeEndpoint string
 
 	// The one bucket this tier writes to; worlds are separated by install root, not by bucket.
@@ -89,7 +85,15 @@ func TestMain(m *testing.M) {
 // Exists so the teardown can be a defer: TestMain cannot have one, since os.Exit does not unwind.
 func run(m *testing.M) int {
 	ctx := context.Background()
-	// Package-level temp dirs, so there is no t.TempDir to clean them up.
+	fail := func(what string, err error) int {
+		fmt.Fprintf(os.Stderr, "perf: %s: %v\n", what, err)
+		return 1
+	}
+	warn := func(what string, err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "perf: %s: %v\n", what, err)
+		}
+	}
 	defer removeCorpusMaster()
 	defer removeBinaries()
 
@@ -97,47 +101,29 @@ func run(m *testing.M) int {
 	// only container on both.
 	edgeNet, err := network.New(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the edge network: %v\n", err)
-		return 1
+		return fail("create the edge network", err)
 	}
-	defer func() {
-		if err := edgeNet.Remove(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: remove the edge network: %v\n", err)
-		}
-	}()
+	defer func() { warn("remove the edge network", edgeNet.Remove(ctx)) }()
 	internalNet, err := network.New(ctx, network.WithInternal())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the internal network: %v\n", err)
-		return 1
+		return fail("create the internal network", err)
 	}
-	defer func() {
-		if err := internalNet.Remove(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: remove the internal network: %v\n", err)
-		}
-	}()
+	defer func() { warn("remove the internal network", internalNet.Remove(ctx)) }()
 
 	minio, err := tcminio.Run(ctx, minioImage,
-		network.WithNetwork([]string{minioAlias}, internalNet),
+		network.WithNetwork([]string{"minio"}, internalNet),
 		// Public scrape auth because the S3 request count is read off a metrics page, which
 		// otherwise answers 403. CI_CD drops MinIO's preallocation, keeping the store out of the
 		// way of the memory budgets the scenarios next door run under.
 		testcontainers.WithEnv(map[string]string{"MINIO_PROMETHEUS_AUTH_TYPE": "public", "CI_CD": "true"}),
 		// The internal-only store has no host port, so wait on its ready log.
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("API:").
-				WithStartupTimeout(2*time.Minute)),
+		testcontainers.WithWaitStrategy(wait.ForLog("API:").WithStartupTimeout(2*time.Minute)),
 	)
-	defer func() {
-		if err := testcontainers.TerminateContainer(minio); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: terminate MinIO: %v\n", err)
-		}
-	}()
+	defer func() { warn("terminate MinIO", testcontainers.TerminateContainer(minio)) }()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: start MinIO: %v\n", err)
-		return 1
+		return fail("start MinIO", err)
 	}
 	minioCtr = minio
-	minioAccess, minioSecret = minio.Username, minio.Password
 
 	// Plain testcontainers.Run rather than modules/toxiproxy: that module's own -config cannot be
 	// combined with the -proxy-metrics these byte counters come from.
@@ -150,59 +136,40 @@ func run(m *testing.M) int {
 			toxiproxyAPIPort+"/tcp", proxyListenPort+"/tcp", adminListenPort+"/tcp"),
 		// The image defaults the API to localhost, which from outside the container is nothing.
 		testcontainers.WithCmd("-host=0.0.0.0", "-proxy-metrics"),
-		testcontainers.WithWaitStrategy(
-			wait.ForHTTP("/version").WithPort(toxiproxyAPIPort+"/tcp")),
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/version").WithPort(toxiproxyAPIPort+"/tcp")),
 	)
-	defer func() {
-		if err := testcontainers.TerminateContainer(proxyCtr); err != nil {
-			fmt.Fprintf(os.Stderr, "perf: terminate toxiproxy: %v\n", err)
-		}
-	}()
+	defer func() { warn("terminate toxiproxy", testcontainers.TerminateContainer(proxyCtr)) }()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: start toxiproxy: %v\n", err)
-		return 1
+		return fail("start toxiproxy", err)
 	}
 
-	apiAddr, err := hostAddr(ctx, proxyCtr, toxiproxyAPIPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy API address: %v\n", err)
-		return 1
+	var addrs [3]string
+	for i, port := range []string{toxiproxyAPIPort, proxyListenPort, adminListenPort} {
+		if addrs[i], err = hostAddr(ctx, proxyCtr, port); err != nil {
+			return fail("toxiproxy address for port "+port, err)
+		}
 	}
-	listenAddr, err := hostAddr(ctx, proxyCtr, proxyListenPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy listener address: %v\n", err)
-		return 1
-	}
-	adminAddr, err := hostAddr(ctx, proxyCtr, adminListenPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: toxiproxy admin listener address: %v\n", err)
-		return 1
-	}
+	apiAddr, adminEndpoint := addrs[0], "http://"+addrs[2]
 	toxiAPIURL = "http://" + apiAddr
 	metricsURL = toxiAPIURL + "/metrics"
-	storeEndpoint = "http://" + listenAddr
-	adminEndpoint = "http://" + adminAddr
+	storeEndpoint = "http://" + addrs[1]
 	// The v3 page, not the v2 cluster one: v2 serves a ten-second cached snapshot, so a count read
 	// either side of a sub-second run would read the same number twice.
 	minioMetricsURL = adminEndpoint + "/minio/metrics/v3/api/requests"
 
 	toxi = toxiproxy.NewClient(apiAddr)
 	// 0.0.0.0 so the mapped port reaches it; the docker alias upstream, resolved on the internal net.
-	storeProxy, err = toxi.CreateProxy(storeProxyName, "0.0.0.0:"+proxyListenPort, minioAlias+":9000")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the store proxy: %v\n", err)
-		return 1
+	if storeProxy, err = toxi.CreateProxy(storeProxyName, "0.0.0.0:"+proxyListenPort, minioUpstream); err != nil {
+		return fail("create the store proxy", err)
 	}
-	// The harness's own route: never shaped, and its bytes carry a different label, so listing keys
-	// cannot show up in what the shipper is charged.
-	if _, err := toxi.CreateProxy(adminProxyName, "0.0.0.0:"+adminListenPort, minioAlias+":9000"); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the admin proxy: %v\n", err)
-		return 1
+	// The harness's own route: never shaped, and its bytes carry a different label.
+	if _, err := toxi.CreateProxy(adminProxyName, "0.0.0.0:"+adminListenPort, minioUpstream); err != nil {
+		return fail("create the admin proxy", err)
 	}
 
 	adminS3 = awss3.NewFromConfig(aws.Config{
 		Region:      "us-east-1",
-		Credentials: credentials.NewStaticCredentialsProvider(minioAccess, minioSecret, ""),
+		Credentials: credentials.NewStaticCredentialsProvider(minio.Username, minio.Password, ""),
 	}, func(o *awss3.Options) {
 		o.BaseEndpoint = aws.String(adminEndpoint)
 		o.UsePathStyle = true
@@ -210,16 +177,13 @@ func run(m *testing.M) int {
 
 	// Minted before the protocol peer starts, because it signs the tickets used by the measured path.
 	if err := mintIngestUser(ctx, minio); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: mint the write-only ingestion user: %v\n", err)
-		return 1
+		return fail("mint the write-only ingestion user", err)
 	}
-	perfBucket, err = createVersionedBucket(ctx, fmt.Sprintf("perf-%d", time.Now().UnixNano()))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the bucket: %v\n", err)
-		return 1
+	if perfBucket, err = createVersionedBucket(ctx, fmt.Sprintf("perf-%d", time.Now().UnixNano())); err != nil {
+		return fail("create the bucket", err)
 	}
 	startProtocolPeer()
-	defer stopProtocolPeer()
+	defer peer.server.Close()
 
 	code := m.Run()
 	if code != 0 {
@@ -234,36 +198,34 @@ func createVersionedBucket(ctx context.Context, name string) (string, error) {
 	if _, err := adminS3.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
 		return "", err
 	}
-	if _, err := adminS3.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
+	_, err := adminS3.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
 		Bucket:                  aws.String(name),
 		VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
-	}); err != nil {
-		return "", err
-	}
-	return name, nil
+	})
+	return name, err
 }
 
 // Whether a timing scenario failed on slower code or on a toxic that was never attached is the first
 // question, and the API that answers it dies with the container. Failure path only.
 func dumpProxyState() {
 	path := filepath.Join(resultsDir(), "toxiproxy-state.json")
-	resp, err := http.Get(toxiAPIURL + "/proxies")
+	err := func() error {
+		resp, err := http.Get(toxiAPIURL + "/proxies")
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(path, body, 0o600)
+	}()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: read the proxy state for %s: %v\n", path, err)
-		return
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "perf: read the proxy state for %s: %v\n", path, err)
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: create the directory for %s: %v\n", path, err)
-		return
-	}
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		fmt.Fprintf(os.Stderr, "perf: write %s: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "perf: save the proxy state to %s: %v\n", path, err)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "perf: the proxies and their toxics as they were at the end: %s\n", path)
@@ -281,16 +243,13 @@ func hostAddr(ctx context.Context, c testcontainers.Container, port string) (str
 	return host + ":" + mapped.Port(), nil
 }
 
-// --- link shaping ------------------------------------------------------------
-
 // Half per direction, because the toxic delays one stream and a request-response pair crosses both.
-func withLatency(t *testing.T, rtt, jitter time.Duration) {
+func withLatency(t *testing.T, rtt time.Duration) {
 	t.Helper()
-	half := rtt / 2
 	for _, stream := range []string{"upstream", "downstream"} {
 		_, err := storeProxy.AddToxic("latency_"+stream, "latency", stream, 1,
-			toxiproxy.Attributes{"latency": half.Milliseconds(), "jitter": (jitter / 2).Milliseconds()})
-		require.Falsef(t, err != nil, "add %s latency toxic: %v", stream, err)
+			toxiproxy.Attributes{"latency": (rtt / 2).Milliseconds()})
+		require.NoErrorf(t, err, "add %s latency toxic", stream)
 	}
 	// /reset removes every toxic and re-enables every proxy, however the test exits.
 	t.Cleanup(func() {
@@ -298,26 +257,20 @@ func withLatency(t *testing.T, rtt, jitter time.Duration) {
 			t.Errorf("reset toxiproxy: %v", err)
 		}
 	})
-	assertShapingIsLive(t, rtt)
-}
 
-// Proves the toxic is on the wire before a test spends minutes measuring under it. A full request,
-// not a dial: the toxic delays data, so a connect-only probe would pass with no shaping at all.
-func assertShapingIsLive(t *testing.T, rtt time.Duration) {
-	t.Helper()
+	// Proves the toxic is on the wire before a test spends minutes measuring under it. A full
+	// request, not a dial: the toxic delays data, so a connect-only probe would pass with no shaping.
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 30 * time.Second}
 	start := time.Now()
 	resp, err := client.Get(storeEndpoint + "/minio/health/live")
-	require.Falsef(t, err != nil, "probe the shaped link: %v", err)
+	require.NoError(t, err, "probe the shaped link")
 	resp.Body.Close()
 	elapsed := time.Since(start)
-
 	// Three quarters of the injected rtt: slack for the handshake and the scheduler, not for a
 	// missing toxic.
-	if floor := rtt * 3 / 4; elapsed < floor {
+	if elapsed < rtt*3/4 {
 		t.Fatalf("a round trip through the proxy took %v with %v of latency configured; "+
-			"the toxic is not on the wire and every timing below would be meaningless",
-			elapsed, rtt)
+			"the toxic is not on the wire and every timing below would be meaningless", elapsed, rtt)
 	}
 	t.Logf("shaping live: %v round trip at %v configured rtt", elapsed.Round(time.Millisecond), rtt)
 }

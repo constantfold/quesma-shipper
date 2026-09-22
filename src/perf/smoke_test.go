@@ -84,7 +84,7 @@ func TestSmokeTier(t *testing.T) {
 	// The unshaped reference and the tier's warm-up, absorbing a fresh runner's cold caches once.
 	baseline := smokeBaseline(t, m)
 
-	withLatency(t, smokeRTT, 0)
+	withLatency(t, smokeRTT)
 
 	backlog := smokeBacklog(t, m, baseline)
 	smokeSteady(t, m, backlog)
@@ -98,8 +98,6 @@ func TestSmokeTier(t *testing.T) {
 	smokeSingleLine(t)
 	smokeSingleLineSecrets(t)
 }
-
-// --- the unshaped reference --------------------------------------------------
 
 // What the same backlog costs with nothing on the wire, so S1's bound can be about round trips:
 // subtracting a baseline measured on the same core cancels the compute.
@@ -122,8 +120,6 @@ func smokeBaseline(t *testing.T, m *smokeMachine) time.Duration {
 		m.files, durationList(reps), best.Round(time.Millisecond))
 	return best
 }
-
-// --- S1: the first sync ------------------------------------------------------
 
 // What S2 needs from S1: the run it compares itself against.
 type smokeBacklogResult struct {
@@ -166,9 +162,8 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 		recordResult(t, row)
 
 		require.Falsef(t, counts["shipped"] < m.files, "the backlog run shipped %d of %d files", counts["shipped"], m.files)
-		if counts["failed"] != 0 {
-			t.Fatalf("the backlog run failed %d files:\n%s", counts["failed"], meas.last.Output)
-		}
+		require.Zerof(t, counts["failed"], "the backlog run failed files:\n%s", meas.last.Output)
+
 		if added >= bound {
 			t.Errorf("%v of latency on %d files added %v, over the %v bound: "+
 				"the run is paying round trips one at a time", smokeRTT, m.files, added, bound)
@@ -194,8 +189,6 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 	return result
 }
 
-// --- S2: the sync after it ---------------------------------------------------
-
 // What a machine with nothing to do costs, measured on the world S1 left behind. The floor is not
 // zero (config fetch, heartbeat, project map), so the claim is a ratio.
 func smokeSteady(t *testing.T, m *smokeMachine, backlog smokeBacklogResult) {
@@ -209,29 +202,14 @@ func smokeSteady(t *testing.T, m *smokeMachine, backlog smokeBacklogResult) {
 		m.w.mustSync(t)
 
 		meas := smokeRepeat(t, m, warmRuns)
-		moved := meas.counters.up + meas.counters.down
-		counts := summary(t, meas.last.Output)
-
-		t.Logf("S2 steady state on %d files: reps %s, best %v against the backlog's %v; "+
-			"%d bytes against %d, %d S3 requests",
-			m.files, durationList(meas.reps), meas.best.Round(time.Millisecond),
-			backlog.best.Round(time.Millisecond), moved, backlog.bytes, meas.counters.requests)
+		t.Logf("S2 steady state on %d files: reps %s, %d S3 requests",
+			m.files, durationList(meas.reps), meas.counters.requests)
 
 		// Recorded before anything is judged: the run worth having numbers for is the one that failed.
 		recordResult(t, meas.row(m, smokeSteadyScenario, smokeSteadyBudget))
 
-		if counts["unchanged"] < m.files {
-			t.Errorf("the second run called %d files unchanged, want at least %d: "+
-				"the pre-filter is opening files it does not need to", counts["unchanged"], m.files)
-		}
-		if moved*20 >= backlog.bytes {
-			t.Errorf("the second run moved %d bytes against the backlog's %d, over a twentieth: "+
-				"an unchanged machine is still talking to the store", moved, backlog.bytes)
-		}
-		if meas.best*3 >= backlog.best {
-			t.Errorf("the second run took %v against the backlog's %v, over a third: "+
-				"discovery is costing what shipping cost", meas.best, backlog.best)
-		}
+		assertSteadyState(t, m.files, summary(t, meas.last.Output)["unchanged"],
+			meas.counters.up+meas.counters.down, backlog.bytes, meas.best, backlog.best)
 		m.w.assertTranscriptVersions(t, backlog.versions)
 
 		// Rewriting the heartbeat and project map is where an unrenamed temp file would show up.
@@ -239,8 +217,6 @@ func smokeSteady(t *testing.T, m *smokeMachine, backlog smokeBacklogResult) {
 		assertPeakUnderBudget(t, smokeSteadyScenario, meas.peak, smokeSteadyBudget)
 	})
 }
-
-// --- the repetitions ---------------------------------------------------------
 
 // Named at the call sites, because a bare boolean there says nothing.
 const (
@@ -310,14 +286,9 @@ func smokeRepeat(t *testing.T, m *smokeMachine, cold bool) smokeMeasurement {
 	return meas
 }
 
-// --- the machine -------------------------------------------------------------
-
-// Builds the world and writes the corpus into it.
 func stageSmokeMachine(t *testing.T) *smokeMachine {
 	t.Helper()
-	w := stageWorld(t)
-	w.gomaxprocs = smokeGOMAXPROCS
-
+	w := stageSmokeWorld(t)
 	bytes := stageCorpusFiles(t, w, smokeCorpusFiles)
 	t.Logf("smoke corpus: %d files, %d bytes staged, child at GOMAXPROCS=%d",
 		smokeCorpusFiles, bytes, w.gomaxprocs)
