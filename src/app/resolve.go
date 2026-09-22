@@ -50,13 +50,15 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 				"Fix the file or log in again with `quesma-shipper login`; collecting without it would ship "+
 				"under different credentials than the ones this install was granted", err)
 	}
-	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{Enrollment: enrollment, StateDir: paths.StateDir, Now: time.Now(), Offline: offline})
+	remote := controlplane.Refresh(ctx, controlplane.RefreshOptions{Enrollment: enrollment, StateDir: paths.StateDir,
+		Now: time.Now(), Offline: offline})
 
 	if remote.Doc != nil {
 		layers = append(layers, config.LayeredDocument{Layer: config.LayerRemote, Doc: remote.Doc})
 	}
 
-	eff, err := config.Resolve(config.Input{Catalog: compiled, Layers: layers, ConfigExpired: remote.Expired, Env: env, StateDir: paths.StateDir})
+	eff, err := config.Resolve(config.Input{Catalog: compiled, Layers: layers, ConfigExpired: remote.Expired,
+		Env: env, StateDir: paths.StateDir})
 	if err != nil {
 		return nil, paths, remote, err
 	}

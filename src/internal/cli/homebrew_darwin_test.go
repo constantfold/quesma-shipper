@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -40,7 +39,8 @@ func TestHomebrewSelfUpdatesButBrewUninstalls(t *testing.T) {
 		t.Setenv(app.NoSelfUpdateEnv, "")
 		out.Reset()
 		maybeSelfUpdate(context.Background(), build, true, &out)
-		require.Truef(t, transport.calls != 0 && strings.Contains(out.String(), "test update endpoint unavailable"), "automatic update did not reach TUF: %s", &out)
+		require.NotZero(t, transport.calls, "automatic update did not reach TUF: %s", &out)
+		require.Contains(t, out.String(), "test update endpoint unavailable")
 		execute := func(args ...string) error {
 			out.Reset()
 			cmd := Root(build, &out, &out)
