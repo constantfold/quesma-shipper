@@ -1,46 +1,32 @@
 package config
 
 import (
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestTickIntervalHonoursTheSupportedShapes(t *testing.T) {
-	cases := []struct {
+func TestTickInterval(t *testing.T) {
+	for _, tc := range []struct {
 		in   string
 		want time.Duration
+		warn bool
 	}{
-		{"15m", 15 * time.Minute},     // the documented default, explicitly
-		{"5m", 5 * time.Minute},       //
-		{"90s", 90 * time.Second},     //
-		{"1h", time.Hour},             //
-		{"  10m  ", 10 * time.Minute}, // whitespace is not a meaning
-	}
-	for _, c := range cases {
-		got, warn := TickInterval(c.in)
-		if got != c.want || warn != "" {
-			t.Errorf("TickInterval(%q) = %v, warn=%q; want %v, no warning", c.in, got, warn, c.want)
-		}
-	}
-}
-
-func TestTickIntervalRefusesUnparseableValues(t *testing.T) {
-	for _, in := range []string{
-		"every day",
-		"15",  // bare number: ambiguous, and ParseDuration agrees
-		"-5m", // negative
+		{"15m", 15 * time.Minute, false}, // the documented default, explicitly
+		{"90s", 90 * time.Second, false},
+		{"1h", time.Hour, false},
+		{"  10m  ", 10 * time.Minute, false}, // whitespace is not a meaning
+		{"every day", DefaultTick, true},
+		{"15", DefaultTick, true}, // bare number: ambiguous, and ParseDuration agrees
+		{"-5m", DefaultTick, true},
+		{"5s", MinTick, true}, // a poll loop at seconds is a hot loop
 	} {
-		_, warn := TickInterval(in)
-		if warn == "" || !strings.Contains(warn, in) {
-			t.Errorf("TickInterval(%q) must warn naming the rejected value, got %q", in, warn)
+		got, warn := TickInterval(tc.in)
+		assert.Equal(t, tc.want, got, tc.in)
+		assert.Equal(t, tc.warn, warn != "", tc.in)
+		if tc.warn {
+			assert.Contains(t, warn, tc.in, "the warning must name the rejected value")
 		}
-	}
-}
-
-func TestTickIntervalFloorsHotLoops(t *testing.T) {
-	got, warn := TickInterval("5s")
-	if got != MinTick || warn == "" {
-		t.Errorf("TickInterval(5s) = %v, warn=%q; want the %v floor and a warning", got, warn, MinTick)
 	}
 }
