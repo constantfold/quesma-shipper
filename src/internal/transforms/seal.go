@@ -24,20 +24,12 @@ const (
 // ZstdLevel stays at 3: changing it changes every object's bytes.
 const ZstdLevel = 3
 
-// SuggestedPrefixBytes is where a ranged head-fetch should start: it covers the age header, the
-// first zstd block and the first tar entry. age's STREAM chunks decrypt only whole.
-const SuggestedPrefixBytes = 256 * 1024
-
 // Bounds on hostile input: a huge manifest is not one this code wrote, and a crafted object
 // must not exhaust memory through zstd expansion.
 const (
 	maxManifestBytes     = 4 << 20
 	maxDecompressedBytes = 8 << 30
 )
-
-// ErrPrefixTooShort means the fetched prefix did not contain the whole manifest; the caller
-// should double its range rather than treat the object as corrupt.
-var ErrPrefixTooShort = errors.New("seal: object prefix too short to contain the manifest")
 
 // Seal builds one mirror object and returns the manifest as sealed, with ShippedHash, PayloadSize
 // and (unless the caller set it) Encryption filled: object metadata comes from the returned copy.
@@ -155,21 +147,47 @@ func writeTar(w io.Writer, manifestJSON, payload []byte, payloadMTime *time.Time
 	return nil
 }
 
-// Open decrypts a whole object and returns its manifest and payload.
+// Open decrypts a whole object and returns its manifest and payload. A first entry other than the
+// manifest means the container was not built by this code, so its layout cannot be trusted.
 func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
-	tr, closeFn, err := tarReader(bytes.NewReader(object), identities...)
-	if err != nil {
-		return Manifest{}, nil, err
+	if len(identities) == 0 {
+		return Manifest{}, nil, errors.New("seal: no age identity supplied")
 	}
-	defer closeFn()
-
-	m, err := readManifestEntry(tr)
+	dec, err := age.Decrypt(bytes.NewReader(object), identities...)
 	if err != nil {
-		return Manifest{}, nil, err
+		return Manifest{}, nil, fmt.Errorf("age decrypt: %w", err)
 	}
+	zr, err := zstd.NewReader(dec, zstd.WithDecoderMaxMemory(maxDecompressedBytes))
+	if err != nil {
+		return Manifest{}, nil, fmt.Errorf("zstd reader: %w", err)
+	}
+	defer zr.Close()
+	tr := tar.NewReader(zr)
 
 	hdr, err := tr.Next()
 	if err != nil {
+		return Manifest{}, nil, fmt.Errorf("read first tar entry: %w", err)
+	}
+	if hdr.Name != ManifestEntry {
+		return Manifest{}, nil, fmt.Errorf("first entry is %q, want %q: manifest-first is the container contract",
+			hdr.Name, ManifestEntry)
+	}
+	if hdr.Size > maxManifestBytes {
+		return Manifest{}, nil, fmt.Errorf("manifest claims %d bytes, over the %d limit", hdr.Size, maxManifestBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(tr, hdr.Size))
+	if err != nil {
+		return Manifest{}, nil, fmt.Errorf("read manifest entry: %w", err)
+	}
+	if int64(len(raw)) < hdr.Size {
+		return Manifest{}, nil, fmt.Errorf("manifest entry truncated: %d of %d bytes", len(raw), hdr.Size)
+	}
+	m, err := DecodeManifest(raw)
+	if err != nil {
+		return Manifest{}, nil, err
+	}
+
+	if hdr, err = tr.Next(); err != nil {
 		return Manifest{}, nil, fmt.Errorf("seal: no payload entry: %w", err)
 	}
 	if hdr.Name != PayloadEntry {
@@ -179,71 +197,12 @@ func Open(object []byte, identities ...age.Identity) (Manifest, []byte, error) {
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("seal: read payload: %w", err)
 	}
-
 	// The manifest describes bytes; verify it describes these bytes.
 	if got := Hash(payload); got != m.ShippedHash {
 		return Manifest{}, nil, fmt.Errorf("seal: payload hash %s does not match manifest shipped_hash %s",
 			got, m.ShippedHash)
 	}
 	return m, payload, nil
-}
-
-// ReadManifestPrefix decodes the manifest from a ranged-GET prefix. Reading a prefix ALWAYS ends
-// in a truncation error from age or zstd, swallowed once the first tar entry is whole; a failure
-// before that, including a prefix too short for the age header, is ErrPrefixTooShort.
-func ReadManifestPrefix(prefix []byte, identities ...age.Identity) (Manifest, error) {
-	tr, closeFn, err := tarReader(bytes.NewReader(prefix), identities...)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("%w: %v", ErrPrefixTooShort, err)
-	}
-	defer closeFn()
-
-	m, err := readManifestEntry(tr)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("%w: %v", ErrPrefixTooShort, err)
-	}
-	return m, nil
-}
-
-// readManifestEntry validates that the first tar entry is the manifest; otherwise the container
-// was not built by this code and its layout cannot be trusted.
-func readManifestEntry(tr *tar.Reader) (Manifest, error) {
-	hdr, err := tr.Next()
-	if err != nil {
-		return Manifest{}, fmt.Errorf("read first tar entry: %w", err)
-	}
-	if hdr.Name != ManifestEntry {
-		return Manifest{}, fmt.Errorf("first entry is %q, want %q: manifest-first is the container contract",
-			hdr.Name, ManifestEntry)
-	}
-	if hdr.Size > maxManifestBytes {
-		return Manifest{}, fmt.Errorf("manifest claims %d bytes, over the %d limit", hdr.Size, maxManifestBytes)
-	}
-
-	raw, err := io.ReadAll(io.LimitReader(tr, hdr.Size))
-	if err != nil {
-		return Manifest{}, fmt.Errorf("read manifest entry: %w", err)
-	}
-	if int64(len(raw)) < hdr.Size {
-		return Manifest{}, fmt.Errorf("manifest entry truncated: %d of %d bytes", len(raw), hdr.Size)
-	}
-	return DecodeManifest(raw)
-}
-
-// tarReader stacks the three decode layers over r.
-func tarReader(r io.Reader, identities ...age.Identity) (*tar.Reader, func(), error) {
-	if len(identities) == 0 {
-		return nil, nil, errors.New("seal: no age identity supplied")
-	}
-	dec, err := age.Decrypt(r, identities...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("age decrypt: %w", err)
-	}
-	zr, err := zstd.NewReader(dec, zstd.WithDecoderMaxMemory(maxDecompressedBytes))
-	if err != nil {
-		return nil, nil, fmt.Errorf("zstd reader: %w", err)
-	}
-	return tar.NewReader(zr), zr.Close, nil
 }
 
 func recipientID(r age.Recipient) string {

@@ -23,7 +23,7 @@ const (
 	GenericEntropy = "generic-entropy"
 )
 
-// Span is one matched byte range; the engine's transforms.Span is an alias of it.
+// Span is one matched byte range.
 type Span struct {
 	Start  int
 	End    int
@@ -38,10 +38,7 @@ type ruleSpec struct {
 	Checksum string   `json:"checksum"`
 	Guard    string   `json:"guard"`
 	Scanner  string   `json:"scanner"`
-
-	// Sweep keeps the rule on the plain FindAll path: for keywords that occur mid-match
-	// rather than at every match's start, or where anchoring is a proven cost cliff.
-	Sweep bool `json:"sweep"`
+	Sweep    bool     `json:"sweep"` // keywords occur mid-match, or anchoring is a proven cost cliff
 }
 
 // corpus omits the data files' description and todo keys, which the compiler never reads.
@@ -59,25 +56,15 @@ type Rule struct {
 	checksum func(string) bool
 	guard    func(value string, start, end int) bool
 
-	// hand is a byte walk that replaces the regex outright, declared by the corpus entry.
-	hand candidateScanner
-
-	// fused names this rule's slot in the shared PII walk a ValueScan runs once per value.
-	fused fusedKind
-
-	// anchor is the literal entry point built from the corpus keywords, nil when the rule
-	// cannot anchor. It decides where the regex is asked, never what the answer is.
+	// At most one fast path replaces the regex sweep, each answering exactly as it would: a byte
+	// walk of its own, a slot in the shared PII walk, or an anchor on the corpus keywords.
+	hand   func(value string) []Span
+	fused  fusedKind
 	anchor *anchorScan
 }
 
-// candidateScanner finds by byte walk the spans the rule's regex would have found, before
-// the guard and checksum. See pii.go and handscan.go for each equivalence argument.
-type candidateScanner func(value string) []Span
-
-// A fused kind reads its candidates out of the shared walk; only a rule with no slot there
-// carries its own byte walk.
 var scanners = map[string]struct {
-	fn    candidateScanner
+	fn    func(value string) []Span
 	fused fusedKind
 }{
 	"card-pan": {nil, fusedCardPAN},
@@ -93,13 +80,11 @@ func (r *Rule) RuleID() string { return r.id }
 func (r *Rule) Keywords() []string { return r.keywords }
 
 // MatchScannedIn finds every occurrence in a value the caller has already scanned for keywords,
-// with scan Reset to this exact value. Fused slot, hand scanner, anchor or sweep: all answer
-// identically, which the tests beside each check.
+// with scan Reset to this exact value.
 func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
 	switch {
 	case r.fused != fusedNone:
-		// Guard and checksum read the scan's own bytes, so a stale scan cannot be checksummed
-		// against a different string.
+		// Guard and checksum read the scan's own bytes, so a stale scan cannot mix two strings.
 		return r.checked(scan.candidates(r.fused), scan.value)
 	case r.hand != nil:
 		return r.checked(r.hand(value), value)
@@ -109,8 +94,7 @@ func (r *Rule) MatchScannedIn(value string, scan *ValueScan) []Span {
 	return r.matchSweep(value)
 }
 
-// checked drops, in place, the candidates the guard or checksum rejects, and stamps the
-// survivors. A rejected candidate still consumed its bytes, as FindAll commits them.
+// checked filters and stamps candidates in place. A rejected one still consumed its bytes, as in FindAll.
 func (r *Rule) checked(found []Span, value string) []Span {
 	out := found[:0]
 	for _, s := range found {
@@ -126,7 +110,6 @@ func (r *Rule) checked(found []Span, value string) []Span {
 	return out
 }
 
-// accepts applies the guard-then-checksum policy every path shares.
 func (r *Rule) accepts(value string, start, end int) bool {
 	if r.guard != nil && !r.guard(value, start, end) {
 		return false
@@ -145,9 +128,9 @@ func (r *Rule) matchSweep(value string) []Span {
 	return out
 }
 
-// matchAnchored is matchSweep's answer reached by literal search: it reproduces FindAll's loop,
-// where the leftmost candidate that verifies IS the leftmost match, since a position with no entry
-// literal cannot start one. A rejected candidate moves one byte, so a nested match stays findable.
+// matchAnchored reproduces FindAll's loop by literal search: a position with no entry literal cannot
+// start a match, so the leftmost candidate that verifies IS the leftmost match. A rejected
+// candidate moves one byte, so a nested match stays findable.
 func (r *Rule) matchAnchored(value string) []Span {
 	s := r.anchor
 	var cursor litCursor
@@ -183,8 +166,7 @@ func (r *Rule) matchAnchored(value string) []Span {
 	return out
 }
 
-// span turns one match's index list into the span to redact, guard and checksum applied. A
-// capture group redacts the value and keeps the key name, which is signal and not the secret.
+// span applies the capture group, which redacts the value and keeps the key name, then the checks.
 func (r *Rule) span(value string, loc []int) (Span, bool) {
 	start, end := loc[0], loc[1]
 	if r.capture > 0 && len(loc) > 2*r.capture+1 && loc[2*r.capture] >= 0 {
@@ -204,8 +186,7 @@ var checksums = map[string]func(string) bool{
 
 // A guard sees the characters around the match, for what \b cannot say.
 var guards = map[string]func(value string, start, end int) bool{
-	// Rejects a piece of a larger decimal number: preceded by a dot, or followed by a dot that
-	// continues into digits. Any other dot is prose punctuation.
+	// Rejects a piece of a larger decimal number; any other dot is prose punctuation.
 	"no-decimal-neighbor": func(value string, start, end int) bool {
 		if start > 0 && value[start-1] == '.' {
 			return false
@@ -239,8 +220,7 @@ func Load(pack string) ([]*Rule, error) {
 	return out, nil
 }
 
-// compileSpec is split out of Load so the tests can compile specs the corpora do not have. An
-// unknown checksum, guard or scanner name is an error.
+// compileSpec is split out of Load so tests can compile specs the corpora do not have.
 func compileSpec(spec ruleSpec) (*Rule, error) {
 	re, err := regexp.Compile(spec.Regex)
 	if err != nil {

@@ -50,8 +50,8 @@ type bubble struct {
 	} `json:"modelInfo"`
 }
 
-// thinkingData decodes reasoning in both encodings a store holds: an object, and that object
-// serialised into a string on server-hydrated rows. A strict field would reject the whole row.
+// thinkingData decodes reasoning as an object, or as that object serialised into a string on
+// server-hydrated rows. A strict field would reject the whole row.
 type thinkingData struct {
 	Text string `json:"text"`
 }
@@ -69,7 +69,6 @@ func (t *thinkingData) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// reasoningText is a bubble's reasoning in either generation's encoding; empty means none.
 func (b *bubble) reasoningText() string {
 	if b.Thinking != nil && b.Thinking.Text != "" {
 		return b.Thinking.Text
@@ -91,8 +90,8 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// toolFormerData is the tool call as the store records it, including the result this enricher
-// exists for. Tool is a string in older stores, a numeric enum in current.
+// toolFormerData is the tool call as the store records it. Tool is a string in older stores, a
+// numeric enum in current.
 type toolFormerData struct {
 	ToolCallID string     `json:"toolCallId"`
 	Name       string     `json:"name"`
@@ -144,14 +143,13 @@ func indexRows(rows []sqliteread.Row) *indexed {
 	return ix
 }
 
-// orderBubbles produces the authoritative bubble order: fullConversationHeadersOnly, the only
-// place it is recorded, then a key scan for the errored turns whose header list is empty.
+// orderBubbles takes fullConversationHeadersOnly, the only place the order is recorded, then the
+// inline array, then a key scan for the errored turns whose header list is empty.
 func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []*bubble) []*bubble {
 	var out []*bubble
 	if c != nil {
 		for _, h := range c.FullConversationHeadersOnly {
-			// A header naming an absent row is normal after compaction; skipping the gap is
-			// what keeps a compacted conversation shipping.
+			// A header naming an absent row is normal after compaction.
 			if b, ok := bubbles[h.BubbleID]; ok {
 				out = append(out, b)
 			}

@@ -8,15 +8,11 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// EntropyConfig tunes the generic-entropy backstop, the rule most likely to start eating content
-// rather than secrets.
+// EntropyConfig tunes the generic-entropy backstop, the rule most likely to start eating content.
+// Pure-hex candidates get their own threshold: 16 symbols cap entropy at 4.0 bits per char.
 type EntropyConfig struct {
-	MinLength int
-
-	// For base64 and base64url candidates, whose 64-symbol alphabet tops out at 6 bits per char.
-	MinBitsPerChar float64
-
-	// For pure-hex candidates: 16 symbols cap entropy at 4.0 bits, under a shared 4.2 threshold.
+	MinLength         int
+	MinBitsPerChar    float64
 	MinBitsPerCharHex float64
 }
 
@@ -29,14 +25,12 @@ func DefaultEntropyConfig() EntropyConfig {
 	}
 }
 
-// entropyMatcher is the backstop for high-entropy strings no pattern rule claimed. The engine
-// checks exemptions before calling it: redacting a uuid or a tool_use_id kills the causal DAG.
+// entropyMatcher is the backstop for high-entropy strings no pattern rule claimed. Exemptions are
+// checked before it: redacting a uuid or a tool_use_id kills the causal DAG.
 type entropyMatcher struct {
 	cfg    EntropyConfig
-	minRun int // candidate length floor, at least 1
-
-	// Substrings whose delimited presence marks a candidate as the scrubber's own output.
-	skip []string
+	minRun int      // candidate length floor, at least 1
+	skip   []string // delimited, these mark a candidate as the scrubber's own output
 }
 
 func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
@@ -56,18 +50,15 @@ func isCandidateByte(c byte) bool {
 	return isAlnumByte(c) || c == '+' || c == '=' || c == '_' || c == '-'
 }
 
+// A class entry's low bits carry 1 + the byte's rank in the alphabet (0 is out of class), and the
+// hex bit marks a hex digit. 128 slots rather than 67 let the compiler prove the index in range.
 const (
-	// entropySymbols is the candidate alphabet size.
-	entropySymbols = 66
-	// entropyHexBit marks a class entry whose byte is a hex digit; the low bits carry 1 + the
-	// byte's rank in the alphabet, 0 meaning out of class.
-	entropyHexBit = 0x80
-	// 128 rather than 67 slots, so the compiler can prove a slot with the hex bit cleared in range.
+	entropySymbols   = 66
+	entropyHexBit    = 0x80
 	entropyHistSlots = 128
 )
 
-// entropyClass tabulates isCandidateByte. Ranks ascend in byte order so the histogram's partial
-// sums are bit-for-bit stable: float addition does not associate.
+// entropyClass tabulates isCandidateByte, ranks ascending in byte order.
 var entropyClass = func() (t [256]uint8) {
 	rank := uint8(0)
 	for c := 0; c < 256; c++ {
@@ -83,15 +74,14 @@ var entropyClass = func() (t [256]uint8) {
 	return t
 }()
 
-// isHexByte marks the runs that earn MinBitsPerCharHex rather than MinBitsPerChar.
 func isHexByte(c byte) bool {
 	return isDigit(c) || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 func (m *entropyMatcher) RuleID() string { return "generic-entropy" }
 
-// Match probes every minRun'th byte, since a candidate run must cover a grid point, and must
-// find exactly the runs, in order, a byte-at-a-time scan would.
+// Match probes every minRun'th byte, since a candidate run must cover a grid point, and finds
+// exactly the runs, in order, a byte-at-a-time scan would.
 func (m *entropyMatcher) Match(value string) []Span {
 	if len(value) < m.cfg.MinLength {
 		return nil
@@ -115,9 +105,8 @@ func (m *entropyMatcher) Match(value string) []Span {
 			continue
 		}
 		candidate := value[start:i]
-		// Entropy first, since one histogram pass rejects nearly everything. The skip is required
-		// for idempotency: __USER__ and __REDACTED ADD entropy, and without it a second pass eats
-		// the first pass's output. The username is that output one pass earlier.
+		// Entropy first, as it rejects nearly everything. The skip keeps a re-scrub idempotent:
+		// __USER__, __REDACTED and the not-yet-rewritten username all ADD entropy.
 		if !m.clears(candidate) || m.skipsCandidate(candidate) {
 			continue
 		}
@@ -153,10 +142,9 @@ func containsDelimited(s, sub string) bool {
 	return false
 }
 
-// clears uses the calibrated Shannon sum, in symbol order, for both alphabets.
+// clears computes the hex verdict as one AND per byte, not a branch mixed alphabets mispredict.
 func (m *entropyMatcher) clears(candidate string) bool {
 	var counts [entropyHistSlots]int32
-	// The hex verdict is one AND per byte, not a branch mixed-alphabet candidates mispredict.
 	hexAll := uint8(0xff)
 	for i := 0; i < len(candidate); i++ {
 		class := entropyClass[candidate[i]]
@@ -173,8 +161,8 @@ func (m *entropyMatcher) clears(candidate string) bool {
 	return exactEntropyBits(&counts, float64(len(candidate))) >= threshold
 }
 
-// exactEntropyBits is the Shannon sum the thresholds were fitted against: ascending symbol-rank
-// order, accumulated left to right, which is a correctness property.
+// exactEntropyBits is the Shannon sum the thresholds were fitted against. The ascending rank order
+// is a correctness property: float addition does not associate.
 func exactEntropyBits(counts *[entropyHistSlots]int32, total float64) float64 {
 	h := 0.0
 	for _, c := range counts[:entropySymbols+1] {

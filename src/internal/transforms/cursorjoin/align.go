@@ -24,16 +24,12 @@ type block struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// outLine is one line of the derived JSONL. Native holds the original line's bytes verbatim.
-// Enrich is index-aligned to the native content blocks; a map would sort block 10 before block 2.
+// outLine is one derived line: the original bytes verbatim, or as a string when they are not valid
+// JSON (a torn tail is expected), and enrichments index-aligned to the native content blocks.
 type outLine struct {
-	Native json.RawMessage `json:"native,omitempty"`
-
-	// Invalid JSON carried as a string: a torn tail is expected, and an invalid raw value would make
-	// the document unmarshalable. A mid-rune tear becomes U+FFFD; the raw transcript ships anyway.
-	NativeInvalid string `json:"native_invalid,omitempty"`
-
-	Enrich []*blockEnrich `json:"_enrich,omitempty"`
+	Native        json.RawMessage `json:"native,omitempty"`
+	NativeInvalid string          `json:"native_invalid,omitempty"`
+	Enrich        []*blockEnrich  `json:"_enrich,omitempty"`
 }
 
 // blockEnrich is what the store knew and the transcript did not.
@@ -51,12 +47,10 @@ type blockEnrich struct {
 	ModelName      string `json:"modelName,omitempty"`
 }
 
-// alignAndRender walks the transcript and the ordered bubbles together, one pass over each,
-// advancing the bubble cursor only on a match. The transcript is the authority on what happened,
-// so an event it contains that the store cannot account for is a mismatch, while a store bubble
-// the transcript does not mention is simply skipped. Three exceptions ship native-only and are
-// counted apart: tail (the store ends before the transcript, as with injected turns), repeats
-// (one bubble for a call the agent ran twice) and ambiguous (see matchAmbiguous).
+// alignAndRender walks the transcript and the ordered bubbles together, advancing the bubble cursor
+// only on a match. The transcript is the authority: an event the store cannot account for is a
+// mismatch, a bubble the transcript does not mention is skipped. Tail (the store ends first, as with
+// injected turns), repeats and ambiguous events ship native-only and are counted apart.
 func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
@@ -130,8 +124,6 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	return a, nil
 }
 
-// alignment is one conversation's outcome: the rendered lines, the events nothing accounts for,
-// and the explained shortfalls that ship native-only.
 type alignment struct {
 	out                                  []byte
 	mismatches, tail, repeats, ambiguous int

@@ -104,7 +104,7 @@ func (w *jsonWalker) walkObject(depth int, path string) error {
 		}
 
 		field := joinFieldPath(path, key)
-		plan := w.s.planValue(key, "", FieldPath(field), w.family, w.scan)
+		plan := w.s.planValue(key, "", field, w.family, w.scan)
 		w.addPlan(raw, rawStart, key, plan)
 		if len(plan.spans) > 0 {
 			field = joinFieldPath(path, plan.apply(key))
@@ -138,7 +138,7 @@ func (w *jsonWalker) walkString(key, path string) error {
 		return err
 	}
 	w.addPlan(raw, rawStart, text,
-		w.s.planValue(text, key, FieldPath(path), w.family, w.scan))
+		w.s.planValue(text, key, path, w.family, w.scan))
 	return nil
 }
 

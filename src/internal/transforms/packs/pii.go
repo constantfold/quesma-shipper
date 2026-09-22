@@ -8,7 +8,7 @@ import "fmt"
 
 // One bit per class, so a run's classes accumulate with an AND.
 const (
-	piiWord  = 1 << iota // [0-9A-Za-z_], Go's \w and so the whole of what \b looks at
+	piiWord  = 1 << iota // [0-9A-Za-z_], Go's \w
 	piiDigit             // [0-9]
 	piiUpper             // [0-9A-Z], the IBAN body alphabet
 	piiAlpha             // [A-Z], the IBAN country prefix
@@ -29,7 +29,7 @@ var piiClass = func() (t [256]uint8) {
 	return t
 }()
 
-// isWordByte reports Go's ASCII \w, which is the whole of what \b looks at.
+// isWordByte reports Go's ASCII \w, the whole of what \b looks at.
 func isWordByte(c byte) bool { return piiClass[c]&piiWord != 0 }
 
 // The card-pan pattern's bounds: 12 to 18 repetitions, so 13 to 19 digits.
@@ -38,7 +38,6 @@ const (
 	panMinReps   = 12
 )
 
-// fusedKind names the rule a fused candidate list belongs to; fusedNone matches on its own.
 type fusedKind uint8
 
 const (
@@ -58,20 +57,18 @@ type ValueScan struct {
 	pan   []Span
 }
 
-// Reset points the scan at a new value; the walk is deferred until a rule asks.
+// Reset points the scan at a new value; the walk waits until a rule asks.
 func (c *ValueScan) Reset(value string) {
 	c.value = value
 	c.done = false
 }
 
-// candidates returns one rule's candidate spans, walking the value on the first ask. The
-// slice aliases the scan's storage, which the engine must copy out before the next Reset.
+// candidates walks the value on the first ask. The slice aliases the scan's storage until the next Reset.
 func (c *ValueScan) candidates(kind fusedKind) []Span {
 	if !c.done {
 		c.walk()
 		c.done = true
 	}
-	// An unnamed kind panics rather than silently returning a neighbour's spans.
 	switch kind {
 	case fusedPESEL:
 		return c.pesel
@@ -84,10 +81,8 @@ func (c *ValueScan) candidates(kind fusedKind) []Span {
 	}
 }
 
-// walk is the fused pass: one traversal producing all three candidate lists, each in its own
-// scanner's order. The unit is a maximal \w run because each rule is stated in runs: PESEL an
-// all-digit run of eleven bytes, IBAN a whole upper-alnum run of 15-34 shaped AANN, card-pan a run
-// starting on a digit but spanning separators (see scanCardPANFrom).
+// walk produces all three candidate lists in one pass over maximal \w runs: PESEL an all-digit run
+// of eleven, IBAN an upper-alnum run of 15-34 shaped AANN, card-pan a digit-led run across separators.
 func (c *ValueScan) walk() {
 	c.pesel = c.pesel[:0]
 	c.iban = c.iban[:0]
