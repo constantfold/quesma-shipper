@@ -2,6 +2,7 @@ package transforms
 
 import (
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
@@ -56,13 +57,9 @@ func newEntropyMatcher(cfg EntropyConfig, username string) *entropyMatcher {
 		// the alphabet path-shaped.
 		skip = append(skip, username)
 	}
-	minRun := cfg.MinLength
-	if minRun < 1 {
-		minRun = 1
-	}
 	return &entropyMatcher{
 		cfg:            cfg,
-		minRun:         minRun,
+		minRun:         max(cfg.MinLength, 1),
 		minDistinct:    entropyFloor(cfg.MinBitsPerChar),
 		minDistinctHex: entropyFloor(cfg.MinBitsPerCharHex),
 		// "/" is deliberately NOT in the candidate class: with it a candidate is a
@@ -174,12 +171,7 @@ func (m *entropyMatcher) Match(value string) []Span {
 }
 
 func (m *entropyMatcher) skipsCandidate(candidate string) bool {
-	for _, s := range m.skip {
-		if containsDelimited(candidate, s) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m.skip, func(s string) bool { return containsDelimited(candidate, s) })
 }
 
 // containsDelimited requires non-alphanumeric neighbours, the same boundary rule as
@@ -228,10 +220,7 @@ func (m *entropyMatcher) clears(candidate string) bool {
 	if hexAll&entropyHexBit != 0 {
 		threshold, floor = m.cfg.MinBitsPerCharHex, m.minDistinctHex
 	}
-	if threshold <= 0 {
-		return false
-	}
-	if distinct < floor {
+	if threshold <= 0 || distinct < floor {
 		return false
 	}
 	total := float64(len(candidate))

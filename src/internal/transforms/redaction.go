@@ -49,14 +49,13 @@ func (s *Scrubber) planValue(value, key string, field FieldPath, family string, 
 		// Detector-scoped: the field stands down the heuristics and nothing else.
 		entropy = nil
 	}
-	return s.planValueWith(value, entropy, key, field, scan)
+	return s.planValueWith(value, entropy, key, scan)
 }
 
 func (s *Scrubber) planValueWith(
 	value string,
 	entropy *entropyMatcher,
 	key string,
-	field FieldPath,
 	scan *packs.ValueScan,
 ) valuePlan {
 	// A key that names a secret takes the whole value, whatever shape the value has.

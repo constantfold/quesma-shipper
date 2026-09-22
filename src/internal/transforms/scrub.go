@@ -109,8 +109,7 @@ func (s *Scrubber) Slowest() (time.Duration, int64) {
 	return time.Duration(s.slowestNanos.Load()), s.slowestBytes.Load()
 }
 
-// noteCost keeps the maximum. A lost race costs one sample of a figure that is already only a
-// worst-case hint, so the loop does not retry.
+// noteCost retries a lost race until this sample wins or a slower sample has already won.
 func (s *Scrubber) noteCost(d time.Duration, size int) {
 	n := int64(d)
 	for {
@@ -282,7 +281,7 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 
 // scrubRawText applies patterns and path rewrites without heuristics: raw text has no field exemptions.
 func (s *Scrubber) scrubRawText(text string, res *Result, scan *packs.ValueScan) string {
-	plan := s.planValueWith(text, nil, "", "", scan)
+	plan := s.planValueWith(text, nil, "", scan)
 	res.record(plan.redacted, plan.hits)
 	return plan.apply(text)
 }

@@ -3,22 +3,18 @@ package transforms
 import (
 	"cmp"
 	"slices"
-	"strings"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// Span is a byte range inside one decoded string value, attributed to the rule that
-// matched it; the packs type, so rule matchers and the engine share one span.
+// Span is a rule-attributed byte range shared with the pattern matchers.
 type Span = packs.Span
 
 // FieldPath is a dotted path to a value inside a record, with "[]" standing for array
 // elements: content[].image.hex, message.content[].text, toolUseResult.stdout.
 type FieldPath string
 
-// Sentinel is the placeholder for a redacted value. Its width depends only on the rule id,
-// never on the secret, and nothing in it may ever derive from the secret's value: a hash
-// prefix is reversible redaction. The rule id is what makes the ledger queryable.
+// Sentinel identifies the rule, never the secret: even a secret's hash can reveal it.
 func Sentinel(ruleID string) string {
 	return sentinelPrefix + ":" + ruleID + "__"
 }
@@ -28,15 +24,12 @@ func Sentinel(ruleID string) string {
 // must keep skipping candidates carrying it, or a re-scrub eats the previous pass's ledger.
 const sentinelPrefix = "__REDACTED"
 
-// ExemptionSet holds the structural exemptions in force: identifier fields whose redaction
-// would destroy the causal graph, and declared opaque binary payloads. Heuristics only, and
-// paths match exactly rather than by key name, since additions here weaken scrubbing.
+// ExemptionSet protects identifier and opaque fields from heuristics; paths match exactly.
 type ExemptionSet struct {
 	byFamily map[string]map[FieldPath]bool
 }
 
-// NewExemptionSet builds the set from the resolved config's structural_exempt map, keyed
-// by source family or "*" for all.
+// NewExemptionSet accepts paths keyed by source family, or "*" for all families.
 func NewExemptionSet(spec map[string][]string) *ExemptionSet {
 	e := &ExemptionSet{byFamily: map[string]map[FieldPath]bool{}}
 	for family, paths := range spec {
@@ -48,9 +41,7 @@ func NewExemptionSet(spec map[string][]string) *ExemptionSet {
 	return e
 }
 
-// Exempt reports whether a field is exempt from heuristic detectors for a family. No
-// nil-receiver tolerance: New always builds the set, and answering from a nil one would
-// fail open.
+// Exempt checks heuristic exemptions; a nil set is a programming error, never a fail-open default.
 func (e *ExemptionSet) Exempt(family string, field FieldPath) bool {
 	return e.byFamily["*"][field] || e.byFamily[family][field]
 }
@@ -81,13 +72,11 @@ func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, in
 		if a.Start != b.Start {
 			return cmp.Compare(a.Start, b.Start)
 		}
-		if a.priority != b.priority {
-			return cmp.Compare(a.priority, b.priority)
-		}
-		if a.End != b.End {
-			return cmp.Compare(b.End, a.End)
-		}
-		return strings.Compare(a.RuleID, b.RuleID)
+		return cmp.Or(
+			cmp.Compare(a.priority, b.priority),
+			cmp.Compare(b.End, a.End),
+			cmp.Compare(a.RuleID, b.RuleID),
+		)
 	})
 
 	// Keeping both would nest placeholders or split one secret across two.
