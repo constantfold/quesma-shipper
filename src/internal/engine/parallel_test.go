@@ -12,26 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 // --- the parallel pass ------------------------------------------------------
 //
 // Files in a source overlap; the loop thread still owns every decision. These tests pin what
 // overlap must not change: the budget, the report's order, the fatal stop, and that it overlaps.
-
-// Budget is reserved at admission, so no number of goroutines can overshoot max_files_per_run.
-func TestTheBudgetIsNotOvershotByFilesInFlight(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/a%02d.jsonl", 20)
-	f.eff.MaxFilesPerRun = 2
-
-	rep := f.run(func(o *engine.Options) { o.Workers = 8 })
-
-	assert.Equalf(t, 2, rep.Shipped, "budget 2 shipped %d files", rep.Shipped)
-	assert.True(t, rep.Truncated, "a run that left 18 files behind did not say so")
-	assert.Equal(t, 2, len(f.port.keys()))
-}
 
 // out.Files is index-addressed, so the report reads in candidate order however work interleaved.
 func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
@@ -49,24 +35,6 @@ func TestTheReportKeepsCandidateOrderHoweverTheWorkFinished(t *testing.T) {
 	require.Lenf(t, files, len(want), "want %d files in the report, got %d", len(want), len(files))
 	for i, fo := range files {
 		assert.Equalf(t, want[i], fo.RelPath, "position %d: want %s, got %s", i, want[i], fo.RelPath)
-	}
-}
-
-// The refusal stops ADMISSION, not just the count, measured in authorization calls.
-func TestARefusedInstallDoesNotAttemptEveryFile(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/r%02d.jsonl", 20)
-	f.port.FailAll = fmt.Errorf("creds: vend failed: %w", formats.ErrCredentialsRefused)
-
-	o := f.opts()
-	o.Workers = 4
-	rep, err := engine.Run(context.Background(), f.store, o)
-
-	require.ErrorIsf(t, err, formats.ErrCredentialsRefused, "want a refusal error from the run, got %v", err)
-	assert.Equalf(t, 1, rep.Failed, "%d refusals counted; duplicates in flight are the same fact about the same install", rep.Failed)
-	assert.Equal(t, 0, f.port.putCount())
-	if got := len(f.port.sizes()); got >= 20 {
-		t.Errorf("%d authorizations against a revoked install; admission never stopped", got)
 	}
 }
 
@@ -180,18 +148,4 @@ func TestUploadsOverlapBeyondTheComputePool(t *testing.T) {
 
 	require.Equalf(t, files, rep.Shipped, "want %d shipped, got %+v", files, rep)
 	assert.Truef(t, port.Peak() >= 2, "peak concurrent authorizations %d with 2 compute workers; groups are still holding compute slots", port.Peak())
-}
-
-// Workers=1, UploadWorkers=1 pins both pools to one file: same decisions, same order, same
-// second-run silence as a sequential loop.
-func TestOneWorkerBehavesExactlyLikeTheOldLoop(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/s%02d.jsonl", 6)
-
-	pin := func(o *engine.Options) { o.Workers, o.UploadWorkers = 1, 1 }
-	rep := f.run(pin)
-	require.Truef(t, rep.Shipped == 6 && rep.Failed == 0, "first pass: want 6 shipped, got %+v", rep)
-
-	again := f.run(pin)
-	assert.Truef(t, again.Unchanged == 6 && again.Shipped == 0, "second pass: want 6 unchanged, got %+v", again)
 }

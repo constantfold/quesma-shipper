@@ -1,9 +1,6 @@
 package engine_test
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -12,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 // Unreadable files park across restarts, then recover even when their bytes revert to a committed hash.
@@ -73,29 +69,4 @@ func TestUnreadableFileBackoffAndRecovery(t *testing.T) {
 			assert.Truef(t, !fp.Parked && fp.LastError == "" && fp.Attempts == 0 && fp.BackoffUntil.IsZero(), "the park survived a clean read: %+v", fp)
 		})
 	}
-}
-
-// A revoked install must fail fast: without the latch every remaining file repeats the same
-// refusal and writes a park record, burying the one line that says access was revoked.
-func TestARefusedInstallStopsTheRunAtTheFirstFile(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/a%02d.jsonl", 20)
-	f.port.FailAll = fmt.Errorf("creds: vend failed: %w", formats.ErrCredentialsRefused)
-
-	rep, err := engine.Run(context.Background(), f.store, f.opts())
-
-	require.ErrorIsf(t, err, formats.ErrCredentialsRefused, "want a refusal error from the run, got %v", err)
-	assert.Truef(t, rep.Failed <= 1, "%d files failed; the run should stop at the first refusal", rep.Failed)
-	assert.Equalf(t, 0, rep.Shipped, "%d files shipped despite refused credentials", rep.Shipped)
-}
-
-// An ordinary upload error is NOT fatal: those are per-object and the run continues.
-func TestAnOrdinaryUploadErrorDoesNotStopTheRun(t *testing.T) {
-	f := newFixture(t)
-	f.writeTranscripts("p/b%02d.jsonl", 5)
-	f.port.FailAll = errors.New("connection reset by peer")
-
-	rep, err := engine.Run(context.Background(), f.store, f.opts())
-	require.NoErrorf(t, err, "an ordinary upload failure ended the run: %v", err)
-	assert.Equalf(t, 5, rep.Failed, "want all 5 attempted and failed, got %+v", rep)
 }

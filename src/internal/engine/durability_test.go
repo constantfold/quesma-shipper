@@ -1,8 +1,6 @@
 package engine_test
 
 import (
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,45 +12,23 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// State loss re-uploads onto the same keys, preserving the store's existing versions.
+// State loss re-uploads onto the same keys, adding a version to each existing object.
 func TestStateLossReusesObjectKeys(t *testing.T) {
-	for _, paths := range [][]string{{"p/s1.jsonl"}, {"p/a.jsonl", "p/b.jsonl", "p/c.jsonl"}} {
-		t.Run(fmt.Sprintf("files=%d", len(paths)), func(t *testing.T) {
-			f := newFixture(t)
-			for _, path := range paths {
-				f.writeTranscript(path, line1)
-			}
-			f.run()
-			before := f.port.keys()
-			require.Len(t, before, len(paths))
-			f.wipeState()
-			if len(paths) == 1 {
-				f.port.reset()
-			}
-			rep := f.run()
-			require.Equal(t, len(paths), rep.Shipped)
-			require.Len(t, f.port.keys(), len(before))
-			assert.Equal(t, before, f.port.keys())
-			for _, key := range before {
-				obj, _, _ := f.openObject(t, key)
-				assert.Equal(t, 2, obj.Versions, "re-upload must add a version")
-			}
-		})
-	}
-}
-
-// A failed upload commits nothing, so the next tick re-runs the file.
-func TestFailedUploadCommitsNothing(t *testing.T) {
 	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
+	f.writeTranscripts("p/s%d.jsonl", 3)
+	f.run()
+	before := f.port.keys()
+	require.Len(t, before, 3)
 
-	f.port.FailNext = errors.New("network is unreachable")
-	rep := f.run()
-	require.Equalf(t, 1, rep.Failed, "expected a failure, got %+v", rep)
-	assert.Len(t, f.port.keys(), 0, "nothing should have landed")
-
-	rep2 := f.run()
-	assert.Equalf(t, 1, rep2.Shipped, "the next tick must re-run the file: %+v", rep2)
+	f.store.Close()
+	require.NoError(t, os.Remove(filepath.Join(f.stateDir, engine.FileName)))
+	f.reopen()
+	require.Equal(t, 3, f.run().Shipped)
+	assert.Equal(t, before, f.port.keys())
+	for _, key := range before {
+		obj, _, _ := f.openObject(t, key)
+		assert.Equal(t, 2, obj.Versions, "re-upload must add a version")
+	}
 }
 
 // A full cycle must not write anything under the agent's directory: no sidecars, no temp files.

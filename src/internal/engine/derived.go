@@ -14,16 +14,14 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// Enrichment: running an enricher and shipping what it derived. Every raw unit has shipped and
-// committed first, so an enricher cannot abort, park or delay a raw file. A derived object takes
-// the IDENTICAL path a raw file takes, being built from a database that holds auth material.
+// Enrichment: running an enricher and shipping what it derived. A derived object takes the same
+// scrub, seal and upload path a raw file takes, being built from a database that holds auth material.
 
 // recomputeWindow is how recently a source file must have changed for its enrichment to be
 // recomputed anyway: the DB side moves on its own, and a late tool result would never be collected.
 const recomputeWindow = 24 * time.Hour
 
-// enrichersFor returns every enabled enricher of a source, sorted by id because src.Enrichers is a
-// map: two flushes of the same config must run the same enrichers in the same order.
+// enrichersFor returns a source's enabled enrichers sorted by id, so every flush runs them in one order.
 func (o Options) enrichersFor(src sources.Resolved) []transforms.Enricher {
 	var out []transforms.Enricher
 	for id, e := range o.Enrichers {
@@ -35,8 +33,7 @@ func (o Options) enrichersFor(src sources.Resolved) []transforms.Enricher {
 	return out
 }
 
-// enrichSource runs one enricher and ships whatever it derived. A non-nil error is the run's:
-// the install was refused, or the control plane could not authorize.
+// enrichSource runs one enricher and ships whatever it derived. A non-nil error stops the run.
 func (o Options) enrichSource(
 	ctx context.Context,
 	store *commitBuffer,
@@ -46,16 +43,10 @@ func (o Options) enrichSource(
 	out *SourceOutcome,
 	rep *Report,
 ) error {
-	out.EnricherID = e.ID()
-	out.EnricherVersion = e.Version()
-
+	out.EnricherID, out.EnricherVersion = e.ID(), e.Version()
 	// The first declared database candidate that exists; empty means absent, which is not an error.
 	dbPath := o.Env.FirstExistingFile(e.DBCandidates())
-	res := e.Enrich(transforms.Input{
-		Units:      staged,
-		DBPath:     dbPath,
-		ScratchDir: filepath.Join(o.Plan.StateDir, "scratch"),
-	})
+	res := e.Enrich(transforms.Input{Units: staged, DBPath: dbPath, ScratchDir: filepath.Join(o.Plan.StateDir, "scratch")})
 
 	out.EnrichSkipped += res.Skipped
 	out.EnrichMismatch += res.Mismatched
@@ -64,64 +55,35 @@ func (o Options) enrichSource(
 	out.EnrichInfos = append(out.EnrichInfos, res.Infos...)
 	rep.EnrichMismatch += res.Mismatched
 
-	// A mismatch gets its own audit entry: a lost window must appear there, not only in a
-	// counter. Notes only — an info describes an object that ships, so stamping it "skipped"
-	// would record loss that did not happen.
+	// A lost window must appear in the audit log, not only a counter. Infos describe objects that
+	// ship, so only notes are recorded as skipped.
 	for _, note := range res.Notes {
-		o.auditSource(src.ID, auditlog.Entry{
-			Decision: auditlog.DecisionSkipped,
-			Reason:   "enrich: " + note,
-		})
+		o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionSkipped, Reason: "enrich: " + note})
 	}
 
-	shipped, halted := o.shipDerivedGroups(ctx, store, src, e, dbPath, res.Objects, out)
-	out.Enriched += shipped
-	rep.Shipped += shipped
-	if halted != nil {
-		// The same line the raw pass records, so the outcome itself says why the run stopped.
-		out.Reason = "uploads stopped: " + halted.Error()
-		o.auditSource(src.ID, auditlog.Entry{
-			Decision: auditlog.DecisionFailed,
-			Reason:   out.Reason,
-		})
-		return fmt.Errorf("enricher %s stopped: %w", e.ID(), halted)
-	}
-	return nil
-}
-
-// shipDerivedGroups ships everything one enricher derived. Outcomes are index-addressed so the
-// report keeps enricher order; a non-nil halted means this enricher stopped uploading.
-func (o Options) shipDerivedGroups(
-	ctx context.Context,
-	store *commitBuffer,
-	src sources.Resolved,
-	e transforms.Enricher,
-	dbPath string,
-	objects []transforms.Derived,
-	out *SourceOutcome,
-) (shipped int, halted error) {
-	fos := make([]FileOutcome, len(objects))
+	// Outcomes are index-addressed so the report keeps enricher order.
+	fos := make([]FileOutcome, len(res.Objects))
+	var halted error
 	group := &batcher{
 		maxObjects: maxBatchObjects,
 		send: func(items []fileResult) {
 			outcomes := o.authorizeAndUpload(ctx, items)
-			for i, g := range items {
-				idx := g.idx
-				result := applyUploadOutcome(g, outcomes[i])
-				store.applyIntent(&result)
-				fos[idx] = result.outcome
-				if fos[idx].Decision == auditlog.DecisionShipped {
-					shipped++
+			for i, it := range items {
+				r := applyUploadOutcome(it, outcomes[i])
+				store.applyIntent(&r)
+				fos[r.idx] = r.outcome
+				if r.outcome.Decision == auditlog.DecisionShipped {
+					out.Enriched++
+					rep.Shipped++
 				}
 				// A refusal or an unavailable plane stops this enricher; a failed PUT does not.
-				if stopsRun(outcomes[i]) && halted == nil {
+				if halted == nil && stopsRun(outcomes[i]) {
 					halted = outcomes[i]
 				}
 			}
 		},
 	}
-
-	for i, d := range objects {
+	for i, d := range res.Objects {
 		if halted != nil {
 			fos[i] = FileOutcome{
 				SourceID: src.ID, NativePath: d.NativePath, BytesIn: int64(len(d.Payload)), Derived: true,
@@ -129,78 +91,61 @@ func (o Options) shipDerivedGroups(
 			}
 			continue
 		}
-		fo, pending := o.prepareDerived(store, src, e, dbPath, d)
-		if pending == nil {
-			fos[i] = fo
+		r := o.prepareDerived(store, src, e, dbPath, d)
+		r.idx = i
+		if r.pending == nil {
+			fos[i] = r.outcome
 			continue
 		}
-		group.add(fileResult{idx: i, outcome: fo, pending: pending})
+		group.add(r)
 	}
 	group.flush()
-
 	out.Files = append(out.Files, fos...)
-	return shipped, halted
+
+	if halted != nil {
+		out.Reason = "uploads stopped: " + halted.Error()
+		o.auditSource(src.ID, auditlog.Entry{Decision: auditlog.DecisionFailed, Reason: out.Reason})
+		return fmt.Errorf("enricher %s stopped: %w", e.ID(), halted)
+	}
+	return nil
 }
 
 // prepareDerived is the derived object's compute leg: change detection, scrub, key, manifest, seal.
-// A non-nil pending means the object wants the network.
-func (o Options) prepareDerived(
-	store *commitBuffer,
-	src sources.Resolved,
-	e transforms.Enricher,
-	dbPath string,
-	d transforms.Derived,
-) (fo FileOutcome, pending *pendingPut) {
-	fo = FileOutcome{SourceID: src.ID, NativePath: d.NativePath, BytesIn: int64(len(d.Payload)), Derived: true}
-	fail := func(reason string) (FileOutcome, *pendingPut) {
-		fo.Decision = auditlog.DecisionFailed
-		fo.Reason = reason
-		return fo, nil
+func (o Options) prepareDerived(store *commitBuffer, src sources.Resolved, e transforms.Enricher, dbPath string, d transforms.Derived) fileResult {
+	r := fileResult{outcome: FileOutcome{SourceID: src.ID, NativePath: d.NativePath, BytesIn: int64(len(d.Payload)), Derived: true}}
+	fo := &r.outcome
+	fail := func(reason string) fileResult {
+		fo.Decision, fo.Reason = auditlog.DecisionFailed, reason
+		return r
 	}
-
-	key := Key{
-		SourceID:   src.ID,
-		NativePath: d.NativePath,
-	}
-	fp, seen := store.Get(key)
 
 	// Determinism supplies the change signal: an unchanged output hash means nothing to upload.
-	if seen && fp.OutputHash == d.OutputHash && fp.SourceHash != "" {
-		fo.Decision = auditlog.DecisionUnchanged
-		fo.Reason = "enricher output hash unchanged"
-		return fo, nil
+	if fp, seen := store.Get(Key{SourceID: src.ID, NativePath: d.NativePath}); seen && fp.OutputHash == d.OutputHash && fp.SourceHash != "" {
+		fo.Decision, fo.Reason = auditlog.DecisionUnchanged, "enricher output hash unchanged"
+		return r
 	}
 
 	res, err := scrubSource(src, d.Payload, true, o.scrub, o.scrubErr)
 	if err != nil {
 		return fail("scrub failed closed on derived payload: " + err.Error())
 	}
-
 	relPath := d.NativePath
 	if src.Root != "" && strings.HasPrefix(relPath, src.Root) {
 		relPath = strings.TrimPrefix(strings.TrimPrefix(relPath, src.Root), string(filepath.Separator))
 	}
-	objectKey, err := o.mirrorKey(src.ID, relPath)
-	if err != nil {
+	if fo.ObjectKey, err = o.mirrorKey(src.ID, relPath); err != nil {
 		return fail(err.Error())
 	}
-	fo.ObjectKey = objectKey
 
 	sourceHash := transforms.Hash(d.Payload)
 	ref := &EnricherRef{ID: e.ID(), Version: e.Version()}
-
-	m := o.baseManifest(src, d.NativePath)
-	m.SourceHash = sourceHash
-	m.ShapeSniff = string(sources.SniffOK)
-
+	m := o.baseManifest(src, d.NativePath, sourceHash, res)
 	// What makes this object distrustable: downstream cannot regenerate the DB-side fields.
 	m.Derived = true
 	m.Enricher = ref
 	m.DerivedFrom = d.DerivedFrom
 	m.EnrichStatus = string(d.Status)
 	m.EnrichMismatches = d.Mismatches
-	// The explained shortfalls, so a partial-but-ok object is identifiable without
-	// parsing flush notes. omitempty keeps a complete object's manifest as it was.
 	m.EnrichRepeats = d.Repeats
 	m.EnrichTail = d.Tail
 	m.EnrichAmbiguous = d.Ambiguous
@@ -211,15 +156,6 @@ func (o Options) prepareDerived(
 		Keyspaces:  d.DBKeyspaces,
 		RowsRead:   d.DBRowsRead,
 	}
-	if src.Scrub == nil || *src.Scrub {
-		m.Redaction = &transforms.RedactionSummary{
-			Density:  res.Density(),
-			RuleHits: res.RuleHits,
-		}
-	}
-
-	pending = o.sealPrepared(&fo, m, res.Out, Fingerprint{
-		SourceHash: sourceHash, OutputHash: d.OutputHash, Enricher: ref,
-	})
-	return fo, pending
+	r.pending = o.sealPrepared(fo, m, res.Out, Fingerprint{SourceHash: sourceHash, OutputHash: d.OutputHash, Enricher: ref})
+	return r
 }

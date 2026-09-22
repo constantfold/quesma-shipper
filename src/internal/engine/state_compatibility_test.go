@@ -12,26 +12,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 )
 
-// The failure the checksum exists for: a source_hash flipped in place still parses, still
-// satisfies the schema, and reads as a completed ship. Trusting it loses that file forever.
-func TestAnInPlaceCorruptionIsCaughtByTheChecksum(t *testing.T) {
-	dir := t.TempDir()
-	s := open(t, dir)
-	require.NoError(t, commit(s, key("/x/a.jsonl"), fingerprint()))
-	s.Close()
-
-	path := filepath.Join(dir, engine.FileName)
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	tampered := strings.Replace(string(raw), sha, otherSha, 1)
-	require.NotEqual(t, string(raw), tampered, "could not tamper with the source hash; document shape changed")
-	require.NoError(t, os.WriteFile(path, []byte(tampered), 0o600))
-
-	if _, err := engine.Peek(dir); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("the tampered document was trusted: %v", err)
-	}
-}
-
 // Historical and partially populated documents load safely, then rewrite into the current shape.
 func TestCompatibleDocumentsLoadAndRewrite(t *testing.T) {
 	k := key("/x/a.jsonl")

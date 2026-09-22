@@ -5,19 +5,17 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// fold is the only place a result touches the report, store, audit log and progress stream.
+// fold is the only place a raw result touches the report, store, audit log and progress stream.
 func (p *sourcePass) fold(r fileResult) {
 	p.store.applyIntent(&r)
-	// Only the first refusal or unavailable verdict is counted, or rep.Failed becomes a function
-	// of GOMAXPROCS. The duplicates' intents still apply: one may have shipped before the refusal.
+	// Only the first refusal or unavailable verdict counts, or rep.Failed becomes a function of
+	// GOMAXPROCS. The duplicates' intents still apply: one may have shipped before the refusal.
 	if (r.outcome.Fatal && p.fatal) || (r.unavailable && p.uploadHalted) {
 		return
 	}
-
 	if r.loadWarning != "" {
 		p.out.Unreadable++
-		p.out.UnreadableReason = r.loadWarning
-		p.out.Reason = r.loadWarning
+		p.out.UnreadableReason, p.out.Reason = r.loadWarning, r.loadWarning
 	}
 	p.slots[r.idx] = r.outcome
 	p.units[r.idx] = r.unit
@@ -38,25 +36,20 @@ func (p *sourcePass) fold(r fileResult) {
 		p.rep.Failed++
 	}
 
+	// A stop gets no progress line and no per-file entry; the pass writes one at the end.
 	if r.outcome.Fatal {
-		// The refusal gets no progress line and no per-file entry; the pass writes one at the end.
-		p.fatal = true
-		p.fatalReason = r.outcome.Reason
+		p.fatal, p.fatalReason = true, r.outcome.Reason
 		return
 	}
 	if r.unavailable {
-		// Latched on the loop thread, so the admission gate and accumulator see it on the next turn.
-		p.uploadHalted = true
-		p.haltReason = r.outcome.Reason
+		p.uploadHalted, p.haltReason = true, r.outcome.Reason
 		return
 	}
 
 	if p.o.Progress != nil {
-		// done counts decisions, not positions: still monotonic, and still ends at total.
 		p.o.Progress(p.src.ID, p.decided, len(p.disc.Candidates), r.outcome)
 	}
-	// Elided into one aggregate entry: a line per unchanged file grows the log at scan rate.
-	// Only files the run never OPENED are elided; reading one is doing something worth a line.
+	// Files the run never opened are elided into one aggregate entry; reading one is worth a line.
 	if r.outcome.Decision == auditlog.DecisionUnchanged && r.outcome.BytesIn == 0 {
 		p.unchangedElided++
 		return
@@ -73,8 +66,7 @@ func (p *sourcePass) fold(r fileResult) {
 	})
 }
 
-// stageUpload puts one sealed object into the authorization accumulator, which sends the group when
-// the next object would take it past either bound. A true final means the result was decided here.
+// stageUpload adds a sealed object to the accumulator; a true final means it was decided here.
 func (p *sourcePass) stageUpload(r fileResult) (res fileResult, final bool) {
 	if p.fatal || p.uploadHalted {
 		return p.abandon(r), true
@@ -85,7 +77,7 @@ func (p *sourcePass) stageUpload(r fileResult) (res fileResult, final bool) {
 
 // drainStaged empties the accumulator once the run has stopped uploading.
 func (p *sourcePass) drainStaged() []fileResult {
-	if p.staged.len() == 0 || (!p.fatal && !p.uploadHalted) {
+	if !p.fatal && !p.uploadHalted {
 		return nil
 	}
 	items := p.staged.take()
@@ -93,6 +85,20 @@ func (p *sourcePass) drainStaged() []fileResult {
 		items[i] = p.abandon(it)
 	}
 	return items
+}
+
+// abandon is a sealed object the pass will not send. Nothing commits, so the next run prepares it again.
+func (p *sourcePass) abandon(r fileResult) fileResult {
+	r.pending = nil
+	r.outcome.Decision = auditlog.DecisionFailed
+	r.outcome.Fatal = p.fatal
+	// The non-fatal case is marked as a halt, so fold suppresses its duplicates too.
+	r.unavailable = !p.fatal
+	r.outcome.Reason = "not attempted: " + p.haltReason
+	if p.fatal {
+		r.outcome.Reason = "not attempted: this install's credentials were refused"
+	}
+	return r
 }
 
 // assemble moves the slots into the source outcome in candidate order; unfilled ones never decided.

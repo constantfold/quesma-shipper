@@ -140,7 +140,7 @@ func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
 				assert.Equal(t, fatal, result.outcome.Fatal)
 				assert.Equal(t, !fatal, result.unavailable)
 			}
-			assert.Zero(t, p.staged.len())
+			assert.Empty(t, p.staged.items)
 		})
 	}
 }

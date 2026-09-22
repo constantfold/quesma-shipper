@@ -8,30 +8,20 @@ import "github.com/QuesmaOrg/quesma-shipper/internal/platform/auditlog"
 type commitBuffer struct {
 	store   *Store
 	pending map[Key]Fingerprint
+	limit   int
 
-	// staleSpecs masks sources whose stored spec differs, set by PreviewSpec on dry-run only:
-	// preview must persist nothing, so it hides entries instead of dropping them.
+	// staleSpecs masks sources whose stored spec differs, on preview only, which persists nothing.
 	staleSpecs map[string]bool
-
-	// limit bounds both the crash window and the memory held.
-	limit int
 }
-
-const defaultCommitBatch = 200
 
 func newCommitBuffer(store *Store, limit int) *commitBuffer {
 	if limit <= 0 {
-		limit = defaultCommitBatch
+		limit = 200
 	}
-	return &commitBuffer{
-		store:   store,
-		pending: make(map[Key]Fingerprint),
-		limit:   limit,
-	}
+	return &commitBuffer{store: store, pending: map[Key]Fingerprint{}, limit: limit, staleSpecs: map[string]bool{}}
 }
 
-// Get reads through the buffer: a fingerprint committed earlier in this run but not yet flushed
-// is still the truth about what shipped.
+// Get reads through the buffer: an unflushed commit is still the truth about what shipped.
 func (b *commitBuffer) Get(k Key) (Fingerprint, bool) {
 	if b.staleSpecs[k.SourceID] {
 		return Fingerprint{}, false
@@ -40,14 +30,6 @@ func (b *commitBuffer) Get(k Key) (Fingerprint, bool) {
 		return fp, true
 	}
 	return b.store.Get(k)
-}
-
-func (b *commitBuffer) Commit(k Key, fp Fingerprint) error {
-	b.pending[k] = fp
-	if len(b.pending) >= b.limit {
-		return b.Flush()
-	}
-	return nil
 }
 
 // Flush makes everything buffered durable in one document replacement.
@@ -62,8 +44,6 @@ func (b *commitBuffer) Flush() error {
 	return nil
 }
 
-// The rest of the store's surface passes straight through; none of it has anything to batch.
-
 func (b *commitBuffer) EnsureSpec(sourceID, specFingerprint string) (int, error) {
 	if err := b.Flush(); err != nil {
 		return 0, err
@@ -71,19 +51,16 @@ func (b *commitBuffer) EnsureSpec(sourceID, specFingerprint string) (int, error)
 	return b.store.EnsureSpec(sourceID, specFingerprint)
 }
 
-// PreviewSpec is EnsureSpec's dry-run counterpart: it persists nothing and drops nothing, but
-// masks a source whose stored spec differs, so preview reports the same would-ship as a sync.
+// PreviewSpec is EnsureSpec for preview: it masks a source whose stored spec differs rather than
+// dropping it, so preview reports the same would-ship as a sync.
 func (b *commitBuffer) PreviewSpec(sourceID, specFingerprint string) {
-	if stored, known := b.store.SpecFor(sourceID); known && stored != specFingerprint {
-		if b.staleSpecs == nil {
-			b.staleSpecs = map[string]bool{}
-		}
+	if stored, known := b.store.specs[sourceID]; known && stored != specFingerprint {
 		b.staleSpecs[sourceID] = true
 	}
 }
 
-// DropVanished forwards the GC, flushing first: a pending commit for a file the walk did not see
-// would otherwise be written back immediately after being forgotten.
+// DropVanished flushes first: a pending commit for a file the walk did not see would otherwise be
+// written back right after being forgotten.
 func (b *commitBuffer) DropVanished(sourceID string, live map[string]bool) (int, error) {
 	if err := b.Flush(); err != nil {
 		return 0, err
@@ -91,20 +68,23 @@ func (b *commitBuffer) DropVanished(sourceID string, live map[string]bool) (int,
 	return b.store.DropVanished(sourceID, live)
 }
 
-// applyIntent makes a result durable. A failed commit rewrites the outcome BEFORE fold counts it,
+// applyIntent makes a result durable. A failed commit rewrites the outcome before fold counts it,
 // so "shipped but the record was lost" reads as failed.
 func (b *commitBuffer) applyIntent(r *fileResult) {
 	if r.intent.kind == intentNone {
 		return
 	}
-	err := b.Commit(r.intent.key, r.intent.fp)
+	b.pending[r.intent.key] = r.intent.fp
+	if len(b.pending) < b.limit {
+		return
+	}
+	err := b.Flush()
 	if err == nil {
 		return
 	}
 	switch r.intent.kind {
 	case intentRefresh:
-		r.outcome.Decision = auditlog.DecisionFailed
-		r.outcome.Reason = err.Error()
+		r.outcome.Decision, r.outcome.Reason = auditlog.DecisionFailed, err.Error()
 	case intentShipped:
 		r.outcome.Decision = auditlog.DecisionFailed
 		r.outcome.Reason = "upload succeeded but commit failed: " + err.Error()

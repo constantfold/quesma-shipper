@@ -13,38 +13,42 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/platform"
 )
 
-// preview computes everything that would leave the machine and does neither upload nor commit.
-func TestPreviewUploadsNothingAndCommitsNothing(t *testing.T) {
+// Preview computes everything that would leave the machine, and neither authorizes nor commits.
+func TestPreviewAuthorizesNothingAndCommitsNothing(t *testing.T) {
 	f := newFixture(t)
-	f.writeTranscript("p/s1.jsonl", line1)
+	f.writeTranscripts("p/d%02d.jsonl", 3)
 
-	rep := f.runDry()
+	rep := f.run(dryRun)
 
-	assert.Equalf(t, 1, rep.Shipped, "preview should report what would ship: %+v", rep)
-	assert.Len(t, f.port.keys(), 0, "preview uploaded something")
+	assert.Equalf(t, 3, rep.Shipped, "preview should report what would ship: %+v", rep)
+	assert.Empty(t, f.port.sizes(), "preview authorized something")
 	assert.Equal(t, 0, f.store.Len(), "preview committed state")
-
-	// The plan must carry the real object key and redaction figures, or it previews nothing.
-	file := rep.Sources[0].Files[0]
-	assert.NotEqual(t, "", file.ObjectKey, "preview should report the object key that would be used")
-	assert.NotEqual(t, int64(0), file.BytesOut, "preview should report the sealed size")
+	// The plan must carry the real object key and sealed size, or it previews nothing.
+	for _, file := range rep.Sources[0].Files {
+		assert.NotEqual(t, "", file.ObjectKey, "preview should report the object key that would be used")
+		assert.NotEqual(t, int64(0), file.BytesOut, "preview should report the sealed size")
+	}
 }
 
-func TestMaxFilesPerRunIsReportedNotSilent(t *testing.T) {
+// Budget is reserved at admission, so parallel files cannot overshoot it; the rest arrive next
+// tick, and the drain ignores the bound because a backlog left behind at shutdown is data loss.
+func TestMaxFilesPerRunAndTheDrain(t *testing.T) {
 	f := newFixture(t)
-	for _, p := range []string{"p/a.jsonl", "p/b.jsonl", "p/c.jsonl", "p/d.jsonl"} {
-		f.writeTranscript(p, line1)
-	}
+	f.writeTranscripts("p/s%d.jsonl", 7)
 	f.eff.MaxFilesPerRun = 2
 
-	rep := f.run()
-	assert.Equalf(t, 2, rep.Shipped, "expected the run to stop at 2, got %d", rep.Shipped)
-	assert.True(t, rep.Truncated, "a truncated run must say so")
+	for tick := 1; tick <= 2; tick++ {
+		rep := f.run(workers(8, 0))
+		assert.Equalf(t, 2, rep.Shipped, "tick %d: budget 2 shipped %d files", tick, rep.Shipped)
+		assert.True(t, rep.Truncated, "a truncated run must say so")
+		assert.Len(t, f.port.keys(), 2*tick)
+	}
 
-	// The rest arrive on the next tick: a bound is a catch-up, not a loss.
-	rep2 := f.run()
-	assert.Equalf(t, 2, rep2.Shipped, "the remaining files should ship next tick, got %d", rep2.Shipped)
-	assert.Lenf(t, f.port.keys(), 4, "expected 4 objects, got %d", len(f.port.keys()))
+	f.reopen()
+	drained := f.run(func(o *engine.Options) { o.Unbounded = true })
+	assert.False(t, drained.Truncated, "the drain reported itself truncated: the bound still applied")
+	assert.Equal(t, 3, drained.Shipped, "the drain must ship everything that was left")
+	assert.Equal(t, 4, drained.Unchanged, "the already-shipped files must be recognised as unchanged")
 }
 
 func TestDisabledSourceIsNotCollected(t *testing.T) {
@@ -100,7 +104,7 @@ func TestPauseLifecycle(t *testing.T) {
 				assert.Empty(t, doc.Entries, "paused runs must not consume the backlog")
 			}
 
-			preview := f.runDry()
+			preview := f.run(dryRun)
 			assert.False(t, preview.Paused)
 			assert.Equal(t, 1, preview.Shipped)
 			assert.Empty(t, f.port.keys())
@@ -112,23 +116,4 @@ func TestPauseLifecycle(t *testing.T) {
 			assert.Equal(t, 1, rep.Shipped, "resume must collect the held backlog")
 		})
 	}
-}
-
-// The drain ignores max_files_per_run: it runs when the host is about to disappear, and with no
-// spool a backlog left behind is data loss rather than a catch-up next tick.
-func TestDrainIgnoresTheMaxFilesPerRunBound(t *testing.T) {
-	f := newFixture(t)
-	f.eff.MaxFilesPerRun = 2
-	f.writeTranscripts("p/s%d.jsonl", 7)
-
-	bounded := f.run()
-	require.Truef(t, bounded.Truncated, "a bound of 2 did not truncate 7 files: %+v", bounded)
-	require.Truef(t, bounded.Shipped <= 2, "the bound was not applied: shipped %d", bounded.Shipped)
-
-	f.reopen()
-	drained := f.runUnbounded()
-	assert.True(t, !drained.Truncated, "the drain reported itself truncated: the bound still applied")
-	// Everything that was left, in one pass.
-	assert.Truef(t, drained.Shipped >= 5, "the drain shipped %d of the remaining files", drained.Shipped)
-	assert.NotEqual(t, 0, drained.Unchanged, "the already-shipped files were re-shipped rather than recognised as unchanged")
 }

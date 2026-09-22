@@ -20,48 +20,28 @@ type pendingPut struct {
 	objectKey string
 	obj       []byte
 	md        map[string]string
-
-	// next is the fingerprint a successful PUT commits; fresh rather than copied, so Attempts resets.
-	next Fingerprint
+	next      Fingerprint // committed on a successful PUT; fresh, so Attempts resets
 }
 
 // prepareFile reads, scrubs and seals; a result with pending set still needs an upload.
-func (o Options) prepareFile(
-	ctx context.Context,
-	job fileJob,
-	src sources.Resolved,
-	disc sources.Discovery,
-	staging bool,
-) (res fileResult) {
+func (o Options) prepareFile(ctx context.Context, job fileJob, src sources.Resolved, disc sources.Discovery, staging bool) fileResult {
 	cand := disc.Candidates[job.idx]
-	res = fileResult{idx: job.idx}
+	res := fileResult{idx: job.idx, outcome: FileOutcome{SourceID: src.ID, NativePath: cand.Path, RelPath: cand.RelPath}}
 	out := &res.outcome
-	*out = FileOutcome{
-		SourceID:   src.ID,
-		NativePath: cand.Path,
-		RelPath:    cand.RelPath,
-	}
-
-	key := Key{
-		SourceID:   src.ID,
-		NativePath: cand.Path,
-	}
+	key := Key{SourceID: src.ID, NativePath: cand.Path}
 	fp, seen := job.fp, job.seen
 
-	// A parked entry waits out its backoff. Never an unconditional retry.
 	if fp.Parked && o.Now().Before(fp.BackoffUntil) {
 		out.Decision = auditlog.DecisionSkipped
 		out.Reason = "parked until " + fp.BackoffUntil.Format(time.RFC3339) + ": " + fp.LastError
 		return res
 	}
 
-	// Cheap pre-filter on size and mtime only: mtime alone re-ships byte-identical files, so the
-	// content hash below stays the authority. A non-empty SourceHash marks a committed ship. A
-	// staged file changed within the recompute window is still read, for its enricher.
+	// Cheap pre-filter; the content hash below stays the authority. A non-empty SourceHash marks a
+	// committed ship. A staged file changed within the recompute window is still read, for its enricher.
 	if seen && fp.SourceSize == cand.Size && fp.SourceMTime.Equal(cand.MTime) && fp.SourceHash != "" &&
 		!(staging && o.Now().Sub(cand.MTime) < recomputeWindow) {
-		out.Decision = auditlog.DecisionUnchanged
-		out.Reason = "size and mtime unchanged"
+		out.Decision, out.Reason = auditlog.DecisionUnchanged, "size and mtime unchanged"
 		return res
 	}
 
@@ -71,36 +51,22 @@ func (o Options) prepareFile(
 		return res
 	}
 	raw, mtime := payload.Bytes, payload.MTime
-	res.loadWarning = payload.Warning
-	out.Reason = payload.Warning
+	res.loadWarning, out.Reason = payload.Warning, payload.Warning
 	out.BytesIn = int64(len(raw))
 	sourceHash := transforms.Hash(raw)
 
 	// The enricher sees exactly the bytes that shipped, never a file it re-opened mid-append.
 	if staging {
-		res.unit = &transforms.RawUnit{
-			NativePath: cand.Path,
-			Content:    raw,
-			SourceHash: sourceHash,
-		}
+		res.unit = &transforms.RawUnit{NativePath: cand.Path, Content: raw, SourceHash: sourceHash}
 	}
 
-	// The content hash is the authority: an mtime-only change refreshes the stat and ships nothing.
+	// An mtime-only change refreshes the stat and ships nothing.
 	if seen && sourceHash == fp.SourceHash {
-		out.Decision = auditlog.DecisionUnchanged
-		out.Reason = "content hash unchanged"
+		out.Decision, out.Reason = auditlog.DecisionUnchanged, "content hash unchanged"
 		if !o.DryRun {
-			refreshed := fp
-			refreshed.SourceSize = cand.Size
-			refreshed.SourceMTime = cand.MTime
-			// Whatever parked this entry is over: the read just succeeded and its hash matches a
-			// hash only a completed ship could have written. Carrying the flag forward reports a
-			// healthy file as parked for good, and re-reads it every tick, since the backoff it
-			// would wait on has already expired.
-			refreshed.Parked = false
-			refreshed.LastError = ""
-			refreshed.BackoffUntil = time.Time{}
-			refreshed.Attempts = 0
+			// Clears any park: the read succeeded and its hash matches one only a completed ship wrote.
+			refreshed := Fingerprint{SourceSize: cand.Size, SourceMTime: cand.MTime, SourceHash: fp.SourceHash,
+				Enricher: fp.Enricher, OutputHash: fp.OutputHash}
 			res.intent = intent{kind: intentRefresh, key: key, fp: refreshed}
 		}
 		return res
@@ -114,26 +80,28 @@ func (o Options) prepareFile(
 	jsonl := src.Sniff != nil && src.Sniff.Kind == "jsonl"
 	scrubbed, err := scrubSource(src, raw, jsonl, o.scrub, o.scrubErr)
 	if err != nil {
-		// Fail closed: a scrub-ENGINE error means this file does not upload.
 		failAndBackOff(o, &res, key, fp, "scrub failed closed: "+err.Error())
 		return res
 	}
-	out.Density = scrubbed.Density()
-	out.RuleHits = scrubbed.RuleHits
-	raw = nil
+	out.Density, out.RuleHits = scrubbed.Density(), scrubbed.RuleHits
 
 	objectKey, err := o.mirrorKey(src.ID, cand.RelPath)
 	if err != nil {
-		out.Decision = auditlog.DecisionFailed
-		out.Reason = err.Error()
+		out.Decision, out.Reason = auditlog.DecisionFailed, err.Error()
 		return res
 	}
 	out.ObjectKey = objectKey
 
-	manifest := o.manifestFor(src, cand, disc, sourceHash, mtime, scrubbed)
-	res.pending = o.sealPrepared(out, manifest, scrubbed.Out, Fingerprint{
-		SourceSize: cand.Size, SourceMTime: cand.MTime, SourceHash: sourceHash,
-	})
+	m := o.baseManifest(src, cand.Path, sourceHash, scrubbed)
+	m.PayloadMTime = &mtime
+	m.AgentVersion = disc.AgentVersion
+	if m.Redaction != nil {
+		m.Redaction.ScanMode = scrubbed.ScanMode
+	}
+	if disc.Sniff != "" {
+		m.ShapeSniff = string(disc.Sniff)
+	}
+	res.pending = o.sealPrepared(out, m, scrubbed.Out, Fingerprint{SourceSize: cand.Size, SourceMTime: cand.MTime, SourceHash: sourceHash})
 	return res
 }
 
@@ -163,29 +131,21 @@ func (o Options) sealPrepared(out *FileOutcome, m transforms.Manifest, payload [
 	}
 }
 
-// keySpread is a cheap stable hash of a state key, used only to separate backoff wakeups.
-func keySpread(k Key) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(k.SourceID))
-	_, _ = h.Write([]byte(k.NativePath))
-	return h.Sum64()
-}
-
-// failAndBackOff parks a file: the decision is "parked" rather than "failed" because parked is what
-// the counter and the heartbeat read. There is no attempt limit: giving up silently loses data.
+// failAndBackOff parks a file: "parked" rather than "failed" because parked is what the counter and
+// the heartbeat read. There is no attempt limit: giving up silently loses data.
 func failAndBackOff(o Options, res *fileResult, key Key, fp Fingerprint, reason string) {
-	res.outcome.Decision = auditlog.DecisionParked
-	res.outcome.Reason = reason
+	res.outcome.Decision, res.outcome.Reason = auditlog.DecisionParked, reason
 	if o.DryRun {
 		return
 	}
-	attempts := fp.Attempts + 1
 	next := fp
-	next.Attempts = attempts
-	next.Parked = true
-	next.LastError = reason
+	next.Attempts++
+	next.Parked, next.LastError = true, reason
 	// Spread by the file's own key so correlated failures do not all wake in the same second.
-	next.BackoffUntil = o.Now().Add(backoffFor(attempts, keySpread(key)))
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key.SourceID))
+	_, _ = h.Write([]byte(key.NativePath))
+	next.BackoffUntil = o.Now().Add(backoffFor(next.Attempts, h.Sum64()))
 	res.intent = intent{kind: intentBackoff, key: key, fp: next}
 }
 
@@ -197,4 +157,11 @@ func scrubSource(src sources.Resolved, raw []byte, jsonl bool, scrubber *transfo
 		return transforms.Result{}, scrubErr
 	}
 	return scrubber.Scrub(raw, transforms.Hint{Family: src.Family, JSONL: jsonl})
+}
+
+// backoffFor is a minute, doubling, capped at an hour, less up to 12.5% jitter derived from spread
+// rather than rand, so runs stay reproducible and the cap stays a ceiling.
+func backoffFor(attempt int, spread uint64) time.Duration {
+	d := min(time.Minute<<min(attempt, 8), time.Hour)
+	return d - time.Duration(spread%9)*d/64
 }

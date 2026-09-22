@@ -45,13 +45,13 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, err)
 
 	f := &fixture{t: t, home: home, stateDir: stateDir, port: newPort(), unit: unit, log: log}
-	f.eff = f.effective(nil)
+	f.eff = f.effective()
 	f.reopen()
 	return f
 }
 
 // effective builds a resolved config over a Claude-Code-shaped store, skipping the file layers.
-func (f *fixture) effective(extraSources []sources.Resolved) *config.Effective {
+func (f *fixture) effective() *config.Effective {
 	root := filepath.Join(f.home, ".claude")
 	src := sources.Resolved{
 		Source: sources.Source{
@@ -75,7 +75,7 @@ func (f *fixture) effective(extraSources []sources.Resolved) *config.Effective {
 			"claude-code": {"uuid", "parentUuid", "sessionId"},
 			"*":           {"timestamp", "version"},
 		},
-		Sources:    append([]sources.Resolved{src}, extraSources...),
+		Sources:    []sources.Resolved{src},
 		Deny:       sources.New(f.home),
 		Provenance: map[string]config.Origin{},
 	}
@@ -132,41 +132,27 @@ func (f *fixture) countStateWrites(fn func()) int {
 
 func (f *fixture) run(adjust ...func(*engine.Options)) engine.Report {
 	f.t.Helper()
-	o := f.opts()
-	for _, fn := range adjust {
-		fn(&o)
-	}
-	return f.runWith(o)
-}
-
-func (f *fixture) runWith(o engine.Options) engine.Report {
-	f.t.Helper()
-	rep, err := engine.Run(context.Background(), f.store, o)
+	rep, err := f.try(adjust...)
 	require.NoErrorf(f.t, err, "run: %v", err)
 	return rep
 }
 
-// wipeState is state loss: the fingerprint file gone, everything on the store intact.
-func (f *fixture) wipeState() {
-	f.t.Helper()
-	f.store.Close()
-	require.NoError(f.t, os.Remove(filepath.Join(f.stateDir, engine.FileName)))
-	f.reopen()
+// try is run for a test that expects the run to fail.
+func (f *fixture) try(adjust ...func(*engine.Options)) (engine.Report, error) {
+	o := f.opts()
+	for _, fn := range adjust {
+		fn(&o)
+	}
+	return engine.Run(context.Background(), f.store, o)
 }
 
-// runDry is preview: read, scrub and seal, but neither upload nor commit.
-func (f *fixture) runDry() engine.Report {
+func (f *fixture) runWith(o engine.Options) engine.Report {
 	f.t.Helper()
-	return f.run(func(o *engine.Options) { o.DryRun = true })
+	return f.run(func(opts *engine.Options) { *opts = o })
 }
 
-// runUnbounded is the drain: max_files_per_run does not apply.
-func (f *fixture) runUnbounded() engine.Report {
-	f.t.Helper()
-	return f.run(func(o *engine.Options) { o.Unbounded = true })
-}
+func dryRun(o *engine.Options) { o.DryRun = true }
 
-// engineFixedTime is the fixture's clock, so pause timestamps are not wall-clock dependent.
 func engineFixedTime() time.Time { return time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC) }
 
 func (f *fixture) writeTranscript(rel, body string) string {
@@ -177,27 +163,9 @@ func (f *fixture) writeTranscript(rel, body string) string {
 	return path
 }
 
-func (f *fixture) appendTranscript(rel, body string) {
-	f.t.Helper()
-	path := filepath.Join(f.home, ".claude", "projects", rel)
-	fh, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-	require.NoError(f.t, err)
-	defer fh.Close()
-	if _, err := fh.WriteString(body); err != nil {
-		f.t.Fatal(err)
-	}
-}
-
 const line1 = `{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/Users/jane/work/api","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n"
 
 const line2 = `{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"s1","message":{"content":[{"type":"text","text":"world"}]}}` + "\n"
-
-func statMTime(t *testing.T, path string) time.Time {
-	t.Helper()
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	return info.ModTime()
-}
 
 func snapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
