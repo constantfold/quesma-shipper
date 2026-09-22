@@ -40,12 +40,10 @@ const (
 const (
 	// How toxiproxy reaches MinIO; there is no host-mapped alternative, which is the point.
 	minioUpstream = "minio:9000"
-
 	// The shipper's listener and the harness's: any ports but 8474, which is the API.
 	proxyListenPort  = "8666"
 	adminListenPort  = "8667"
 	toxiproxyAPIPort = "8474"
-
 	// Separate label sets in the metrics, so the byte counters answer for the shipper alone.
 	storeProxyName = "minio"
 	adminProxyName = "minio-admin"
@@ -53,23 +51,16 @@ const (
 
 var (
 	minioCtr *tcminio.MinioContainer
+	adminS3  *awss3.Client // over the unshaped admin proxy, off the shipper's counters
 
-	// Lists over the unshaped admin proxy, so its traffic never lands on the shipper's counters.
-	adminS3 *awss3.Client
-
-	// The shipper's route: the origin every ticket is presigned against.
-	storeEndpoint string
-
-	// The one bucket this tier writes to; worlds are separated by install root, not by bucket.
-	perfBucket string
+	storeEndpoint string // the shipper's route: the origin every ticket is presigned against
+	perfBucket    string // the one bucket; worlds are separated by install root
 
 	toxi       *toxiproxy.Client
 	storeProxy *toxiproxy.Proxy
 
 	// The proxy's control API, its exposition page, and MinIO's own.
-	toxiAPIURL      string
-	metricsURL      string
-	minioMetricsURL string
+	toxiAPIURL, metricsURL, minioMetricsURL string
 )
 
 func TestMain(m *testing.M) {

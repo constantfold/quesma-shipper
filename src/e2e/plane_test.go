@@ -32,8 +32,7 @@ type authorizeRequest struct {
 	} `json:"objects"`
 }
 
-// fakePlane authenticates the device signature before reading a single object field, which is the
-// order the real service is specified in.
+// fakePlane checks the device signature before reading any object field, as the real service is specified.
 type fakePlane struct {
 	server *httptest.Server
 	store  *fakeStore
@@ -59,7 +58,6 @@ func startFakePlane(t *testing.T, store *fakeStore, pub ed25519.PublicKey) *fake
 	return p
 }
 
-// Changes what the plane answers, under its lock.
 func (p *fakePlane) set(change func(p *fakePlane)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

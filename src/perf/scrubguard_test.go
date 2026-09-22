@@ -25,15 +25,13 @@ const scrubGuardSecretEveryLines = 2
 // Cold repetitions the CPU minimum is taken over.
 const scrubGuardReps = 3
 
-// PROVISIONAL, and 1.3x the observed ceiling only because the CPU figure is a minimum of cold runs and
-// the memory one is measured for this uncapped scenario. Loosening either to pass is not an option.
+// PROVISIONAL: 1.3x the observed ceilings (CPU a minimum of cold runs, memory uncapped). Never loosen to pass.
 const (
 	scrubGuardCPUBudget       = 0.95      // seconds: 1.3x the 0.699 s runner ceiling
 	scrubGuardBudget    int64 = 272 << 20 // bytes: 1.3x the 218 MB worst
 )
 
-// No cgroup and no GOMEMLIMIT: a soft limit buys collector CPU, the number read here, and a capped
-// run's rusage would describe the sudo and systemd-run wrappers.
+// Uncapped: GOMEMLIMIT buys collector CPU, and a capped run's rusage would describe the sudo wrappers.
 func smokeScrubGuard(t *testing.T) {
 	t.Run("S5-scrub-cpu-guard", func(t *testing.T) {
 		w := stageSmokeWorld(t)

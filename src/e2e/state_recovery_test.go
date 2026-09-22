@@ -31,10 +31,8 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	appendLine(t, grown, grownLine)
 	require.NoError(t, os.WriteFile(filepath.Join(statePath(w), engine.FileName), []byte("this is not a document\n"), 0o600))
 	runOneShot(t)
-	w.plane.assertClean(t)
 
-	// Both commit: the plane answered for the unchanged one and the grown one was PUT, so
-	// the unchanged key keeps its single version.
+	// Both commit: the plane answered for the unchanged one, which keeps its single version.
 	assert.Equal(t, 2, shippedClaude(t, w))
 	present := w.plane.answeredPresent()
 	for _, o := range mirrorObjects(collect(t, w)) {
@@ -47,10 +45,15 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 		assert.NotEqual(t, slices.Contains(present, o.Key), changed)
 	}
 
-	// The replacement document loads, and the next run trusts it: nothing to send.
+	// The replacement document loads, and the next run trusts it: nothing to send but the heartbeat,
+	// which is current state and rewritten every run.
 	_, peekErr := engine.Peek(statePath(w))
 	require.NoErrorf(t, peekErr, "the replacement document does not load: %v", peekErr)
+	puts, beats := len(w.store.mirrorPuts()), len(w.store.heartbeats())
 	out := runOneShot(t)
-	assert.Equal(t, 0, shippedClaude(t, w))
+	assert.Len(t, shippedFromLog(t, w), 0)
 	assert.NotEqual(t, 0, summary(t, out)["unchanged"])
+	assert.Equal(t, puts, len(w.store.mirrorPuts()))
+	assert.Equal(t, beats+1, len(w.store.heartbeats()))
+	w.plane.assertClean(t)
 }

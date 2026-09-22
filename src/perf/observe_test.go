@@ -57,8 +57,7 @@ func (o childObservation) exitStatus() string {
 	}
 }
 
-// Two shapes, because a wrapper reports its child's death the way a shell does, as 128 plus the
-// signal. A syncTimeout kill looks identical from here, so a scenario reads TimedOut first.
+// A wrapper reports a child's SIGKILL as exit 128+9; a syncTimeout kill looks identical, so check TimedOut first.
 func (o childObservation) Killed() bool {
 	return o.Signal == syscall.SIGKILL || o.ExitCode == 128+int(syscall.SIGKILL)
 }
@@ -111,8 +110,7 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	return obs
 }
 
-// The returned function, called once after Wait, stops the watch: a reaped pid's numbers belong to
-// someone else. Zero where /proc is not.
+// Call the returned function once after Wait: a reaped pid's numbers belong to someone else. Zero off Linux.
 func watchPeakRSS(pid int) func() int64 {
 	if runtime.GOOS != "linux" {
 		return func() int64 { return 0 }
@@ -170,11 +168,9 @@ func peakVmHWM(pid int) int64 {
 	return peak
 }
 
-// Touching the budget is a failure. Enforced only on Linux, where VmHWM does not depend on when the
-// harness looked; elsewhere the log says the check did not run.
+// Touching the budget fails. Enforced only on Linux, where VmHWM does not depend on when the harness looked.
 func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, budget int64) {
 	t.Helper()
-	require.Falsef(t, budget <= 0, "%s declared a memory budget of %d bytes; a budget is a positive number of bytes", scenario, budget)
 	switch {
 	case obs.PeakRSS <= 0:
 		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this check would "+
@@ -192,11 +188,10 @@ func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, 
 	}
 }
 
-// A zero budget makes no CPU claim. This runs on every platform, so it must hold on the slowest one.
+// This runs on every platform, so the budget must hold on the slowest one.
 func assertCPUUnderBudget(t *testing.T, scenario string, obs childObservation, budget float64) {
 	t.Helper()
 	switch {
-	case budget <= 0:
 	case obs.CPUSeconds <= 0:
 		t.Errorf("%s: child CPU read as %.3f seconds: the instrument is what this check would "+
 			"be passing, not the run", scenario, obs.CPUSeconds)
@@ -261,20 +256,7 @@ func TestTheHarnessObservesAChildRun(t *testing.T) {
 	assertPeakUnderBudget(t, selfTestScenario, obs, selfTestMemoryBudget)
 	assertNoResidualScratch(t, w)
 
-	recordResult(t, perfResult{
-		Scenario:          selfTestScenario,
-		CorpusFiles:       files,
-		ChildGOMAXPROCS:   w.gomaxprocs,
-		RepSeconds:        []float64{obs.Elapsed.Seconds()},
-		BestSeconds:       obs.Elapsed.Seconds(),
-		ProxiedBytesUp:    c.up,
-		ProxiedBytesDown:  c.down,
-		S3Requests:        c.requests,
-		Objects:           objects,
-		PeakRSSBytes:      obs.PeakRSS,
-		PeakRSSSource:     obs.PeakRSSSource,
-		MemoryBudgetBytes: selfTestMemoryBudget,
-		CPUSeconds:        obs.CPUSeconds,
-		ExitStatus:        obs.exitStatus(),
-	})
+	row := singleRun(obs, c, objects).row(w, selfTestScenario, files, 0, selfTestMemoryBudget)
+	row.ShapedRTTMillis = 0 // this run is unshaped
+	recordResult(t, row)
 }

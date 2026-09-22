@@ -1,10 +1,8 @@
 # Scrub performance
 
 How this package went from 1.84 to ~72 MB/s (36-41x) on real Claude Code
-transcripts with byte-identical redaction, and what must stay true to keep it
-there. This file records the numbers, the
-architecture, and the approaches that were tried and refuted, so they are not
-re-litigated later.
+transcripts with byte-identical redaction, what must stay true to keep it there,
+and the approaches that were tried and refuted, so they are not re-litigated.
 
 All throughput figures are strictly serial runs of `BenchmarkScrubRealData`
 over one frozen 256.7 MiB snapshot of `~/.claude/projects` (131 .jsonl files,
@@ -37,17 +35,15 @@ The baseline profile was 75% regexp execution. Three compounding causes:
 
 One precomputed Aho-Corasick DFA over every rule's ASCII-folded keywords plus
 the key-name stems scans each value once (`packs/prefilter.go`); rules whose
-gate did not fire never run. Typed nodes hold transitions and outputs directly;
+keywords did not fire never run. Typed nodes hold transitions and outputs directly;
 construction fills missing edges through failure links, without alphabet remapping
 or packed state/output flags. Rules that do fire mostly avoid the regexp engine
 anyway: card-pan, pesel, iban and email are hand byte-scanners
 (`packs/pii.go`, `packs/handscan.go`), and the remaining rules are matched by
 literal anchoring (`packs/anchor.go`): memchr to occurrences of the corpus
-keywords, confirm with a `\A`-anchored regex. Dispatch order is hand scanner,
-then anchored, then linear sweep. (Amended 2026-08-17: anchoring originally
-derived the required head literal from the `regexp/syntax` tree; the
-derivation was replaced by corpus `keywords`; rules with interior keywords or
-known anchoring cost cliffs declare `"sweep": true`.)
+`keywords`, confirm with a `\A`-anchored regex. Dispatch order is hand scanner,
+then anchored, then linear sweep; rules with interior keywords or known
+anchoring cost cliffs declare `"sweep": true`.
 The JSONL walk uses Go's `encoding/json/jsontext` decoder and records edits
 against the original bytes (`jsonwalk.go`). Only changed strings are quoted
 again; unchanged fields, whitespace and line endings are copied verbatim.
@@ -59,11 +55,8 @@ rounding band, precomputed logarithm table or distinct-symbol rejection floor.
 The grid scan still skips short runs; independent byte-walk and wide-histogram
 references check candidates, exact scores and threshold decisions.
 
-Keyword matching folds ASCII letter bytes and nothing else. (Amended
-2026-08-17: the DFA originally folded the two runes Unicode lowercases into
-ASCII, U+212A KELVIN SIGN and U+0130, in-scan, and U+017F widened the
-key-name gate; review judged the corner unrealistic and the handling was
-removed as an accepted narrowing.)
+Keyword matching folds ASCII letter bytes and nothing else; Unicode runes
+that lowercase into ASCII (U+212A, U+0130, U+017F) are an accepted narrowing.
 
 ## Historical CPU profile
 
@@ -99,9 +92,9 @@ Do not re-propose these without new evidence.
   position, forfeits the literal-prefix skip, and disqualifies the fast
   small-pattern engines. The one-scan idea won one layer down instead: the
   automaton is the single DFA pass, built over literals where a DFA is cheap.
-- **Unicode folding in the prefilter.** A review found a missed secret via
-  U+212A folding into the k of "token". Unicode folding was added and later
-  removed by the accepted narrowing described above; current gates fold ASCII.
+- **Unicode folding in the prefilter.** Added after a review found a secret
+  missed via U+212A folding into the k of "token", then removed as the accepted
+  narrowing above.
 - **Window-scoped regex execution.** Superseded by literal anchoring, which
   reaches the same goal with a per-rule soundness derivation instead of
   window-size heuristics.

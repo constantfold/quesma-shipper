@@ -19,8 +19,7 @@ type storeCounters struct {
 	up, down, requests int64
 }
 
-// The difference between the counters read either side of fn, since they run for the life of the
-// tier. Nothing else may talk to the store while fn runs: adminS3 lands in the same request count.
+// The counters' growth across fn; nothing else may talk to the store meanwhile, adminS3 included.
 func aroundStore(t *testing.T, fn func()) storeCounters {
 	t.Helper()
 	before, requestsBefore := settledStoreBytes(t), s3RequestCount(t)
@@ -33,14 +32,12 @@ func aroundStore(t *testing.T, fn func()) storeCounters {
 	}
 }
 
-// One reading of the shaped proxy. toxiproxy counts each link's bytes twice, once received and once
-// sent: up and down are the received counters alone, total is all four.
+// toxiproxy counts each byte once received and once sent: up and down are received only, total is all four.
 type storeBytes struct {
 	up, down, total int64
 }
 
-// Call only after the child has exited: toxiproxy accounts a link's bytes when the link closes, and
-// even then the flush trails the process, hence the poll for a value that stopped moving.
+// Only after the child exits: bytes are accounted when a link closes, and trail it, hence the settling poll.
 func proxiedBytes(t *testing.T) int64 {
 	t.Helper()
 	return settledStoreBytes(t).total
@@ -69,8 +66,7 @@ func settledStoreBytes(t *testing.T) storeBytes {
 	}
 }
 
-// Filtered to the shaped proxy by label: a sum across both would charge the shipper for every
-// assertion the harness makes about it.
+// The shaped proxy's label only, so the harness's own admin traffic is not charged to the shipper.
 func scrapeStoreBytes(t *testing.T) storeBytes {
 	t.Helper()
 	var b storeBytes
@@ -94,8 +90,7 @@ func scrapeStoreBytes(t *testing.T) storeBytes {
 // Named here because a MinIO upgrade that renamed it would report every run as zero requests.
 const s3RequestCountMetric = "minio_api_requests_total"
 
-// A running total like the byte counters, read either side of a child run. Unlike them it counts the
-// harness too, so nothing else may run between the two readings.
+// A running total that counts the harness too, so nothing else may run between two readings.
 func s3RequestCount(t *testing.T) int64 {
 	t.Helper()
 	page := scrapePage(t, minioMetricsURL)

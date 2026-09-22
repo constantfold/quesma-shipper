@@ -101,8 +101,7 @@ func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
 	return w
 }
 
-// Empties the state directory and enrolls again, making the next run a first sync. A new install id,
-// because the fingerprint document is refused under another.
+// Re-enrolls under a new install id with empty state, making the next run a first sync.
 func (w *world) reset(t *testing.T) {
 	t.Helper()
 	stateDir := filepath.Join(w.State, "trajectory-shipper")
@@ -135,8 +134,7 @@ func (w *world) reset(t *testing.T) {
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
 	})
 
-	// No send block: the destination arrives in the signed document. The proxy serves plain HTTP,
-	// which needs the opt-in, and the 64-file default would truncate the corpus.
+	// Plain HTTP needs the loopback opt-in, and the 64-file default would truncate the corpus.
 	configDir := filepath.Join(w.Config, "trajectory-shipper")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	body := "config_version: 1\n" +
@@ -225,8 +223,7 @@ func (w *world) mustSync(t *testing.T) childObservation {
 // The whole row, in the order the client prints it.
 var summaryWords = []string{"shipped", "unchanged", "skipped", "parked", "failed"}
 
-// The run's own counters: an overwritten key leaves the store's listing unchanged. Only a line
-// carrying all five words, each with a whole number, counts.
+// The run's own counters, from the one line carrying all five words with whole numbers.
 func summary(t *testing.T, out string) map[string]int {
 	t.Helper()
 lines:

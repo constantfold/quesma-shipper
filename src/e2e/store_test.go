@@ -14,8 +14,7 @@ import (
 	"testing"
 )
 
-// Path-style, the addressing a self-hosted store uses and the one whose exact-key check has a
-// prefix to get wrong.
+// Path-style: a self-hosted store's addressing, and the one whose exact-key check has a prefix to get wrong.
 const vendBucket = "trajectories"
 
 // One accepted upload: the key, the provider headers that arrived with it, and the exact bytes.
@@ -25,8 +24,7 @@ type storedPut struct {
 	Body    []byte
 }
 
-// fakeStore accepts PUTs presigned with an HMAC over the key the client cannot compute, proving the
-// issued URL arrived unaltered. Every PUT is kept; the newest under a key is what is read.
+// fakeStore accepts PUTs presigned with an HMAC the client cannot compute, proving the URL arrived unaltered.
 type fakeStore struct {
 	server *httptest.Server
 	secret []byte
@@ -129,8 +127,7 @@ func (s *fakeStore) sourceHash(key string) (string, bool) {
 	return puts[len(puts)-1].Headers["x-amz-meta-source-hash"], true
 }
 
-// The server's escaped spelling of an object key, written out rather than imported: the exact-key
-// check is only meaningful when the two sides derive it independently.
+// The server's escaped key spelling, written out so the exact-key check compares two independent derivations.
 func canonicalKeyPath(key string) string {
 	const hexDigits = "0123456789ABCDEF"
 	var b strings.Builder

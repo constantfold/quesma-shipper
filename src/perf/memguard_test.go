@@ -147,25 +147,9 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 	objects := len(w.currentKeys(t))
 
 	// Recorded before anything is judged: a breach with no row is one nobody can calibrate against.
-	recordResult(t, perfResult{
-		Scenario:          scenario,
-		CorpusFiles:       files,
-		CorpusBytes:       logical,
-		ChildGOMAXPROCS:   w.gomaxprocs,
-		ShapedRTTMillis:   smokeRTT.Milliseconds(),
-		RepSeconds:        []float64{obs.Elapsed.Seconds()},
-		BestSeconds:       obs.Elapsed.Seconds(),
-		ProxiedBytesUp:    c.up,
-		ProxiedBytesDown:  c.down,
-		S3Requests:        c.requests,
-		Objects:           objects,
-		PeakRSSBytes:      obs.PeakRSS,
-		PeakRSSSource:     obs.PeakRSSSource,
-		MemoryBudgetBytes: budget.memory,
-		CPUSeconds:        obs.CPUSeconds,
-		CPUBudgetSeconds:  budget.cpu,
-		ExitStatus:        obs.exitStatus(),
-	})
+	row := singleRun(obs, c, objects).row(w, scenario, files, logical, budget.memory)
+	row.CPUBudgetSeconds = budget.cpu
+	recordResult(t, row)
 
 	// The timeout first: both arrive as a SIGKILL and only one of them is about memory.
 	if obs.TimedOut {

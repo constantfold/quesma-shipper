@@ -15,8 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The store has no working address on the host, the proxied route works (so that is isolation, not
-// a dead container), and the store cannot reach out either.
+// No working host address, a working proxied route (isolation, not a dead container), and no egress.
 func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	ctx := context.Background()
 
@@ -52,8 +51,7 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	}
 }
 
-// A sync must not quietly find somewhere else to put the data, or report success having put it
-// nowhere. The dead address is a second org's store endpoint, where a deployment configures one.
+// A sync whose tickets name a dead second-org endpoint must neither fall back elsewhere nor report success.
 func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 	bucket, err := createVersionedBucket(context.Background(),
 		fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))

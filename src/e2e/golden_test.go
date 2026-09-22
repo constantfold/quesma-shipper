@@ -67,40 +67,14 @@ func TestGolden(t *testing.T) {
 		name  string
 		stage func(t *testing.T, w *world, username string)
 	}{
-		{
-			name: "claude-2026-07",
-			stage: func(t *testing.T, w *world, username string) {
-				stageClaude(t, w, username)
-			},
-		},
-		{
-			// A finding, not an endorsement: the card-pan rule eats an all-digit session id, and a
-			// fix will show up here as a diff.
-			name: "claude-2026-07-numeric-session",
-			stage: func(t *testing.T, w *world, username string) {
-				stageClaudeSession(t, w, username, numericSessionID)
-			},
-		},
-		{
-			name: "cursor-2026-07",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversation2026_07(), true)
-			},
-		},
-		{
-			// The drift case is a contract too: raw ships, the manifest says why.
-			name: "cursor-2026-07-no-store",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversation2026_07(), false)
-			},
-		},
-		{
-			// A store that deduplicated a re-run: the derived object ships with what it could not enrich.
-			name: "cursor-2026-07-repeat",
-			stage: func(t *testing.T, w *world, username string) {
-				stageCursor(t, w, username, cursorConversationRepeat(), true)
-			},
-		},
+		{"claude-2026-07", func(t *testing.T, w *world, u string) { stageClaude(t, w, u) }},
+		// A finding, not an endorsement: the card-pan rule eats an all-digit session id; a fix shows here as a diff.
+		{"claude-2026-07-numeric-session", func(t *testing.T, w *world, u string) { stageClaudeSession(t, w, u, numericSessionID) }},
+		{"cursor-2026-07", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversation2026_07(), true) }},
+		// The drift case is a contract too: raw ships, the manifest says why.
+		{"cursor-2026-07-no-store", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversation2026_07(), false) }},
+		// A store that deduplicated a re-run: the derived object ships with what it could not enrich.
+		{"cursor-2026-07-repeat", func(t *testing.T, w *world, u string) { stageCursor(t, w, u, cursorConversationRepeat(), true) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := stageWorld(t)
@@ -109,7 +83,7 @@ func TestGolden(t *testing.T) {
 			runOneShot(t)
 
 			var got []goldenObject
-			var payloads = map[string][]byte{}
+			payloads := map[string][]byte{}
 			for _, o := range mirrorObjects(collect(t, w)) {
 				if !isTranscript(o) {
 					continue
@@ -170,11 +144,12 @@ func normalize(o object, w *world, username string) (goldenObject, []byte) {
 		g.Recipients = e.RecipientKeyIDs
 	}
 	// One file per object, named for its source and key, with the payload's real extension.
-	stem := g.SourceID + "-" + keyStem(o.Key)[:12]
+	kind := "-"
 	if g.Derived {
-		stem = g.SourceID + "-derived-" + keyStem(o.Key)[:12]
+		kind = "-derived-"
 	}
-	g.PayloadFile = stem + ".jsonl"
+	stem := strings.TrimSuffix(o.Key[strings.LastIndex(o.Key, "/")+1:], ".age")
+	g.PayloadFile = g.SourceID + kind + stem[:12] + ".jsonl"
 	return g, payload
 }
 
@@ -188,11 +163,6 @@ func scrubEnvironment(b []byte, w *world, username string) []byte {
 		s = strings.ReplaceAll(s, username, "<USER>")
 	}
 	return []byte(s)
-}
-
-func keyStem(key string) string {
-	name := key[strings.LastIndex(key, "/")+1:]
-	return strings.TrimSuffix(name, ".age")
 }
 
 // Payloads are files of their own, so a redaction change reads as a text diff.

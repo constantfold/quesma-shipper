@@ -25,9 +25,8 @@ const (
 	smokeBaselineReps = 2
 	smokeReps         = 3
 
-	// The engine's shape, and what S1's bound is derived from: a backlog runs in rounds of
-	// smokeAdmissionFactor*GOMAXPROCS files, each PUT smokePutFanoutFactor*GOMAXPROCS wide with no
-	// file admitted while a group is out. A pipeline that changes shape must move these constants.
+	// The engine's shape S1's bound derives from: rounds of admission*GOMAXPROCS files, PUT fanout*GOMAXPROCS
+	// wide, nothing admitted while a group is out. A pipeline that changes shape must move these.
 	smokeAdmissionFactor = 5
 	smokePutFanoutFactor = 4
 )
@@ -44,8 +43,7 @@ const smokeSidecarObjects = 3
 
 // Measured, and narrow: two runs of unchanged code over this corpus agree to within an HTTP header.
 const (
-	// One S3 call per file plus the sidecars; the band catches both an extra call per file and a
-	// run that quietly stopped making them, with room for the odd retry.
+	// One S3 call per file plus sidecars: catches an extra call per file or none at all, allowing the odd retry.
 	smokeRequestsPerFileMin = 0.95
 	smokeRequestsPerFileMax = 1.30
 
@@ -53,9 +51,8 @@ const (
 	smokeWireRatioMax = 0.85
 )
 
-// PROVISIONAL: roughly twice a laptop observation, which is headroom for a reading darwin cannot
-// take rather than slack for the code, since the check only runs where VmHWM exists. They say
-// "nothing has grown much" and no more; loosening one to make a run pass is what they exist to stop.
+// PROVISIONAL: about twice a laptop observation, headroom for the reading darwin cannot take, not slack for
+// the code. They say "nothing has grown much"; loosening one to make a run pass is what they exist to stop.
 const (
 	smokeBacklogBudget int64 = 128 << 20
 	smokeSteadyBudget  int64 = 96 << 20
@@ -67,8 +64,7 @@ type smokeMachine struct {
 	bytes int // the corpus on disk: the denominator of the wire ratio
 }
 
-// The whole CI tier: one machine, one corpus, two scenarios. One test rather than two because S2
-// measures the sync after S1's backlog, and its own world would mean shipping the backlog twice.
+// The whole CI tier in one test, because S2 measures the sync after S1's backlog on the same machine.
 func TestSmokeTier(t *testing.T) {
 	m := stageSmokeMachine(t)
 
@@ -80,8 +76,7 @@ func TestSmokeTier(t *testing.T) {
 	backlog := smokeBacklog(t, m, baseline)
 	smokeSteady(t, m, backlog)
 
-	// The resource guards last, on their own machines: they stage far bigger files and check
-	// resident bytes and CPU rather than the clock, so they must not disturb the timed halves.
+	// The resource guards last, on their own machines, so their far bigger files cannot disturb the timings.
 	smokeBigFileAcceptance(t)
 	smokeBigFile(t)
 	smokeInFlightCap(t)
@@ -127,8 +122,7 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 		moved := meas.counters.up + meas.counters.down
 		result = smokeBacklogResult{best: meas.best, bytes: moved, versions: m.w.versionCounts(t)}
 
-		// Half the overlap an admission round can reach; the round and not the upload pool, which
-		// the vend path spends per authorization group.
+		// Half the overlap an admission round can reach (the round, not the per-group upload pool).
 		added := meas.best - baseline
 		serial := time.Duration(m.files) * smokeRTT
 		bound := serial * 2 * smokeRoundTrips / smokeRoundFiles
@@ -145,7 +139,7 @@ func smokeBacklog(t *testing.T, m *smokeMachine, baseline time.Duration) smokeBa
 			meas.objects, meas.counters.requests, perFile, meas.counters.up, meas.counters.down,
 			m.bytes, ratio)
 
-		row := meas.row(m, smokeBacklogScenario, smokeBacklogBudget)
+		row := meas.row(m.w, smokeBacklogScenario, m.files, m.bytes, smokeBacklogBudget)
 		row.BaselineSeconds = baseline.Seconds()
 		recordResult(t, row)
 
@@ -193,7 +187,7 @@ func smokeSteady(t *testing.T, m *smokeMachine, backlog smokeBacklogResult) {
 			m.files, durationList(meas.reps), meas.counters.requests)
 
 		// Recorded before anything is judged: a failed run is the one worth having numbers for.
-		recordResult(t, meas.row(m, smokeSteadyScenario, smokeSteadyBudget))
+		recordResult(t, meas.row(m.w, smokeSteadyScenario, m.files, m.bytes, smokeSteadyBudget))
 
 		assertSteadyState(t, m.files, summary(t, meas.last.Output)["unchanged"],
 			meas.counters.up+meas.counters.down, backlog.bytes, meas.best, backlog.best)
@@ -222,12 +216,17 @@ type smokeMeasurement struct {
 	objects  int
 }
 
-func (meas smokeMeasurement) row(m *smokeMachine, scenario string, budget int64) perfResult {
+// One unrepeated run as a measurement, so every scenario records its row the same way.
+func singleRun(obs childObservation, c storeCounters, objects int) smokeMeasurement {
+	return smokeMeasurement{reps: []time.Duration{obs.Elapsed}, best: obs.Elapsed, last: obs, peak: obs, counters: c, objects: objects}
+}
+
+func (meas smokeMeasurement) row(w *world, scenario string, files, bytes int, budget int64) perfResult {
 	return perfResult{
 		Scenario:          scenario,
-		CorpusFiles:       m.files,
-		CorpusBytes:       m.bytes,
-		ChildGOMAXPROCS:   m.w.gomaxprocs,
+		CorpusFiles:       files,
+		CorpusBytes:       bytes,
+		ChildGOMAXPROCS:   w.gomaxprocs,
 		ShapedRTTMillis:   smokeRTT.Milliseconds(),
 		RepSeconds:        repSeconds(meas.reps),
 		BestSeconds:       meas.best.Seconds(),
@@ -243,8 +242,7 @@ func (meas smokeMeasurement) row(m *smokeMachine, scenario string, budget int64)
 	}
 }
 
-// cold resets the world before each repetition. The counters are read around the last one only: a
-// scrape settles for a second and every repetition ships the same.
+// cold resets the world before each repetition; counters are read around the last one only, as scrapes are slow.
 func smokeRepeat(t *testing.T, m *smokeMachine, cold bool) smokeMeasurement {
 	t.Helper()
 	var meas smokeMeasurement

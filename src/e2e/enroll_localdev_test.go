@@ -1,5 +1,5 @@
-// First contact: `local-dev` and `login` on a machine that has nothing, so these start from a
-// bare world rather than the seeded identity the rest of the tier uses.
+// First contact on a machine that has nothing: `local-dev`, `login`, and `update` on a dev build, which
+// must refuse because every release orders above a dev version. These start from a bare world.
 package e2e
 
 import (
@@ -15,33 +15,28 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
-// status points a virgin machine at login, and describes the local install once local-dev ran.
-func TestLocalDevMintsIdentityAndWritesNoConfig(t *testing.T) {
+// A virgin machine points status and run at login; local-dev then mints an identity, writes no config,
+// and a re-run keeps both the identity and the user's own config.
+func TestLocalDevMintsIdentityAndKeepsItOnRerun(t *testing.T) {
 	w := stageBareWorld(t)
 	before, err := runExpectingFailure(t, "status")
 	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
+	assertWaitsForEnrollment(t)
+	require.NoFileExists(t, filepath.Join(statePath(w), identity.FileName), "waiting for enrollment minted an identity")
 
 	out := run(t, "local-dev")
 
-	unit, err := identity.Load(statePath(w))
+	first, err := identity.Load(statePath(w))
 	require.NoErrorf(t, err, "no loadable identity after local-dev: %v", err)
-	assert.Containsf(t, out, unit.InstallID.String(), "output does not name the identity:\n%s", out)
+	assert.Containsf(t, out, first.InstallID.String(), "output does not name the identity:\n%s", out)
 	assert.NoFileExistsf(t, userConfigPath(w), "local-dev must not write a config file")
 	assert.NoFileExistsf(t, filepath.Join(statePath(w), backend.EnrollmentFile), "local-dev must not write an enrollment record")
 	after := run(t, "status")
 	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
-}
 
-func TestLocalDevRerunKeepsIdentityAndConfig(t *testing.T) {
-	w := stageBareWorld(t)
-
-	run(t, "local-dev")
-	first, err := identity.Load(statePath(w))
-	require.NoError(t, err)
 	own := []byte("config_version: 1\n# mine\n")
 	require.NoError(t, os.MkdirAll(filepath.Dir(userConfigPath(w)), 0o700))
 	require.NoError(t, os.WriteFile(userConfigPath(w), own, 0o600))
-
 	run(t, "local-dev")
 
 	second, err := identity.Load(statePath(w))
@@ -91,12 +86,6 @@ func TestLocalDevSurfacesUnreadableIdentity(t *testing.T) {
 	assert.NotContainsf(t, err.Error(), "refusing to mint", "error is Mint's overwrite refusal, not the unit's own failure: %v", err)
 }
 
-func TestRunOnceOnVirginMachineWaitsForLogin(t *testing.T) {
-	stageBareWorld(t)
-
-	assertWaitsForEnrollment(t)
-}
-
 func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
 	w := stageBareWorld(t)
 	run(t, "local-dev")
@@ -113,4 +102,14 @@ func assertWaitsForEnrollment(t *testing.T) {
 	out, err := runUntilCancelled(t, "run", "--once")
 	require.NoErrorf(t, err, "cancelled wait failed: %v", err)
 	assert.Truef(t, strings.Contains(out, "waiting for enrollment") && strings.Contains(out, "quesma-shipper login"), "the enrollment wait was not logged:\n%s", out)
+}
+
+func TestUpdateOnADevBuildRefusesAndNamesTheOverride(t *testing.T) {
+	stageBareWorld(t)
+
+	out, err := runExpectingFailure(t, "update")
+	require.Errorf(t, err, "update on a dev build succeeded:\n%s", out)
+	for _, want := range []string{"dev build", "make build"} {
+		assert.Containsf(t, err.Error(), want, "the refusal does not mention %q: %v", want, err)
+	}
 }

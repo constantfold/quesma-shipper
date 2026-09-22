@@ -1,7 +1,6 @@
 # Contributing
 
-This document covers setup, the commit gate, design rules, code style, and pull requests. All
-participation is subject to the [code of conduct](CODE_OF_CONDUCT.md).
+All participation is subject to the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Setup
 
@@ -18,20 +17,17 @@ This is the commit gate CI runs: gofmt, go vet with a Windows type-check, VERSIO
 dead-code detection, the dependency license check, and the unit suite under the race detector.
 `make test` is the faster local loop.
 
-Open the pull request as a draft. A maintainer marks it ready for review. Put small fixes on the
-same branch. Put a larger follow-up in a stacked pull request.
-
-In the description, state what changed and why. Give a concrete example of the behaviour before
-and after. Include a binary-size or performance diff when the change can affect either.
+Open the pull request as a draft; a maintainer marks it ready for review. Put small fixes on the
+same branch and a larger follow-up in a stacked pull request. In the description, state what
+changed and why, give a concrete before-and-after example, and include a binary-size or
+performance diff when the change can affect either.
 
 ## Design rules
 
-[CONSTITUTION.md](CONSTITUTION.md) is the design authority. A change that conflicts with an
-article is not merged. A change to the constitution is its own pull request. Argue the trade-off
-in the description.
-
-[ARCHITECTURE.md](ARCHITECTURE.md) states which package can import which. Follow the table. If a
-change needs a new edge, say so in the description.
+[CONSTITUTION.md](CONSTITUTION.md) is the design authority: a change that conflicts with an
+article is not merged, and a change to the constitution is its own pull request arguing the
+trade-off. [ARCHITECTURE.md](ARCHITECTURE.md) states which package can import which; say so in the
+description if a change needs a new edge.
 
 Reviewers check these invariants on every change:
 
@@ -43,20 +39,19 @@ Reviewers check these invariants on every change:
 
 ## Golden tests and compatibility
 
-Golden tests pin output byte for byte. They are `src/e2e/golden_test.go`, the conformance vectors
-under `src/conformance/`, and the wire fixtures that the contract tests import from the
+Golden tests pin output byte for byte: `src/e2e/golden_test.go`, the conformance vectors under
+`src/conformance/`, and the wire fixtures the contract tests import from the
 [shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol) module. A golden diff is a claim
-that the output must change. Read the diff. Explain it in the pull request. Do not run with
-`-update` until a maintainer agrees. Conformance inputs and case descriptions live in the
-vector JSON files; regeneration recalculates their expected outputs without replacing the inputs.
+that the output must change: read it, explain it in the pull request, and do not run with
+`-update` until a maintainer agrees. Regenerating conformance vectors recalculates their expected
+outputs without replacing the inputs and case descriptions in the vector JSON files.
 
 File formats, the wire protocol, configuration keys, and the object-key grammar are compatibility
-surfaces. A change to one of them needs a test that shows old inputs still work, and a note in the
-pull request. A protocol change is made in the [shipper-protocol](https://github.com/QuesmaOrg/shipper-protocol)
-repository and released as a module version. A shipper change that needs it bumps the dependency
-after that release.
+surfaces. A change to one needs a test showing old inputs still work, and a note in the pull
+request. A protocol change is made and released in the shipper-protocol repository first; the
+shipper then bumps the dependency.
 
-Do not widen a performance budget. Do not make a test less strict. If you must, say so in the pull
+Do not widen a performance budget or make a test less strict. If you must, say so in the pull
 request.
 
 ## Code style
@@ -70,15 +65,12 @@ request.
 ## Test data
 
 Do not commit real trajectories, prompts, transcripts, agent databases, logs, encrypted bundles,
-credentials, or private project data. Use small synthetic fixtures. Use `example.com` addresses,
-placeholder usernames, and invented project names. `.gitignore` blocks the common file types as a
-last line of defence.
-
-If you need real data to reproduce a bug, minimise and redact it locally. Then share it through a
-private channel as described in [SECURITY.md](SECURITY.md).
+credentials, or private project data. Use small synthetic fixtures with `example.com` addresses,
+placeholder usernames, and invented project names; `.gitignore` blocks the common file types as a
+last line of defence. If you need real data to reproduce a bug, minimise and redact it locally,
+then share it through a private channel as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Contributions are accepted under the Apache License 2.0, the license of the project. When you
-submit a pull request, you confirm that you have the right to license your contribution under
-those terms.
+Contributions are accepted under the project's Apache License 2.0. By submitting a pull request,
+you confirm that you have the right to license your contribution under those terms.

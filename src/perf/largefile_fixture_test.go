@@ -38,8 +38,7 @@ const (
 	singleLineChunk = 390 * (memguardRun + 1)
 )
 
-// A transcript under slug and the call that commits it. bufio write errors are sticky, so the loops
-// check one write each and Flush reports the rest.
+// A transcript under slug and the call that commits it; bufio errors are sticky, so Flush reports them.
 func createFixture(t *testing.T, w *world, slug, session string) (bw *bufio.Writer, cwd string, finish func()) {
 	t.Helper()
 	cwd = "/Users/perf/work/" + strings.TrimPrefix(slug, "-Users-perf-work-")

@@ -1,8 +1,7 @@
 # Release downloads
 
-This document describes the public release repository at `updates.quesma.dev` and its friendly
-download endpoints. It is both an operator guide and a statement of the trust boundary for people
-downloading Quesma Shipper. Both are live and are the links the installation instructions use.
+The public release repository at `updates.quesma.dev` and its friendly download endpoints, which
+the installation instructions link to: an operator guide and the trust boundary for downloaders.
 
 ## Public release repository
 
@@ -11,9 +10,8 @@ stored in a public Cloudflare R2 bucket exposed through `https://updates.quesma.
 directory listing, so a `404` at the origin or at `/targets/` is expected. The stable entry points
 are `metadata/1.root.json`, the initial offline-signed root of trust, and `metadata/timestamp.json`.
 
-The timestamp identifies the versioned snapshot, the snapshot identifies the versioned targets
-metadata, and the targets metadata contains the length and SHA-256 hash of each released file.
-With consistent snapshots enabled, their URLs are:
+The timestamp names the versioned snapshot, the snapshot names the versioned targets metadata, and
+the targets metadata holds each released file's length and SHA-256. With consistent snapshots:
 
 ```text
 https://updates.quesma.dev/metadata/<version>.snapshot.json
@@ -22,9 +20,9 @@ https://updates.quesma.dev/targets/<sha256>.<target-name>
 ```
 
 `release.json` is itself a TUF target. It records the release version and maps platform
-identifiers such as `linux/amd64` to target names; consumers should use it instead of assuming a
-binary's logical name never changes. Hash-addressed target URLs are immutable but not stable
-aliases: a new artifact has a new URL. They suit the updater and diagnostics, not a permanent link.
+identifiers such as `linux/amd64` to target names; consumers should use it rather than assume a
+binary's name never changes. Hash-addressed target URLs are immutable, so a new artifact has a new
+URL: they suit the updater and diagnostics, not a permanent link.
 
 ## Friendly download URLs
 
@@ -44,8 +42,7 @@ browsers and caches pointing at an older release. The Worker never copies, renam
 or deletes a TUF object, and an ordinary release needs no Worker deployment.
 
 The release publisher sets `Content-Disposition` on every R2 target to its unhashed TUF target
-name, so browsers save, for example, `quesma-shipper-macos-universal.pkg`. Setting the header on the
-Worker's redirect would not be enough: the browser takes the filename from the final R2 response.
+name, because the browser takes the saved filename from the final R2 response, not the redirect.
 
 ## Trust boundary
 
@@ -54,14 +51,14 @@ target hash against the root embedded in the binary. That is the authenticated u
 
 The Worker parses public TUF metadata for discovery but does **not** verify its signatures, and a
 browser following its redirect is not a TUF client. Manual downloads therefore trust HTTPS, the
-Cloudflare configuration, and any platform code signing. The macOS package is signed and
-notarized. The Linux and Windows release jobs do not currently apply an operating-system code
-signature; their binaries become authenticated when a TUF client verifies them. Do not describe a
-manual browser download as "TUF verified". If manual downloads need that guarantee, provide a small
-installer that embeds the trusted root and performs the complete TUF client workflow.
+Cloudflare configuration, and any platform code signing: the macOS package is signed and
+notarized, while Linux and Windows binaries currently carry no operating-system signature and are
+authenticated only when a TUF client verifies them. Never call a manual browser download "TUF
+verified"; that guarantee needs an installer that embeds the trusted root and runs the full TUF
+client workflow.
 
 The Worker must not receive the TUF signing key, R2 API credentials, or CI publication
-credentials. It needs read access only to URLs that are already public.
+credentials. It reads only URLs that are already public.
 
 ## Worker implementation
 
@@ -141,9 +138,8 @@ export default {
 };
 ```
 
-The Worker reads the public origin rather than using an R2 binding, so it holds no credentials and
-cannot mutate the bucket. Its route matches only `/download/*`, so `/metadata/*` and `/targets/*`
-continue to the R2 origin.
+Reading the public origin instead of an R2 binding, the Worker holds no credentials and cannot
+mutate the bucket. Its route matches only `/download/*`; everything else continues to R2.
 
 ## Cloudflare setup
 
@@ -187,15 +183,12 @@ curl -fsS https://updates.quesma.dev/metadata/timestamp.json >/dev/null
 
 After deployment, every friendly endpoint must answer `302` with a `Location` under
 `https://updates.quesma.dev/targets/`, and the target must return `200` with an unhashed filename
-in `Content-Disposition`:
+in `Content-Disposition`. Check every endpoint this way, and test the macOS package on a supported Mac:
 
 ```sh
 curl -fsSI https://updates.quesma.dev/download/quesma-shipper-linux-amd64
 curl -fsSIL https://updates.quesma.dev/download/quesma-shipper-linux-amd64
 ```
-
-Also test both Linux architectures, both portable and setup downloads on Windows, and the macOS
-package on a supported Mac.
 
 The release workflow publishes targets first, versioned metadata second, and `timestamp.json`
 last. Preserve that order: the Worker reads the timestamp first, so it sees either the complete

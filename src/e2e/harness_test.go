@@ -45,8 +45,7 @@ type world struct {
 	store *fakeStore
 }
 
-// The enrolled shape, the only one that can upload. The environment rather than flags points the
-// client at it, because the catalog resolves its roots through HOME.
+// The enrolled shape, the only one that can upload; the environment points the client at it via HOME.
 func stageWorld(t *testing.T) *world {
 	t.Helper()
 	w := stageBareWorld(t)
@@ -136,12 +135,6 @@ func writeConfig(t *testing.T, w *world, extra string) {
 		extra
 	require.NoError(t, os.MkdirAll(filepath.Dir(userConfigPath(w)), 0o700))
 	require.NoError(t, os.WriteFile(userConfigPath(w), []byte(body), 0o600))
-}
-
-// An install that never configured upload_targets runs unpinned: tickets decide the destination, https only.
-func writeConfigWithoutUploadTargets(t *testing.T, w *world) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(userConfigPath(w), []byte("config_version: 1\nmax_files_per_run: 10000\n"), 0o600))
 }
 
 // One command through the real command tree, for the paths whose point is a non-zero exit.
