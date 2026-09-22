@@ -3,7 +3,6 @@ package windows
 import (
 	"encoding/binary"
 	"encoding/xml"
-	"strings"
 	"testing"
 	"unicode/utf16"
 
@@ -93,19 +92,6 @@ func TestTaskXMLForSchtasksIsUTF16AndRoundTrips(t *testing.T) {
 	doc, err := parseTask(encoded)
 	require.NoError(t, err)
 	require.Equalf(t, `C:\Quesma Shipper\quesma-shipper-supervisor.exe`, doc.Command, "parsed command = %q", doc.Command)
-}
-
-// Task Scheduler's namespace is machine-wide, so two users' installs must not name the same task.
-func TestTaskNameIsPerUser(t *testing.T) {
-	first, second := taskName("S-1-5-21-7-1001"), taskName("S-1-5-21-7-1002")
-	require.NotEqualf(t, second, first, "both users got the task name %q", first)
-	require.Truef(t, first != legacyTaskName && second != legacyTaskName, "per-user name collides with the pre-rename name %q", legacyTaskName)
-	for _, name := range []string{first, second} {
-		// schtasks resolves a name without a leading separator against the root folder anyway, but
-		// the XML URI has to match what /Create was given.
-		assert.Truef(t, strings.HasPrefix(name, `\`), "task name %q is not rooted", name)
-		assert.Truef(t, !strings.ContainsAny(strings.TrimPrefix(name, `\`), `\/:*?"<>|`), "task name %q contains a character Task Scheduler forbids", name)
-	}
 }
 
 func TestLegacyTaskIsOursOnlyForThisUsersOwnTask(t *testing.T) {

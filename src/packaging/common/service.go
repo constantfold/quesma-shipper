@@ -96,14 +96,11 @@ type Status struct {
 	Detail string
 }
 
-// ErrRoot is returned when install is attempted as root.
-var ErrRoot = errors.New("supervise: refusing to install as root: this is a per-user agent, " +
-	"and running as root would resolve ~ to root's home and read the wrong user's files")
-
 // ValidateInstall checks the invariants shared by every platform service installer.
 func ValidateInstall(spec Spec) error {
 	if os.Geteuid() == 0 {
-		return ErrRoot
+		return errors.New("supervise: refusing to install as root: this is a per-user agent, " +
+			"and running as root would resolve ~ to root's home and read the wrong user's files")
 	}
 	if spec.Executable == "" {
 		return errors.New("supervise: no executable path")

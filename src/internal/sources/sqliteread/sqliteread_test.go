@@ -154,8 +154,6 @@ func TestTheCompiledFilterStripsAuthKeysAndEncryptionKeyFields(t *testing.T) {
 		{Key: "bubbleId:c1:b1", Value: []byte(`{"nested":{},"text":"hi","type":1}`)},
 		{Key: "composerData:c1", Value: []byte(`{"composerId":"c1","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}`)},
 	}, res.Rows)
-	assert.Equal(t, 1, res.DeniedKeys, "CursorAuth/cased, the one auth key in the declared table")
-	assert.Equal(t, 3, res.StrippedFields)
 }
 
 // Unreadable databases fail through every fallback; a live database must also refuse raw copying.

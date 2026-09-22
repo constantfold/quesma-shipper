@@ -9,9 +9,9 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
 
-func UninstallService() (ServiceKind, error) { return serviceUnsupported, nil }
+func UninstallService() (common.Kind, error) { return common.KindUnsupported, nil }
 func serviceState(context.Context) ServiceStatus {
-	return ServiceStatus{Kind: serviceUnsupported, Detail: "no supervision mechanism on " + runtime.GOOS}
+	return ServiceStatus{Kind: common.KindUnsupported, Detail: "no supervision mechanism on " + runtime.GOOS}
 }
 func RestartService(context.Context) error            { return nil }
 func RestartCommand() string                          { return "" }

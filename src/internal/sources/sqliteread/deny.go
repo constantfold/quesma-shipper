@@ -33,18 +33,14 @@ func keyDenied(key string) bool {
 }
 
 // scrubValue removes denied fields at any depth; a value that is not JSON has no fields to strip.
-func scrubValue(raw []byte) ([]byte, int) {
+func scrubValue(raw []byte) []byte {
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return raw, 0
-	}
 	// Verbatim when nothing was stripped: re-marshalling reorders keys.
-	n := stripFields(v)
-	if n == 0 {
-		return raw, 0
+	if json.Unmarshal(raw, &v) != nil || stripFields(v) == 0 {
+		return raw
 	}
 	out, _ := json.Marshal(v) // cannot fail on a value json.Unmarshal produced
-	return out, n
+	return out
 }
 
 // stripFields deletes in place; maps and slices share their backing storage with v.

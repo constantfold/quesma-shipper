@@ -64,13 +64,13 @@ func InstallService(spec Spec) error {
 }
 
 func UninstallService() error {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return err
 	}
-	name := taskName(sid)
+	name := taskName(current.Uid)
 	// An install that predates per-user names is removed too, or uninstalling would leave it live.
-	legacyErr := retireLegacyTask(sid)
+	legacyErr := retireLegacyTask(current.Uid)
 
 	_, _ = schtasks("/End", "/TN", name)
 	out, err := schtasks("/Delete", "/TN", name, "/F")
@@ -122,14 +122,6 @@ func currentUser() (*user.User, error) {
 	return current, nil
 }
 
-func currentUserSID() (string, error) {
-	current, err := currentUser()
-	if err != nil {
-		return "", err
-	}
-	return current.Uid, nil
-}
-
 // queryOwnTask prefers this user's own task and falls back to the pre-rename one, so an install
 // made before the rename still reports as installed until its next upgrade migrates it. The
 // per-user name comes back even when nothing is registered: it is what a fresh install will use.
@@ -146,11 +138,11 @@ func queryOwnTask(ctx context.Context, userSID string) (string, []byte, error) {
 }
 
 func ServiceState(ctx context.Context) Status {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return Status{Kind: common.KindWindowsTask, Detail: err.Error()}
 	}
-	name, out, err := queryOwnTask(ctx, sid)
+	name, out, err := queryOwnTask(ctx, current.Uid)
 	st := Status{Kind: common.KindWindowsTask, Path: name}
 	if err != nil {
 		exists, verifyErr := taskExists(ctx, name)
@@ -182,11 +174,11 @@ func ServiceState(ctx context.Context) Status {
 }
 
 func RestartService(ctx context.Context) error {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return err
 	}
-	name, _, _ := queryOwnTask(ctx, sid)
+	name, _, _ := queryOwnTask(ctx, current.Uid)
 	_, _ = schtasksContext(ctx, "/End", "/TN", name)
 	out, err := schtasksContext(ctx, "/Run", "/TN", name)
 	if err != nil {
@@ -197,11 +189,11 @@ func RestartService(ctx context.Context) error {
 
 // RestartCommand is a hint printed for the user; the caller drops it when it is empty.
 func RestartCommand() string {
-	sid, err := currentUserSID()
+	current, err := currentUser()
 	if err != nil {
 		return ""
 	}
-	name, _, _ := queryOwnTask(context.Background(), sid)
+	name, _, _ := queryOwnTask(context.Background(), current.Uid)
 	return `schtasks /Run /TN "` + name + `"`
 }
 

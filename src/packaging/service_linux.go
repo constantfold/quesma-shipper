@@ -8,33 +8,33 @@ import (
 	linuxpkg "github.com/QuesmaOrg/quesma-shipper/packaging/linux"
 )
 
-func detectService() ServiceKind {
+func detectService() common.Kind {
 	if linuxpkg.Available() {
-		return serviceSystemd
+		return common.KindSystemd
 	}
-	return ServiceCron
+	return common.KindCron
 }
 
-func InstallService(spec ServiceSpec) error {
+func InstallService(spec common.Spec) error {
 	if err := common.ValidateInstall(spec); err != nil {
 		return err
 	}
-	if detectService() == ServiceCron {
+	if detectService() == common.KindCron {
 		return ErrCronManual
 	}
 	return linuxpkg.InstallService(spec)
 }
 
-func UninstallService() (ServiceKind, error) {
-	if detectService() == ServiceCron {
-		return ServiceCron, errors.New("supervise: nothing to remove: this host was never given a supervision entry, only a crontab line to add by hand")
+func UninstallService() (common.Kind, error) {
+	if detectService() == common.KindCron {
+		return common.KindCron, errors.New("supervise: nothing to remove: this host was never given a supervision entry, only a crontab line to add by hand")
 	}
-	return serviceSystemd, linuxpkg.UninstallService()
+	return common.KindSystemd, linuxpkg.UninstallService()
 }
 
 func serviceState(ctx context.Context) ServiceStatus {
-	if detectService() == ServiceCron {
-		return ServiceStatus{Kind: ServiceCron, Detail: "no supervision entry: this host uses cron, which the client does not edit"}
+	if detectService() == common.KindCron {
+		return ServiceStatus{Kind: common.KindCron, Detail: "no supervision entry: this host uses cron, which the client does not edit"}
 	}
 	return linuxpkg.ServiceState(ctx)
 }

@@ -3,10 +3,11 @@ package packaging
 import (
 	"context"
 
+	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 	"github.com/QuesmaOrg/quesma-shipper/packaging/macos"
 )
 
-func UninstallService() (ServiceKind, error)          { return serviceLaunchd, macos.UninstallService() }
+func UninstallService() (common.Kind, error)          { return common.KindLaunchd, macos.UninstallService() }
 func serviceState(ctx context.Context) ServiceStatus  { return macos.ServiceState(ctx) }
 func RestartService(ctx context.Context) error        { return macos.RestartService(ctx) }
 func RestartCommand() string                          { return macos.RestartCommand() }

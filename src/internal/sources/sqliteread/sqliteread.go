@@ -42,10 +42,6 @@ type Result struct {
 
 	// A flag, not an error: an error would send the read to the next fallback.
 	Truncated bool
-
-	// What the compiled filter removed, so its operation is observable rather than assumed.
-	DeniedKeys     int
-	StrippedFields int
 }
 
 type Options struct {

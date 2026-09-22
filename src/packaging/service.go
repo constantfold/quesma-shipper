@@ -13,16 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging/common"
 )
 
-type ServiceKind = common.Kind
 type ServiceStatus = common.Status
-
-const (
-	serviceLaunchd     = common.KindLaunchd
-	serviceSystemd     = common.KindSystemd
-	serviceWindowsTask = common.KindWindowsTask
-	ServiceCron        = common.KindCron
-	serviceUnsupported = common.KindUnsupported
-)
 
 func ServiceState(stateDir string) ServiceStatus {
 	return ServiceStateContext(context.Background(), stateDir)

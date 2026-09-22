@@ -5,6 +5,7 @@ package windows
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"strings"
@@ -120,13 +121,9 @@ func parseTask(raw []byte) (taskDocument, error) {
 
 // taskXMLForSchtasks emits the Unicode file format expected by schtasks /Create /XML.
 func taskXMLForSchtasks(raw string) []byte {
-	raw = strings.Replace(raw, `encoding="UTF-8"`, `encoding="UTF-16"`, 1)
-	units := utf16.Encode([]rune(raw))
-	encoded := make([]byte, 2+2*len(units))
-	encoded[0], encoded[1] = 0xff, 0xfe
-	for i, unit := range units {
-		encoded[2+i*2] = byte(unit)
-		encoded[3+i*2] = byte(unit >> 8)
+	encoded := []byte{0xff, 0xfe}
+	for _, unit := range utf16.Encode([]rune(strings.Replace(raw, `encoding="UTF-8"`, `encoding="UTF-16"`, 1))) {
+		encoded = binary.LittleEndian.AppendUint16(encoded, unit)
 	}
 	return encoded
 }
@@ -146,9 +143,9 @@ func taskXMLUTF8(raw []byte) []byte {
 }
 
 func decodeUTF16LE(raw []byte) []byte {
-	units := make([]uint16, 0, len(raw)/2)
-	for i := 0; i+1 < len(raw); i += 2 {
-		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
+	units := make([]uint16, len(raw)/2)
+	for i := range units {
+		units[i] = binary.LittleEndian.Uint16(raw[2*i:])
 	}
 	return []byte(string(utf16.Decode(units)))
 }
