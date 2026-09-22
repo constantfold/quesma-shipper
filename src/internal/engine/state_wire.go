@@ -108,7 +108,7 @@ func encode(installID string, updatedAt time.Time, specs map[string]string, entr
 	body = append(body, '\n')
 
 	// Validate on the way out: a state file that fails its own schema is a bug to catch here.
-	if err := validate(body); err != nil {
+	if err := formats.ValidateRaw(formats.FingerprintState, body, "state: document"); err != nil {
 		return nil, err
 	}
 	return body, nil
@@ -184,15 +184,4 @@ func load(stateDir string, maxBytes int64) (Document, error) {
 		}] = fp
 	}
 	return out, nil
-}
-
-func validate(raw []byte) error {
-	err := formats.ValidateRaw(formats.FingerprintState, raw)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, formats.ErrNotJSON):
-		return fmt.Errorf("state: document is %w", err)
-	}
-	return fmt.Errorf("state: document does not satisfy its schema: %w", err)
 }

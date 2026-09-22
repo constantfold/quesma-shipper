@@ -70,13 +70,9 @@ func splitKeyWords(key string) []string {
 		switch {
 		case c == '_' || c == '-' || c == '.' || c == ' ' || c == ':' || c == '/':
 			flush(i)
-		case isUpper(c) && i > 0 && (isLower(key[i-1]) || isDigit(key[i-1])):
-			// apiKey -> api | Key
-			flush(i)
-			start = i
-		case isUpper(c) && i > 0 && isUpper(key[i-1]) &&
-			i+1 < len(key) && isLower(key[i+1]):
-			// AWSSecret -> AWS | Secret
+		case isUpper(c) && i > 0 && (isLower(key[i-1]) || isDigit(key[i-1])),
+			isUpper(c) && i > 0 && isUpper(key[i-1]) && i+1 < len(key) && isLower(key[i+1]):
+			// apiKey -> api | Key; AWSSecret -> AWS | Secret.
 			flush(i)
 			start = i
 		default:

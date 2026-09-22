@@ -68,13 +68,16 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	return s, nil
 }
 
-// ValidateRaw parses raw and checks it against the named schema.
-func ValidateRaw(name string, raw []byte) error {
+// ValidateRaw parses and validates a document, using label to identify it in errors.
+func ValidateRaw(name string, raw []byte, label string) error {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrNotJSON, err)
+		return fmt.Errorf("%s is %w", label, fmt.Errorf("%w: %w", ErrNotJSON, err))
 	}
-	return Validate(name, doc)
+	if err := Validate(name, doc); err != nil {
+		return fmt.Errorf("%s does not satisfy its schema: %w", label, err)
+	}
+	return nil
 }
 
 // Validate checks an already-decoded document against the named schema.

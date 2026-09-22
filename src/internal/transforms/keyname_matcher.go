@@ -48,15 +48,13 @@ func newKeyNameMatcher(names []string) *keyNameMatcher {
 	configured := make([]configuredName, len(names))
 	unfiltered := false
 	for i, n := range names {
-		literal := n
-		if rest, ok := strings.CutPrefix(n, "*"); ok {
-			literal = rest
-			configured[i].suffix = true
-			alts = append(alts, `[A-Za-z0-9_]*`+regexp.QuoteMeta(rest))
-		} else {
-			alts = append(alts, regexp.QuoteMeta(n))
+		literal, suffix := strings.CutPrefix(n, "*")
+		alt := regexp.QuoteMeta(literal)
+		if suffix {
+			alt = `[A-Za-z0-9_]*` + alt
 		}
-		configured[i].upper = strings.ToUpper(literal)
+		alts = append(alts, alt)
+		configured[i] = configuredName{upper: strings.ToUpper(literal), suffix: suffix}
 		if literal == "" || !isASCII(literal) {
 			unfiltered = true
 			continue

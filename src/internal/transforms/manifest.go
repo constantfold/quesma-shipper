@@ -2,7 +2,6 @@ package transforms
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -118,7 +117,7 @@ func (m Manifest) Encode() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seal: encode manifest: %w", err)
 	}
-	if err := validateManifestBytes(raw); err != nil {
+	if err := formats.ValidateRaw(formats.Manifest, raw, "seal: manifest"); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -126,7 +125,7 @@ func (m Manifest) Encode() ([]byte, error) {
 
 // DecodeManifest parses and validates a manifest.
 func DecodeManifest(raw []byte) (Manifest, error) {
-	if err := validateManifestBytes(raw); err != nil {
+	if err := formats.ValidateRaw(formats.Manifest, raw, "seal: manifest"); err != nil {
 		return Manifest{}, err
 	}
 	var m Manifest
@@ -138,17 +137,6 @@ func DecodeManifest(raw []byte) (Manifest, error) {
 			m.ManifestVersion, ManifestVersion)
 	}
 	return m, nil
-}
-
-func validateManifestBytes(raw []byte) error {
-	err := formats.ValidateRaw(formats.Manifest, raw)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, formats.ErrNotJSON):
-		return fmt.Errorf("seal: manifest is %w", err)
-	}
-	return fmt.Errorf("seal: manifest does not satisfy its schema: %w", err)
 }
 
 // ObjectMetadata is the plaintext metadata attached to a PUT, duplicated out of the
