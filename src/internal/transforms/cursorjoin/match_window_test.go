@@ -22,16 +22,13 @@ func TestAnOutOfOrderToolBubbleIsFoundBehindTheCursor(t *testing.T) {
 				{"bubbleId":"task1","type":2},
 				{"bubbleId":"a1","type":2}]`),
 		bubbleRow("u1", `{"bubbleId":"u1","type":1,"text":"check types"}`),
-		{
-			// The store puts the task bubble before the prose, so the prose match
-			// advances the cursor past it.
-			key: "bubbleId:" + conv + ":task1",
-			value: `{"bubbleId":"task1","type":2,"capabilityType":15,
+		// The store puts the task bubble before the prose, so the prose match
+		// advances the cursor past it.
+		bubbleRow("task1", `{"bubbleId":"task1","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"task_777","name":"task_v2","tool":38,
 					"status":"completed",
 					"params":"{\"description\":\"Typecheck the repo\",\"prompt\":\"Run npx tsc --noEmit in the repo and report errors.\"}",
-					"result":"no type errors"}}`,
-		},
+					"result":"no type errors"}}`),
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Spawning a typecheck subagent."}`),
 	}
 	d := successfulObject(t, run(t, newStore(t, rows), unit(t, body)))
@@ -140,13 +137,10 @@ func TestATextBlockDoesNotClaimAPassedOverBubbleOnPositionAlone(t *testing.T) {
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"prose","type":2},{"bubbleId":"read","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"what changed",
 				"createdAt":"2026-08-18T13:53:00.000Z"}`),
-		{
-			// Prose of its own, which the empty block does not contradict and must not
-			// be allowed to consume.
-			key: "bubbleId:" + conv + ":prose",
-			value: `{"bubbleId":"prose","type":2,"text":"Reading the resolver first.",
-				"createdAt":"2026-08-18T13:53:01.000Z"}`,
-		},
+		// Prose of its own, which the empty block does not contradict and must not
+		// be allowed to consume.
+		bubbleRow("prose", `{"bubbleId":"prose","type":2,"text":"Reading the resolver first.",
+				"createdAt":"2026-08-18T13:53:01.000Z"}`),
 		toolRow("read", "read_file_v2", `{"path":"/work/api/internal/config/resolve.go"}`,
 			"package config", "2026-08-18T13:53:02.000Z"),
 	})

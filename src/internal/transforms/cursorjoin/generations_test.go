@@ -16,25 +16,19 @@ func TestTheCurrentStoreGenerationEnriches(t *testing.T) {
 		composerAt(1753700000000, `[{"bubbleId":"u1","type":1},{"bubbleId":"think1","type":2},{"bubbleId":"a1","type":2},{"bubbleId":"tool1","type":2}]`),
 		bubbleRow("u1", `{"bubbleId":"u1","type":1,"text":"list the workspace",
 				"createdAt":"2026-07-28T10:06:09.499Z","requestId":"req-1"}`),
-		{
-			// The reasoning bubble: capabilityType 30, a thinking object, no isThought.
-			key: "bubbleId:" + conv + ":think1",
-			value: `{"bubbleId":"think1","type":2,"text":"","capabilityType":30,
+		// The reasoning bubble: capabilityType 30, a thinking object, no isThought.
+		bubbleRow("think1", `{"bubbleId":"think1","type":2,"text":"","capabilityType":30,
 				"thinking":{"text":"the user wants a listing","signature":"sig"},
-				"createdAt":"2026-07-28T10:06:11.463Z"}`,
-		},
+				"createdAt":"2026-07-28T10:06:11.463Z"}`),
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Listing the workspace folder contents.\n\n\n",
 				"createdAt":"2026-07-28T10:06:11.477Z","modelInfo":{"modelName":"composer-2.5"}}`),
-		{
-			// capabilityType 15 and toolFormerData, numeric tool, arguments in params.
-			key: "bubbleId:" + conv + ":tool1",
-			value: `{"bubbleId":"tool1","type":2,"text":"","capabilityType":15,
+		// capabilityType 15 and toolFormerData, numeric tool, arguments in params.
+		bubbleRow("tool1", `{"bubbleId":"tool1","type":2,"text":"","capabilityType":15,
 				"createdAt":"2026-07-28T10:06:11.516Z",
 				"toolFormerData":{"toolCallId":"tool_33e5b6ee","name":"run_terminal_command_v2",
 					"tool":15,"status":"completed","rawArgs":"",
 					"params":"{\"command\":\"ls -la /work/api\",\"cwd\":\"\"}",
-					"result":"{\"output\":\"total 24\\nmain.go\"}"}}`,
-		},
+					"result":"{\"output\":\"total 24\\nmain.go\"}"}}`),
 	}
 	res := run(t, newStore(t, rows), unit(t, transcript))
 
@@ -79,14 +73,11 @@ func TestTheCurrentTranscriptGenerationEnriches(t *testing.T) {
 		bubbleRow("think1", `{"bubbleId":"think1","type":2,"text":"","capabilityType":30,
 				"thinking":{"text":"I need to check if a dev server is already running, then start it."},
 				"createdAt":"2026-08-03T07:00:01.000Z"}`),
-		{
-			// No recorded arguments: position and a compatible name are the evidence.
-			key: "bubbleId:" + conv + ":tool1",
-			value: `{"bubbleId":"tool1","type":2,"capabilityType":15,
+		// No recorded arguments: position and a compatible name are the evidence.
+		bubbleRow("tool1", `{"bubbleId":"tool1","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"tool_dev123","name":"run_terminal_command_v2",
 					"tool":15,"status":"completed","rawArgs":"{}","params":"",
-					"result":"{\"output\":\"VITE ready on :5173\"}"}}`,
-		},
+					"result":"{\"output\":\"VITE ready on :5173\"}"}}`),
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"The server is up on port 5173."}`),
 	}
 	res := run(t, newStore(t, rows), unit(t, current))
@@ -128,14 +119,11 @@ func TestAFlexFieldWithAnUnexpectedShapeDoesNotCostTheBubble(t *testing.T) {
 				{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"list the workspace"}`),
 		bubbleRow("b2", `{"bubbleId":"b2","type":2,"text":"Listing the workspace folder contents."}`),
-		{
-			// capabilityType a bool, tool an object: shapes no store has written yet.
-			key: "bubbleId:" + conv + ":b3",
-			value: `{"bubbleId":"b3","type":2,"capabilityType":true,
+		// capabilityType a bool, tool an object: shapes no store has written yet.
+		bubbleRow("b3", `{"bubbleId":"b3","type":2,"capabilityType":true,
 				"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
 					"tool":{"kind":15},"status":"completed",
-					"rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`,
-		},
+					"rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`),
 	}
 	res := run(t, newStore(t, rows), unit(t, transcript))
 
@@ -157,22 +145,16 @@ func TestServerHydratedReasoningIsDecodedNotDropped(t *testing.T) {
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"why is the loader bounded",
 				"createdAt":"2026-08-18T12:41:29.000Z"}`),
-		{
-			// Server-hydrated: thinking is a string holding the object.
-			key: "bubbleId:" + conv + ":b2",
-			value: `{"bubbleId":"b2","type":2,"capabilityType":30,
+		// Server-hydrated: thinking is a string holding the object.
+		bubbleRow("b2", `{"bubbleId":"b2","type":2,"capabilityType":30,
 				"serverBubbleId":"srv-77","requestId":"req-2",
 				"createdAt":"2026-08-18T12:41:29.766Z",
-				"thinking":"{\"text\":\"Checking where the loader's bounds are set.\",\"isLastThinkingChunk\":true}"}`,
-		},
-		{
-			// Streamed locally, in the same conversation: thinking is an object.
-			key: "bubbleId:" + conv + ":b3",
-			value: `{"bubbleId":"b3","type":2,"capabilityType":30,
+				"thinking":"{\"text\":\"Checking where the loader's bounds are set.\",\"isLastThinkingChunk\":true}"}`),
+		// Streamed locally, in the same conversation: thinking is an object.
+		bubbleRow("b3", `{"bubbleId":"b3","type":2,"capabilityType":30,
 				"thinkingStyle":1,"requestId":"req-3",
 				"createdAt":"2026-08-18T12:41:49.000Z",
-				"thinking":{"text":"The bound is the row cap.","signature":"sig-abc"}}`,
-		},
+				"thinking":{"text":"The bound is the row cap.","signature":"sig-abc"}}`),
 	})
 
 	res := run(t, db, unit(t, transcript))

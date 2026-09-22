@@ -59,14 +59,11 @@ func fullStore(t *testing.T) string {
 		bubbleRow("b2", `{"bubbleId":"b2","type":2,"text":"Listing the workspace folder contents.",
 				"createdAt":"2026-07-28T10:06:01.000Z","requestId":"req-2",
 				"modelName":"claude-4.5-sonnet","turnDurationMs":1420,"checkpointId":"ckpt-9"}`),
-		{
-			// The point of the enricher: the store has the output, the call id, the status.
-			key: "bubbleId:" + conv + ":b3",
-			value: `{"bubbleId":"b3","type":2,"createdAt":"2026-07-28T10:06:02.000Z",
+		// The point of the enricher: the store has the output, the call id, the status.
+		bubbleRow("b3", `{"bubbleId":"b3","type":2,"createdAt":"2026-07-28T10:06:02.000Z",
 				"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
 					"status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
-					"result":"total 24\ndrwxr-xr-x  5 jane staff  160 Jul 28 10:05 .\n-rw-r--r--  1 jane staff  812 Jul 28 09:58 main.go"}}`,
-		},
+					"result":"total 24\ndrwxr-xr-x  5 jane staff  160 Jul 28 10:05 .\n-rw-r--r--  1 jane staff  812 Jul 28 09:58 main.go"}}`),
 	})
 }
 

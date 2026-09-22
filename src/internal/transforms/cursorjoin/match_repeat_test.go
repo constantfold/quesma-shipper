@@ -146,13 +146,10 @@ func TestAStoreDedupedReRunFarBackIsStillARepeat(t *testing.T) {
 		id := fmt.Sprintf("fill%02d", i)
 		blocks = append(blocks, fmt.Sprintf(`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"sym%02dAlpha|sym%02dBeta","path":"/work/api/pkg%02d"}}]}}`, i, i, i))
 		headers = append(headers, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, id))
-		rows = append(rows, storeRow{
-			key: "bubbleId:" + conv + ":" + id,
-			value: fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
+		rows = append(rows, bubbleRow(id, fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_%s","name":"ripgrep_raw_search",
 					"status":"completed","rawArgs":"{\"pattern\":\"sym%02dAlpha|sym%02dBeta\",\"path\":\"/work/api/pkg%02d\"}",
-					"result":"pkg%02d.go:1"}}`, id, id, i, i, i, i),
-		})
+					"result":"pkg%02d.go:1"}}`, id, id, i, i, i, i)))
 	}
 	// The re-run the store deduped, then real prose with a real bubble, so the re-run
 	// cannot ride out on the tail rule.
@@ -188,13 +185,10 @@ func TestARepeatWhoseOwnBubbleIsOutOfReachIsAMismatchNotARepeat(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		id := fmt.Sprintf("sub%02d", i)
 		headers = append(headers, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, id))
-		rows = append(rows, storeRow{
-			key: "bubbleId:" + conv + ":" + id,
-			value: fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
+		rows = append(rows, bubbleRow(id, fmt.Sprintf(`{"bubbleId":%q,"type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_%s","name":"read_file_v2",
 					"status":"completed","rawArgs":"{\"path\":\"/work/api/sub/f%02d.go\"}",
-					"result":"subagent detail"}}`, id, id, i),
-		})
+					"result":"subagent detail"}}`, id, id, i)))
 	}
 	headers = append(headers, `{"bubbleId":"r2","type":2}`)
 	rows = append(rows,

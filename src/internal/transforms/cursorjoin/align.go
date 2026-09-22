@@ -87,61 +87,46 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 		}
 		lastLineInvalid = false
 
+		record := outLine{Native: trimmed}
 		var l line
 		if err := json.Unmarshal(trimmed, &l); err != nil {
 			// A truncated tail is expected: Cursor's transcript writes are not atomic.
 			a.lineDecodeErrors++
 			lastLineInvalid = true
-			if err := encoder.Encode(outLine{NativeInvalid: string(trimmed)}); err != nil {
-				return alignment{}, err
+			record = outLine{NativeInvalid: string(trimmed)}
+		} else if l.Role != "" && l.Message != nil {
+			for i, blk := range l.Message.Content {
+				// Reasoning arrives as a literal [REDACTED] with nothing to align to.
+				if blk.Type == "text" && isRedactedReasoning(string(blk.Text)) {
+					continue
+				}
+				idx, outcome, ev, n := matchBlock(blk, string(l.Role), events, cursor, state)
+				switch outcome {
+				case matchNone:
+					unmatched++
+					continue
+				case matchRepeat:
+					// Explained, but nothing to attach: the consumed bubble's result
+					// belongs to the run that consumed it.
+					a.repeats++
+					continue
+				case matchAmbiguous:
+					a.ambiguous++
+					state[idx].declined = true
+					continue
+				}
+				a.mismatches += unmatched
+				unmatched = 0
+				state[idx].used = true
+				state[idx].ev, state[idx].n = ev, n
+				cursor = max(cursor, idx+1)
+				if record.Enrich == nil {
+					record.Enrich = make([]*blockEnrich, len(l.Message.Content))
+				}
+				record.Enrich[i] = fromBubble(events[idx])
 			}
-			continue
 		}
-
-		// turn_ended is a terminator, not an event. It has no bubble and must not consume
-		// the cursor.
-		if l.Role == "" || l.Message == nil || len(l.Message.Content) == 0 {
-			if err := encoder.Encode(outLine{Native: trimmed}); err != nil {
-				return alignment{}, err
-			}
-			continue
-		}
-
-		var enriched []*blockEnrich
-		for i, blk := range l.Message.Content {
-			// Reasoning arrives as a literal [REDACTED] with nothing to align to.
-			if blk.Type == "text" && isRedactedReasoning(string(blk.Text)) {
-				continue
-			}
-			idx, outcome, ev, n := matchBlock(blk, string(l.Role), events, cursor, state)
-			switch outcome {
-			case matchNone:
-				unmatched++
-				continue
-			case matchRepeat:
-				// Explained, but nothing to attach: the consumed bubble's result
-				// belongs to the run that consumed it.
-				a.repeats++
-				continue
-			case matchAmbiguous:
-				a.ambiguous++
-				state[idx].declined = true
-				continue
-			}
-			a.mismatches += unmatched
-			unmatched = 0
-			state[idx].used = true
-			state[idx].ev, state[idx].n = ev, n
-			cursor = max(cursor, idx+1)
-			if enriched == nil {
-				enriched = make([]*blockEnrich, len(l.Message.Content))
-			}
-			enriched[i] = fromBubble(events[idx])
-		}
-		if err := encoder.Encode(outLine{
-			Native: trimmed,
-			Enrich: enriched,
-		}); err != nil {
+		if err := encoder.Encode(record); err != nil {
 			return alignment{}, err
 		}
 	}

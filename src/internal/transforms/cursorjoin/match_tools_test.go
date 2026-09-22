@@ -35,24 +35,18 @@ func TestAVendorRewrittenCommandStillAligns(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"commit","type":2},{"bubbleId":"pr","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"commit and open a PR"}`),
-		{
-			// What ran: the commit with the trailer spliced in.
-			key: "bubbleId:" + conv + ":commit",
-			value: `{"bubbleId":"commit","type":2,"capabilityType":15,
+		// What ran: the commit with the trailer spliced in.
+		bubbleRow("commit", `{"bubbleId":"commit","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_commit","name":"run_terminal_command_v2",
 					"status":"completed","rawArgs":"",
 					"params":"{\"command\":\"git commit --trailer \\\"Co-authored-by: Cursor <cursoragent@cursor.com>\\\" -m \\\"fix: bound the loader\\\"\"}",
-					"result":"1 file changed"}}`,
-		},
-		{
-			// What ran: the PR body with the footer appended inside the heredoc.
-			key: "bubbleId:" + conv + ":pr",
-			value: `{"bubbleId":"pr","type":2,"capabilityType":15,
+					"result":"1 file changed"}}`),
+		// What ran: the PR body with the footer appended inside the heredoc.
+		bubbleRow("pr", `{"bubbleId":"pr","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_pr","name":"run_terminal_command_v2",
 					"status":"completed","rawArgs":"",
 					"params":"{\"command\":\"gh pr create --title \\\"Bound the loader\\\" --body \\\"$(cat <<'EOB'\\n## Summary\\n- bound it\\n\\nMade with [Cursor](https://cursor.com)\\nEOB\\n)\\\"\"}",
-					"result":"https://github.com/org/repo/pull/1"}}`,
-		},
+					"result":"https://github.com/org/repo/pull/1"}}`),
 	})
 
 	lines := joined(t, db, transcript)
@@ -68,15 +62,12 @@ func TestAnErroredCallRecordedWithoutArgumentsAligns(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"edit","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"fix the table"}`),
-		{
-			// The errored edit, exactly as observed: no path, no strings, just flags.
-			key: "bubbleId:" + conv + ":edit",
-			value: `{"bubbleId":"edit","type":2,"capabilityType":15,
+		// The errored edit, exactly as observed: no path, no strings, just flags.
+		bubbleRow("edit", `{"bubbleId":"edit","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_edit","name":"edit_file_v2",
 					"status":"error","rawArgs":"",
 					"params":"{\"noCodeblock\":true,\"cloudAgentEdit\":false}",
-					"result":"the model produced an invalid edit"}}`,
-		},
+					"result":"the model produced an invalid edit"}}`),
 	})
 
 	lines := joined(t, db, transcript)
@@ -96,16 +87,13 @@ func TestTheTerminalParseTreeCannotSpeakForAnotherTool(t *testing.T) {
 	db := newStore(t, []storeRow{
 		composerAt(1755500000000, `[{"bubbleId":"b1","type":1},{"bubbleId":"shell","type":2},{"bubbleId":"read","type":2}]`),
 		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"survey the repo"}`),
-		{
-			// The read's filename as a shell token, the workspace root under the
-			// sandbox policy: none of it may serve as argument evidence.
-			key: "bubbleId:" + conv + ":shell",
-			value: `{"bubbleId":"shell","type":2,"capabilityType":15,
+		// The read's filename as a shell token, the workspace root under the
+		// sandbox policy: none of it may serve as argument evidence.
+		bubbleRow("shell", `{"bubbleId":"shell","type":2,"capabilityType":15,
 				"toolFormerData":{"toolCallId":"call_shell","name":"run_terminal_command_v2",
 					"status":"completed","rawArgs":"",
 					"params":"{\"command\":\"git show d63a490 -- render.yaml | head -30\",\"cwd\":\"\",\"parsingResult\":{\"commands\":[{\"words\":[\"git\",\"show\",\"d63a490\",\"render.yaml\",\"head\"]}]},\"requestedSandboxPolicy\":{\"workspace\":\"/work/api\"},\"commandDescription\":\"Inspect the pin commit\"}",
-					"result":"render.yaml | 2 +-"}}`,
-		},
+					"result":"render.yaml | 2 +-"}}`),
 		toolRow("read", "read_file_v2", `{"path":"render.yaml"}`, "services:\n  - type: web", ""),
 	})
 
