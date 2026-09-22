@@ -147,10 +147,7 @@ func (r *Rule) accepts(value string, start, end int) bool {
 	if r.guard != nil && !r.guard(value, start, end) {
 		return false
 	}
-	if r.checksum != nil && !r.checksum(value[start:end]) {
-		return false
-	}
-	return true
+	return r.checksum == nil || r.checksum(value[start:end])
 }
 
 // matchSweep hands the whole value to the regex engine, and is the reference the two fast

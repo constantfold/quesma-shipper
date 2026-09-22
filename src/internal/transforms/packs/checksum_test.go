@@ -13,13 +13,6 @@ import (
 // Checksum-verified rules are the only precise rules: their shapes are otherwise so common
 // that an unverified rule would fire on every number in a transcript.
 func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
-	rules, err := packs.Load(packs.PIICore)
-	require.NoError(t, err)
-	byID := map[string]*packs.Rule{}
-	for _, r := range rules {
-		byID[r.RuleID()] = r
-	}
-
 	cases := []struct {
 		rule  string
 		valid string
@@ -33,10 +26,7 @@ func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.rule, func(t *testing.T) {
-			r, ok := byID[c.rule]
-			if !ok {
-				t.Fatalf("rule %q missing from the pack", c.rule)
-			}
+			r := piiRule(t, c.rule)
 			assert.NotEqualf(t, 0, len(r.MatchScanned(c.valid)), "a checksum-valid value must match: %s", c.valid)
 			assert.Lenf(t, r.MatchScanned(c.junk), 0, "a checksum-INVALID value of the same shape must not match: %s", c.junk)
 		})
@@ -45,15 +35,7 @@ func TestChecksumRulesRejectShapeWithoutChecksum(t *testing.T) {
 
 // A PESEL-shaped number whose embedded month is impossible is an id, not an identity number.
 func TestPESELRejectsImpossibleDates(t *testing.T) {
-	rules, err := packs.Load(packs.PIICore)
-	require.NoError(t, err)
-	var pesel *packs.Rule
-	for _, r := range rules {
-		if r.RuleID() == "pesel" {
-			pesel = r
-		}
-	}
-	require.True(t, pesel != nil, "pesel rule missing")
+	pesel := piiRule(t, "pesel")
 	// Month 99 cannot occur in any PESEL century encoding.
 	assert.Len(t, pesel.MatchScanned("44991401351"), 0, "a PESEL-shaped number with an impossible month must not match")
 }
@@ -73,15 +55,7 @@ func TestAllPacksCompileWithNamedRules(t *testing.T) {
 // An audit of a real archive found zero genuine cards among tens of thousands of Luhn-only hits.
 // Each row below is a shape that rule redacted; real PANs, in every notation, must still match.
 func TestPanRejectsTheAuditedFalsePositiveClasses(t *testing.T) {
-	rules, err := packs.Load(packs.PIICore)
-	require.NoError(t, err)
-	var pan *packs.Rule
-	for _, r := range rules {
-		if r.RuleID() == "card-pan" {
-			pan = r
-		}
-	}
-	require.True(t, pan != nil, "card-pan missing from the pack")
+	pan := piiRule(t, "card-pan")
 
 	stillCards := []struct{ name, text string }{
 		{"visa 16 contiguous", "pay with 4111111111111111 now"},
@@ -135,4 +109,18 @@ func TestPanRejectsTheAuditedFalsePositiveClasses(t *testing.T) {
 			assert.Len(t, pan.MatchScanned(c.text), 0)
 		})
 	}
+}
+
+func piiRule(t *testing.T, id string) *packs.Rule {
+	t.Helper()
+	rules, err := packs.Load(packs.PIICore)
+	require.NoError(t, err)
+	var found *packs.Rule
+	for _, r := range rules {
+		if r.RuleID() == id {
+			found = r
+		}
+	}
+	require.NotNil(t, found, "rule %q missing from the pack", id)
+	return found
 }
