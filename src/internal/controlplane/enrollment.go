@@ -15,12 +15,11 @@ import (
 const EnrollmentFile = "enrollment.json"
 
 // enrollmentSchema versions the record. A newer schema is rejected: guessing at one another version
-// wrote is how a client writes into the wrong subtree. An OLDER one it knows is migrated forward and
-// persisted, because at fleet scale "fix the file by hand" is no answer to a routine upgrade.
+// wrote is how a client writes into the wrong subtree. An older one is migrated forward and persisted.
 const enrollmentSchema = 2
 
-// Enrollment is what an enrolled install remembers, persisted beside the identity unit and as one
-// unit with it: without that identity it grants a subtree the client can no longer name.
+// Enrollment is what an enrolled install remembers, persisted as one unit with the identity:
+// without that identity it grants a subtree the client can no longer name.
 type Enrollment struct {
 	EnrollmentSchema int    `json:"enrollment_schema"`
 	InstallID        string `json:"install_id"`
@@ -39,86 +38,28 @@ func (e Enrollment) Save(stateDir string) error {
 	return platform.WriteJSON(filepath.Join(stateDir, EnrollmentFile), e, 0o600)
 }
 
-// LoadEnrollment reads the record. A missing file means standalone, which is not an error. A
-// schema-1 record is upgraded and persisted before returning.
+// LoadEnrollment reads the record. A missing file means standalone and returns os.ErrNotExist.
 func LoadEnrollment(stateDir string) (*Enrollment, error) {
-	path := filepath.Join(stateDir, EnrollmentFile)
-	// It holds a private signing key, so ReadPrivate's mode gate applies.
-	raw, err := platform.ReadPrivate(path, 1<<20)
+	raw, err := platform.ReadPrivate(filepath.Join(stateDir, EnrollmentFile), 1<<20)
 	if err != nil {
 		return nil, err
 	}
-
-	raw, migrated, err := migrateEnrollment(raw)
-	if err != nil {
-		return nil, err
-	}
-
 	var e Enrollment
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return nil, fmt.Errorf("backend: parse enrollment: %w", err)
 	}
-	if e.EnrollmentSchema != enrollmentSchema {
-		return nil, fmt.Errorf("backend: enrollment_schema %d, this client speaks %d",
-			e.EnrollmentSchema, enrollmentSchema)
-	}
-	if migrated {
-		// Persisted immediately so the upgrade happens once and a downgraded binary refuses the
-		// record loudly instead of half-reading it. A failed persist is an error, not a shrug.
+	// Schema 1 is schema 2 plus a sink grant, which decoding already dropped. The frozen fixture checks the conversion.
+	if e.EnrollmentSchema == 1 {
+		// Persisted immediately so the upgrade happens once and a downgraded binary refuses the record loudly.
 		if err := e.Save(stateDir); err != nil {
 			return nil, fmt.Errorf("backend: persist migrated enrollment: %w", err)
 		}
+		e.EnrollmentSchema = enrollmentSchema
+	}
+	if e.EnrollmentSchema != enrollmentSchema {
+		return nil, fmt.Errorf("backend: enrollment_schema %d, this client speaks %d", e.EnrollmentSchema, enrollmentSchema)
 	}
 	return &e, nil
-}
-
-// migrateEnrollment upgrades the sole historical schema; other bytes pass through for the
-// caller's decode and schema check. The frozen schema-1 fixture pins the conversion.
-func migrateEnrollment(raw []byte) ([]byte, bool, error) {
-	var probe struct {
-		EnrollmentSchema int `json:"enrollment_schema"`
-	}
-	if json.Unmarshal(raw, &probe) != nil || probe.EnrollmentSchema != 1 {
-		return raw, false, nil
-	}
-	upgraded, err := enrollmentV1toV2(raw)
-	if err != nil {
-		return nil, false, fmt.Errorf("backend: migrate enrollment from schema 1: %w", err)
-	}
-	return upgraded, true, nil
-}
-
-// enrollmentV1 is schema 1 FROZEN, exactly as the last schema-1 binary wrote it: never change it.
-type enrollmentV1 struct {
-	EnrollmentSchema int    `json:"enrollment_schema"`
-	InstallID        string `json:"install_id"`
-	Organization     string `json:"organization"`
-	Endpoint         string `json:"endpoint"`
-	DeviceKey        string `json:"device_key"`
-	Sink             struct {
-		Adapter string `json:"adapter"`
-		Bucket  string `json:"bucket"`
-		Region  string `json:"region"`
-		KeyRoot string `json:"key_root"`
-	} `json:"sink"`
-	EnrolledAt string `json:"enrolled_at"`
-}
-
-// enrollmentV1toV2 drops the sink grant. It marshals the current struct because schema 2 IS
-// current: the day schema 3 lands, this step must switch to a frozen v2 struct.
-func enrollmentV1toV2(raw []byte) ([]byte, error) {
-	var v1 enrollmentV1
-	if err := json.Unmarshal(raw, &v1); err != nil {
-		return nil, err
-	}
-	return json.Marshal(Enrollment{
-		EnrollmentSchema: 2,
-		InstallID:        v1.InstallID,
-		Organization:     v1.Organization,
-		Endpoint:         v1.Endpoint,
-		DeviceKey:        v1.DeviceKey,
-		EnrolledAt:       v1.EnrolledAt,
-	})
 }
 
 // PrivateKey decodes the device signing key.
@@ -139,9 +80,7 @@ func (e Enrollment) Client() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(Options{
-		Endpoint: e.Endpoint, InstallID: e.InstallID, Organization: e.Organization, DeviceKey: key,
-	})
+	return New(Options{Endpoint: e.Endpoint, InstallID: e.InstallID, Organization: e.Organization, DeviceKey: key})
 }
 
 // NewDeviceKey generates the request-signing keypair.

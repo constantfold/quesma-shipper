@@ -1,3 +1,5 @@
+// Package config merges configuration layers and records provenance.
+// Local authority controls widening; compiled path denials and root checks still apply.
 package config
 
 import (
@@ -9,9 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AcceptedConfigVersions is enumerated, never a range: an unknown config_version is a hard error.
+var AcceptedConfigVersions = []int{1}
+
 // Document is one config layer's contents. Every field is a pointer or a slice so absent stays distinguishable from zero.
 type Document struct {
-	// IssuedAt and Org are the served envelope: they describe the org's issuing event, so only the remote layer may carry them.
+	// IssuedAt and Org are the served envelope, so only the remote layer may carry them.
 	IssuedAt *string `yaml:"issued_at"`
 	Org      *string `yaml:"org"`
 
@@ -19,8 +24,9 @@ type Document struct {
 	Mode          *Mode            `yaml:"mode"`
 	Sources       []SourceOverride `yaml:"sources"`
 
-	// Sink is read and discarded; the key survives so an older config.yaml with a `send:` block still parses.
-	Sink map[string]any `yaml:"send"`
+	// Sink and CrashReport are read and discarded so an older config.yaml with those blocks still parses.
+	Sink        map[string]any `yaml:"send"`
+	CrashReport map[string]any `yaml:"crash_report"`
 
 	Scrub          *Scrub              `yaml:"scrub"`
 	Encryption     *Encryption         `yaml:"encryption"`
@@ -29,16 +35,10 @@ type Document struct {
 	StateDir       *string             `yaml:"state_dir"`
 	UploadTargets  []UploadTarget      `yaml:"upload_targets"`
 	StructuralEx   map[string][]string `yaml:"structural_exempt"`
+	Autoupdate     *Autoupdate         `yaml:"autoupdate"`
 
-	// CrashReport is read and discarded; the key survives so an older config.yaml with a `crash_report:` block still parses.
-	CrashReport map[string]any `yaml:"crash_report"`
-
-	Autoupdate *Autoupdate `yaml:"autoupdate"`
-
-	// TelemetryEndpoint is where this install submits telemetry, served as `/v1/telemetry` or "".
-	// A path, never a URL: it resolves against the enrolled control-plane origin, so a served
-	// document cannot redirect telemetry elsewhere. Absent means disabled, which is what an older
-	// control plane serves.
+	// TelemetryEndpoint is a path such as `/v1/telemetry`, never a URL: it resolves against the enrolled
+	// control-plane origin, so a served document cannot redirect telemetry. Absent means disabled.
 	TelemetryEndpoint *string `yaml:"telemetry_endpoint"`
 }
 
@@ -62,39 +62,29 @@ type SourceOverride struct {
 	MaxFileBytes *int64   `yaml:"max_file_bytes"`
 
 	// Enrichers toggles a registered enricher; config can never attach one, that would be config installing code.
-	// Not free for a DB-backed source: disabling cursor-transcript-join stops DB-side capture entirely.
 	Enrichers map[string]bool `yaml:"enrichers"`
 }
 
-// UploadTarget pins one destination for a presigned upload ticket. Machine-owner only: the ticket carries its own authority.
+// UploadTarget declares one destination for a presigned upload ticket. Machine-owner only.
 type UploadTarget struct {
-	// Origin is scheme://host[:port] and nothing else. No wildcards.
-	Origin string `yaml:"origin"`
-
-	// Addressing is "virtual-hosted" or "path-style"; an unknown form is refused rather than guessed at.
-	Addressing string `yaml:"addressing"`
-
-	// PathPrefix is empty for virtual-hosted and the fixed "/bucket" for path-style.
-	PathPrefix string `yaml:"path_prefix"`
-
-	// AllowLoopbackHTTP admits http:// for a loopback host. Development only.
-	AllowLoopbackHTTP bool `yaml:"allow_loopback_http"`
+	Origin            string `yaml:"origin"`      // scheme://host[:port], no wildcards
+	Addressing        string `yaml:"addressing"`  // "virtual-hosted" or "path-style"
+	PathPrefix        string `yaml:"path_prefix"` // empty, or "/bucket" for path-style
+	AllowLoopbackHTTP bool   `yaml:"allow_loopback_http"`
 }
 
-// Scrub carries the detection-rule surface. Rule packs may only grow: additions make scrubbing stricter.
+// Scrub carries the detection-rule surface. Both lists only grow: additions make scrubbing stricter.
 type Scrub struct {
-	RulePacks []string `yaml:"rule_packs"`
-
-	// SecretKeyNames adds field and env-var names whose value is a credential. Union like RulePacks.
+	RulePacks      []string `yaml:"rule_packs"`
 	SecretKeyNames []string `yaml:"secret_key_names"`
 }
 
 // Encryption is the recipient surface: who can read what this install ships.
 type Encryption struct {
-	// AdditionalRecipients are age public keys sealed to alongside the install's own. Union: no layer may remove another's readers.
+	// AdditionalRecipients are age public keys sealed to alongside the install's own. Union across layers.
 	AdditionalRecipients []string `yaml:"additional_recipients"`
 
-	// IncludeInstallRecipient keeps the install's own key in the set. Absent means true; withholding needs another recipient.
+	// IncludeInstallRecipient keeps the install's own key in the set. Absent means true.
 	IncludeInstallRecipient *bool `yaml:"include_install_recipient"`
 }
 
@@ -103,7 +93,7 @@ func ParseDocument(raw []byte) (*Document, error) {
 	return parseDocument(raw, true)
 }
 
-// ParseServedDocument decodes the org's served document, ignoring unknown fields; config_version stays a hard gate.
+// ParseServedDocument decodes the org's served document, ignoring unknown fields.
 func ParseServedDocument(raw []byte) (*Document, error) {
 	return parseDocument(raw, false)
 }
@@ -111,12 +101,10 @@ func ParseServedDocument(raw []byte) (*Document, error) {
 func parseDocument(raw []byte, knownFields bool) (*Document, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(knownFields)
-
 	var d Document
 	if err := dec.Decode(&d); err != nil {
-		// io.EOF means an empty document: an empty layer, not a broken one.
 		if errors.Is(err, io.EOF) {
-			return &Document{}, nil
+			return &Document{}, nil // an empty layer, not a broken one
 		}
 		return nil, fmt.Errorf("config: parse document: %w", err)
 	}

@@ -18,26 +18,17 @@ func TickInterval(schedule string) (time.Duration, string) {
 	if s == "" {
 		return DefaultTick, ""
 	}
-
-	d, err := parseSchedule(s)
-	if err != nil {
-		return DefaultTick, fmt.Sprintf("mode.schedule %q: %v — ticking every %s instead",
-			schedule, err, DefaultTick)
-	}
-	if d < MinTick {
-		return MinTick, fmt.Sprintf("mode.schedule %q is under the %s floor — ticking every %s",
-			schedule, MinTick, MinTick)
-	}
-	return d, ""
-}
-
-func parseSchedule(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("not a duration like \"5m\"")
+	var problem string
+	switch {
+	case err != nil:
+		problem = `not a duration like "5m"`
+	case d <= 0:
+		problem = "a tick interval must be positive"
+	case d < MinTick:
+		return MinTick, fmt.Sprintf("mode.schedule %q is under the %s floor — ticking every %s", schedule, MinTick, MinTick)
+	default:
+		return d, ""
 	}
-	if d <= 0 {
-		return 0, fmt.Errorf("a tick interval must be positive")
-	}
-	return d, nil
+	return DefaultTick, fmt.Sprintf("mode.schedule %q: %s — ticking every %s instead", schedule, problem, DefaultTick)
 }

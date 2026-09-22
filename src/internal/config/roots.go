@@ -11,32 +11,26 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-// resolveRoots expands each source's root candidates, then applies the deny list to the symlink-resolved path and require_subdir.
+// resolveRoots checks each enabled source's roots against the compiled scope ceiling, then picks one.
 func resolveRoots(eff *Effective, in Input) error {
-	compiled := in.Catalog
-
 	for i := range eff.Sources {
 		src := &eff.Sources[i]
 		if !src.Enabled {
 			continue
 		}
-
-		spec, _ := compiled.Source(src.ID)
-		rootsField := "sources." + src.ID + ".roots"
-
-		// The scope ceiling: a root must be one the compiled catalog declared for this source.
+		spec, _ := in.Catalog.Source(src.ID)
 		for _, candidate := range src.Roots {
 			if !slices.Contains(spec.Roots, candidate) {
-				return eff.reject(rootsField, "%q is outside the compiled scope ceiling %v: a new root requires a release", candidate, spec.Roots)
+				return eff.reject("sources."+src.ID+".roots",
+					"%q is outside the compiled scope ceiling %v: a new root requires a release", candidate, spec.Roots)
 			}
 		}
-
-		root, reasons, rej := pickRoot(eff, src, in.Env)
-		if rej != nil {
-			return rej
+		root, reasons, err := pickRoot(eff, src, in.Env)
+		if err != nil {
+			return err
 		}
 		src.Root = root
-		if src.Root == "" {
+		if root == "" {
 			src.RootUnresolvedReason = strings.Join(reasons, "; ")
 		}
 	}
@@ -44,39 +38,33 @@ func resolveRoots(eff *Effective, in Input) error {
 }
 
 // pickRoot returns the first candidate that expands, exists and satisfies require_subdir, or the
-// reasons no candidate qualified. A RejectionError separates a configuration fault -- a candidate
-// that cannot expand, or one the deny list forbids -- from the ordinary absent agent, which is an
-// empty root and a reason.
+// reasons none qualified. A RejectionError is a configuration fault (a candidate that cannot expand,
+// or one the deny list forbids), unlike the ordinary absent agent, which is an empty root and a reason.
 func pickRoot(eff *Effective, src *ResolvedSource, env sources.Env) (string, []string, error) {
 	rootsField := "sources." + src.ID + ".roots"
 	var reasons []string
 	for _, candidate := range src.Roots {
 		expanded, err := env.ExpandRoot(candidate)
-		if err != nil {
-			var unset *sources.ErrUnsetVar
-			if errors.As(err, &unset) {
-				reasons = append(reasons, unset.Error())
-				continue
-			}
+		var unset *sources.ErrUnsetVar
+		switch {
+		case errors.As(err, &unset):
+			reasons = append(reasons, unset.Error())
+			continue
+		case err != nil:
 			return "", reasons, eff.reject(rootsField, "%v", err)
 		}
-
 		// Deny is checked before existence: a root pointed into ~/.ssh is a refusal whether or not it exists.
 		if err := eff.Deny.CheckRoot(expanded); err != nil {
 			return "", reasons, eff.reject(rootsField, "%v", err)
 		}
-
-		// A missing root is the agent-absent case: expected silence, kept distinguishable from a root that matches nothing.
-		info, statErr := os.Stat(expanded)
-		if statErr != nil {
+		// A missing root is the agent-absent case, kept distinguishable from a root that matches nothing.
+		if info, err := os.Stat(expanded); err != nil {
 			reasons = append(reasons, fmt.Sprintf("%s does not exist", expanded))
 			continue
-		}
-		if !info.IsDir() {
+		} else if !info.IsDir() {
 			reasons = append(reasons, fmt.Sprintf("%s is not a directory", expanded))
 			continue
 		}
-
 		if err := requireSubdir(expanded, src.RequireSubdir); err != nil {
 			reasons = append(reasons, err.Error())
 			continue
@@ -84,7 +72,6 @@ func pickRoot(eff *Effective, src *ResolvedSource, env sources.Env) (string, []s
 		if err := eff.Deny.CheckIncludes(expanded, src.Include); err != nil {
 			return "", reasons, eff.reject("sources."+src.ID+".include", "%v", err)
 		}
-
 		return expanded, reasons, nil
 	}
 	return "", reasons, nil
@@ -99,15 +86,14 @@ func RefreshAbsentRoots(eff *Effective, env sources.Env) []string {
 		if !src.Enabled || src.Root != "" {
 			continue
 		}
-		root, reasons, rej := pickRoot(eff, src, env)
+		root, reasons, err := pickRoot(eff, src, env)
 		switch {
-		case rej != nil:
-			src.RootUnresolvedReason = rej.Error()
+		case err != nil:
+			src.RootUnresolvedReason = err.Error()
 		case root == "":
 			src.RootUnresolvedReason = strings.Join(reasons, "; ")
 		default:
-			src.Root = root
-			src.RootUnresolvedReason = ""
+			src.Root, src.RootUnresolvedReason = root, ""
 			found = append(found, src.ID)
 		}
 	}

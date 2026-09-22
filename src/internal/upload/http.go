@@ -18,27 +18,22 @@ import (
 	"time"
 )
 
-// Timeouts for the presigned data path, per phase and never one overall http.Client.Timeout:
-// that one covers the body upload too, so no single value both allows a 256 MiB object on a slow
-// link and catches a stall. ResponseHeaderTimeout, the stall catcher, starts after the body.
+// Per-phase timeouts, never one overall http.Client.Timeout: that covers the body upload too, so no
+// single value both allows a 256 MiB object on a slow link and catches a stall. The whole-operation
+// bound scales with the body instead, with a pessimistic minThroughput: being wrong costs a retry.
 const (
 	dialTimeout           = 10 * time.Second
 	tlsTimeout            = 10 * time.Second
-	responseHeaderTimeout = 60 * time.Second
+	responseHeaderTimeout = 60 * time.Second // the stall catcher, starting after the body
 	idleTimeout           = 90 * time.Second
 	expectContinueTimeout = 5 * time.Second
+	operationOverhead     = 90 * time.Second
+	minThroughput         = 64 << 10 // bytes per second
+	maxOperation          = 30 * time.Minute
 )
 
-// The whole-operation bound scales with the body, from a kilobyte heartbeat to a huge transcript.
-// minThroughput is pessimistic on purpose; being wrong that way costs a retry on the next run.
-const (
-	operationOverhead = 90 * time.Second
-	minThroughput     = 64 << 10 // bytes per second
-	maxOperation      = 30 * time.Minute
-)
-
-// maxDiagnosticBytes is how much of a failure body becomes a diagnostic, maxDrainBytes how much
-// more is read to keep the connection reusable. A bounded read is the only read.
+// A failure body is read only this far: maxDiagnosticBytes for the diagnostic, maxDrainBytes more
+// to keep the connection reusable.
 const (
 	maxDiagnosticBytes = 4 << 10
 	maxDrainBytes      = 64 << 10
@@ -91,7 +86,6 @@ func New() *Uploader {
 
 // Upload spends one ticket ValidateTicket accepted, re-deriving no URL and no header of its own.
 func (u *Uploader) Upload(ctx context.Context, ticket Ticket, body []byte) error {
-	// Whole-operation deadline, scaled by body size and capped.
 	d := operationOverhead + time.Duration(len(body)/minThroughput)*time.Second
 	ctx, cancel := context.WithTimeout(ctx, min(d, maxOperation))
 	defer cancel()
@@ -119,7 +113,7 @@ func (u *Uploader) Upload(ctx context.Context, ticket Ticket, body []byte) error
 	if resp.StatusCode != http.StatusOK {
 		diagnostic, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDiagnosticBytes))
 		if readErr != nil {
-			diagnostic = nil
+			diagnostic = nil // a partial body is not a diagnostic
 		}
 		return &StatusError{Status: resp.StatusCode, Reason: sanitizeReason(string(diagnostic))}
 	}

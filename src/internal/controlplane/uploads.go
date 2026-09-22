@@ -1,8 +1,8 @@
 package controlplane
 
-// V2 upload authorization: POST /v2/uploads/authorize exchanges a bounded batch of prepared object
-// descriptors for one short-lived PUT ticket each. Authorization, not acknowledgment: the local
-// fingerprint document stays the only upload-progress authority, and no ticket URL is ever logged.
+// V2 upload authorization exchanges a bounded batch of prepared object descriptors for one
+// short-lived PUT ticket each. Authorization, not acknowledgment: the local fingerprint document
+// stays the only upload-progress authority, and no ticket URL is ever logged.
 
 import (
 	"context"
@@ -10,21 +10,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 	"uuid"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
 const uploadAuthorizePath = "/v2/uploads/authorize"
 
 // uploadAuthorizePreamble domain-separates the v2 signature: the signed bytes are this exact prefix
-// followed immediately by the body, with no canonicalization, byte-identical to the protocol fixture.
-const uploadAuthorizePreamble = "trajectory-shipper-upload-authorize-v2\nPOST\n/v2/uploads/authorize\n"
+// followed by the body, with no canonicalization, byte-identical to the protocol fixture.
+const uploadAuthorizePreamble = "trajectory-shipper-upload-authorize-v2\nPOST\n" + uploadAuthorizePath + "\n"
 
-// AuthorizeRequest is one bounded authorization batch. The caller stamps IssuedAt, the freshness
-// the server checks, so the signed bytes and the sent bytes are the same object.
+// AuthorizeRequest is one bounded authorization batch. The caller stamps IssuedAt, the freshness the server checks.
 type AuthorizeRequest struct {
 	WriterID string         `json:"writer_id"`
 	IssuedAt time.Time      `json:"issued_at"`
@@ -41,9 +37,8 @@ type UploadObject struct {
 	Metadata   UploadMetadata `json:"metadata"`
 }
 
-// UploadMetadata carries the closed plaintext-metadata allowlist; its json tags spell exactly those
-// names in order. source-hash and ticket-id are absent by design: the server derives both, so a
-// client cannot spell them itself. A mirror object sets the first four; a heartbeat sets Kind alone.
+// UploadMetadata carries the closed plaintext-metadata allowlist, its json tags in order. source-hash
+// and ticket-id are absent by design: the server derives both. A heartbeat sets Kind alone.
 type UploadMetadata struct {
 	ManifestVersion string `json:"manifest-version,omitempty"`
 	SourceID        string `json:"source-id,omitempty"`
@@ -64,35 +59,28 @@ type AuthorizeResponse struct {
 // Ticket is one bounded PUT capability, usable only after the caller matches it back to the
 // prepared object and validates its origin and exact key; this package does neither.
 type Ticket struct {
-	TicketID       string    `json:"ticket_id"`
-	ObjectID       string    `json:"object_id"`
-	AlreadyPresent bool      `json:"already_present,omitempty"`
-	Method         string    `json:"method,omitempty"`
-	URL            string    `json:"url,omitempty"`
-	ExpiresAt      time.Time `json:"expires_at,omitzero"`
-
+	TicketID        string        `json:"ticket_id"`
+	ObjectID        string        `json:"object_id"`
+	AlreadyPresent  bool          `json:"already_present,omitempty"`
+	Method          string        `json:"method,omitempty"`
+	URL             string        `json:"url,omitempty"`
+	ExpiresAt       time.Time     `json:"expires_at,omitzero"`
 	RequiredHeaders TicketHeaders `json:"required_headers,omitempty"`
+	ContentLength   int64         `json:"content_length,omitempty"`
 
-	ContentLength int64 `json:"content_length,omitempty"`
-
-	// ContentLengthSigned reports whether the provider signature covers Content-Length: capability
-	// data per ticket, not a global assumption about the store.
+	// ContentLengthSigned reports whether the provider signature covers Content-Length, per ticket.
 	ContentLengthSigned bool `json:"content_length_signed,omitempty"`
 }
 
-// TicketHeaders is a plain map because each store has its own namespace; the closed name set is
-// enforced per ticket by upload.ValidateTicket, not at decode.
+// TicketHeaders is a plain map because each store has its own namespace; upload.ValidateTicket enforces the closed name set.
 type TicketHeaders map[string]string
 
-// NewWriterID mints this process's writer identity. Audit only, nothing is fenced on it. Random
-// per process and never persisted, so two processes on one install never claim the same id.
-func NewWriterID() string {
-	return uuid.New().String()
-}
+// NewWriterID mints this process's writer identity, audit only. Random per process and never persisted.
+func NewWriterID() string { return uuid.New().String() }
 
-// AuthorizeUploads exchanges prepared object descriptors for PUT tickets. Its own status mapping:
-// 401/403 stops the run, 429/5xx retries later, and conflating them kills an install on a 429.
-func (c *Client) AuthorizeUploads(ctx context.Context, req AuthorizeRequest) (resp AuthorizeResponse, err error) {
+// AuthorizeUploads exchanges prepared object descriptors for PUT tickets. 401/403 stops the run
+// and 429/5xx retries later: conflating them kills an install on a 429.
+func (c *Client) AuthorizeUploads(ctx context.Context, req AuthorizeRequest) (AuthorizeResponse, error) {
 	switch {
 	case req.WriterID == "":
 		return AuthorizeResponse{}, errors.New("backend: authorize request carries no writer_id")
@@ -101,50 +89,40 @@ func (c *Client) AuthorizeUploads(ctx context.Context, req AuthorizeRequest) (re
 	case len(req.Objects) == 0:
 		return AuthorizeResponse{}, errors.New("backend: authorize request carries no objects")
 	}
-
-	var payload []byte
-	if payload, err = json.Marshal(req); err != nil {
+	payload, err := json.Marshal(req)
+	if err != nil {
 		return AuthorizeResponse{}, fmt.Errorf("backend: encode authorize request: %w", err)
 	}
-
 	status, raw, err := c.exchange(ctx, uploadAuthorizePath, uploadAuthorizePreamble, payload, true)
-	if err != nil {
-		return AuthorizeResponse{}, err
-	}
-	// Read only on a failure status: a 200 body holds ticket URLs, which never become a diagnostic.
-	reason := func() string { return truncate(strings.TrimSpace(string(raw)), 200) }
-
+	// The body is quoted only on a failure status: a 200 body holds ticket URLs, which never become a diagnostic.
 	switch {
+	case err != nil:
+		return AuthorizeResponse{}, err
 	case status == http.StatusOK:
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
-		return AuthorizeResponse{}, fmt.Errorf("backend: %s refused this install's credentials (HTTP %d): %w",
-			uploadAuthorizePath, status, formats.ErrCredentialsRefused)
+		return AuthorizeResponse{}, credentialsRefused(uploadAuthorizePath, status)
 	case status == http.StatusTooManyRequests, status >= 500:
-		return AuthorizeResponse{}, fmt.Errorf("%w (HTTP %d): %s", ErrAuthorizeUnavailable, status, reason())
+		return AuthorizeResponse{}, fmt.Errorf("%w (HTTP %d): %s", ErrAuthorizeUnavailable, status, reason(raw))
 	default:
-		return AuthorizeResponse{}, fmt.Errorf("backend: %s returned HTTP %d: %s", uploadAuthorizePath, status, reason())
+		return AuthorizeResponse{}, fmt.Errorf("backend: %s returned HTTP %d: %s", uploadAuthorizePath, status, reason(raw))
 	}
 
-	// Unknown response fields are ignored, so the server may grow the response before the fleet
-	// moves. Every field the client acts on is validated against the prepared object before a byte
-	// leaves, so an unread field cannot widen what is sent.
-	if err = json.Unmarshal(raw, &resp); err != nil {
+	// Unknown response fields are ignored so the server may grow the response; every field the
+	// client acts on is validated against the prepared object before a byte leaves.
+	var resp AuthorizeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
 		return AuthorizeResponse{}, fmt.Errorf("backend: decode %s response: %w", uploadAuthorizePath, err)
 	}
-
+	// The server refuses a batch whole or issues one ticket per object; anything else is a partial authorization.
 	if len(resp.Tickets) != len(req.Objects) {
-		// The server refuses a batch whole or issues one ticket per object; anything else is a
-		// partial authorization this client will not guess its way through.
 		return AuthorizeResponse{}, fmt.Errorf("backend: %s issued %d tickets for %d objects",
 			uploadAuthorizePath, len(resp.Tickets), len(req.Objects))
 	}
-	for _, ticket := range resp.Tickets {
-		if ticket.AlreadyPresent && (ticket.TicketID == "" || ticket.ObjectID == "" ||
-			ticket.Method != "" || ticket.URL != "" || !ticket.ExpiresAt.IsZero() ||
-			ticket.RequiredHeaders != nil || ticket.ContentLength != 0 || ticket.ContentLengthSigned) {
-			return AuthorizeResponse{}, fmt.Errorf(
-				"backend: %s returned an invalid already-present answer for object %q",
-				uploadAuthorizePath, ticket.ObjectID)
+	for _, t := range resp.Tickets {
+		if t.AlreadyPresent && (t.TicketID == "" || t.ObjectID == "" || t.Method != "" || t.URL != "" ||
+			!t.ExpiresAt.IsZero() || t.RequiredHeaders != nil || t.ContentLength != 0 || t.ContentLengthSigned) {
+			return AuthorizeResponse{}, fmt.Errorf("backend: %s returned an invalid already-present answer for object %q",
+				uploadAuthorizePath, t.ObjectID)
 		}
 	}
 	return resp, nil

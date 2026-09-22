@@ -2,8 +2,8 @@ package controlplane_test
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,66 +14,35 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
 
-// fakePlane is a control plane that behaves exactly as configured, including badly: the cases
-// worth testing in a client's refusals are all servers that are wrong in a specific way.
+const installID = "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061"
+
+// fakePlane serves enroll and config exactly as configured, including badly: the cases worth
+// testing in a client's refusals are all servers that are wrong in a specific way.
 type fakePlane struct {
-	t *testing.T
-
-	// config is the served document. Replaced between requests to simulate a config push.
-	config string
-
-	expiresAt time.Time
-
+	config       string // replaced between requests to simulate a config push
+	expiresAt    time.Time
 	configStatus int
-
-	enrollOrg string
-
-	// counters, so a test can assert on traffic rather than on logs.
-	configCalls int
-
-	// lastReq is what the client posted, so the request body can be checked.
-	lastReq controlplane.ConfigRequest
-
-	// lastAuth is the Authorization header, so request signing can be checked.
-	lastAuth string
-
-	// headersByPath records each endpoint's request headers, so "every request carries the
-	// client facts" is checkable per endpoint rather than on whichever came last.
-	headersByPath map[string]http.Header
+	configCalls  int
+	lastReq      controlplane.ConfigRequest
+	headers      map[string]http.Header // per endpoint, so each is checked rather than whichever came last
 }
 
-func newPlane(t *testing.T) *fakePlane {
+func newPlane(t *testing.T) (*fakePlane, *httptest.Server) {
 	t.Helper()
-	return &fakePlane{
-		t:             t,
-		headersByPath: map[string]http.Header{},
-		config:        "org: acme\n",
-		expiresAt:     time.Now().Add(24 * time.Hour),
-		enrollOrg:     "acme",
-	}
-}
-
-func (p *fakePlane) start() *httptest.Server {
+	p := &fakePlane{config: "org: acme\n", expiresAt: time.Now().Add(24 * time.Hour), headers: map[string]http.Header{}}
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/v1/enroll", func(w http.ResponseWriter, r *http.Request) {
-		p.headersByPath[r.URL.Path] = r.Header.Clone()
+		p.headers[r.URL.Path] = r.Header.Clone()
 		var req controlplane.EnrollRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AgeRecipient == "" {
+			http.Error(w, "bad enrollment", http.StatusBadRequest)
 			return
 		}
-		if req.AgeRecipient == "" {
-			http.Error(w, "no age recipient", http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, controlplane.EnrollResponse{Organization: p.enrollOrg})
+		_ = json.NewEncoder(w).Encode(controlplane.EnrollResponse{Organization: "acme"})
 	})
-
 	mux.HandleFunc("/v1/config", func(w http.ResponseWriter, r *http.Request) {
 		p.configCalls++
-		p.lastAuth = r.Header.Get("Authorization")
-		p.headersByPath[r.URL.Path] = r.Header.Clone()
+		p.headers[r.URL.Path] = r.Header.Clone()
 		if err := json.NewDecoder(r.Body).Decode(&p.lastReq); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -82,39 +51,47 @@ func (p *fakePlane) start() *httptest.Server {
 			http.Error(w, http.StatusText(p.configStatus), p.configStatus)
 			return
 		}
-		writeJSON(w, controlplane.ConfigResponse{Config: []byte(p.config), ExpiresAt: p.expiresAt})
+		_ = json.NewEncoder(w).Encode(controlplane.ConfigResponse{Config: []byte(p.config), ExpiresAt: p.expiresAt})
 	})
-
 	srv := httptest.NewServer(mux)
-	p.t.Cleanup(srv.Close)
-	return srv
+	t.Cleanup(srv.Close)
+	return p, srv
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-// enrolled returns a record pointing at the plane, as `quesma-shipper enroll` would have written it.
-func (p *fakePlane) enrolled(t *testing.T, endpoint, installID string) *controlplane.Enrollment {
+// enrolled returns a record pointing at endpoint, as `quesma-shipper enroll` would have written it.
+func enrolled(t *testing.T, endpoint string) *controlplane.Enrollment {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
-	return &controlplane.Enrollment{
-		InstallID:    installID,
-		Organization: p.enrollOrg,
-		Endpoint:     endpoint,
-		DeviceKey:    base64.StdEncoding.EncodeToString(priv),
-		EnrolledAt:   controlplane.Now(),
-	}
+	return &controlplane.Enrollment{InstallID: installID, Organization: "acme", Endpoint: endpoint,
+		DeviceKey: controlplane.EncodeKey(priv), EnrolledAt: controlplane.Now()}
 }
 
-func (p *fakePlane) client(t *testing.T, endpoint, install string) *controlplane.Client {
+func client(t *testing.T, endpoint string) (*controlplane.Client, ed25519.PublicKey) {
 	t.Helper()
-	e := p.enrolled(t, endpoint, install)
-	c, err := e.Client()
+	pub, priv, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
-	return c
+	c, err := controlplane.New(controlplane.Options{Endpoint: endpoint, InstallID: installID, Organization: "acme", DeviceKey: priv})
+	require.NoError(t, err)
+	return c, pub
 }
 
-const installID = "0f5a6b3c-1d2e-4f60-8a9b-1c2d3e4f5061"
+type submission struct {
+	path, authorization, contentType string
+	body                             []byte
+}
+
+// controlPlane answers every request with one status and body, and records what arrived.
+func controlPlane(t *testing.T, status int, answer string) (*httptest.Server, *submission) {
+	t.Helper()
+	got := &submission{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.body, _ = io.ReadAll(r.Body)
+		got.path, got.authorization, got.contentType = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, answer)
+	}))
+	t.Cleanup(server.Close)
+	return server, got
+}
