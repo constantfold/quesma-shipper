@@ -12,12 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newScrubber(t *testing.T) *Scrubber {
-	t.Helper()
+func newScrubber(t *testing.T) *Scrubber { return scrubberAs(t, "jane") }
+
+func scrubberAs(tb testing.TB, username string) *Scrubber {
+	tb.Helper()
 	cfg := DefaultConfig()
-	cfg.Username = "jane"
+	cfg.Username = username
 	s, err := New(cfg)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return s
 }
 
@@ -229,8 +231,7 @@ func buildRecordWithValueAt(t *testing.T, path, value string) string {
 
 // The compiled default protects the identifier spine on its own, not only through config resolution.
 func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
-	s, err := New(DefaultConfig())
-	require.NoError(t, err)
+	s := scrubberAs(t, "")
 
 	// High-entropy on purpose: this is the shape the backstop fires on.
 	const id = "toolu_01FcSqsnNxWeeDGKyfZKjJHbXk9QwErTyU"
@@ -245,8 +246,7 @@ func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
 
 // A pattern that backtracks pathologically stalls an install without erroring, so the worst case is kept.
 func TestTheScrubberKeepsItsWorstCase(t *testing.T) {
-	s, err := New(DefaultConfig())
-	require.NoError(t, err)
+	s := scrubberAs(t, "")
 	d, n := s.Slowest()
 	require.True(t, d == 0 && n == 0, "a fresh Scrubber claims a slowest scrub: %v over %d bytes", d, n)
 
@@ -255,7 +255,7 @@ func TestTheScrubberKeepsItsWorstCase(t *testing.T) {
 	for len(big) < 64<<10 {
 		big = append(big, `{"msg":"the quick brown fox jumps over the lazy dog"}`+"\n"...)
 	}
-	_, err = s.Scrub(big, Hint{JSONL: true})
+	_, err := s.Scrub(big, Hint{JSONL: true})
 	require.NoError(t, err)
 	afterBig, bytesBig := s.Slowest()
 	assert.NotZero(t, afterBig, "scrubbing 64 KB registered no cost at all")

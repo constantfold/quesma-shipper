@@ -144,9 +144,6 @@ func NormaliseRemote(raw string) (hostPath, project string, err error) {
 	case "file", "":
 		return "", "", fmt.Errorf("local filesystem remote")
 	}
-	if u.Host == "" {
-		return "", "", fmt.Errorf("remote has no host")
-	}
 	// u.Hostname() drops userinfo AND the port, so no credential survives and one repository keeps one label.
 	return finishRemote(u.Hostname(), u.Path)
 }

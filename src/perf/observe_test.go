@@ -94,15 +94,8 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	obs.CPUSeconds = seconds(ru.Utime) + seconds(ru.Stime)
 
 	// Maxrss is kilobytes on Linux, bytes on darwin; a loud stop elsewhere rather than a peak off by 1000x.
-	var unit int64
-	switch runtime.GOOS {
-	case "linux":
-		unit = 1 << 10
-	case "darwin":
-		unit = 1
-	default:
-		t.Fatalf("the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
-	}
+	unit := map[string]int64{"linux": 1 << 10, "darwin": 1}[runtime.GOOS]
+	require.NotZerof(t, unit, "the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
 	obs.PeakRSS, obs.PeakRSSSource = ru.Maxrss*unit, "Maxrss"
 	if vmHWM > obs.PeakRSS {
 		obs.PeakRSS, obs.PeakRSSSource = vmHWM, "VmHWM"

@@ -29,7 +29,6 @@ const (
 // ErrLocked means another flush holds the store; the caller should try later rather than wait.
 var ErrLocked = errors.New("state: store is locked by another flush")
 
-// Key identifies one fingerprint.
 type Key struct {
 	SourceID   string
 	NativePath string
@@ -116,7 +115,6 @@ func open(stateDir, installID string, maxBytes int64) (*Store, error) {
 	return s, nil
 }
 
-// Close releases the lock.
 func (s *Store) Close() error {
 	if s.lock == nil {
 		return nil
@@ -192,9 +190,6 @@ func (s *Store) EnsureSpec(sourceID, specFP string) (dropped int, err error) {
 		before := len(s.entries)
 		maps.DeleteFunc(s.entries, func(k Key, _ Fingerprint) bool { return k.SourceID == sourceID })
 		dropped = before - len(s.entries)
-	}
-	if s.specs == nil {
-		s.specs = map[string]string{}
 	}
 	s.specs[sourceID] = specFP
 	return dropped, s.flush()

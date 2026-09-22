@@ -140,7 +140,12 @@ func (p *sourcePass) run(ctx context.Context) error {
 		}
 	}
 
-	p.assemble()
+	// Candidate order; an unfilled slot never decided.
+	for _, outcome := range p.slots {
+		if outcome.Decision != "" {
+			p.out.Files = append(p.out.Files, outcome)
+		}
+	}
 
 	// Written even if a refusal ended the pass.
 	if p.unchangedElided > 0 {

@@ -280,9 +280,7 @@ func query(db *sql.DB, o Options) (Result, error) {
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-// The compiled row and field deny, configurable at no layer: auth material shares the database with trajectories.
-
-// deniedKeyPrefixes are keyspaces no enricher may read: cursorAuth/* holds Cursor's own session tokens.
+// deniedKeyPrefixes are compiled keyspaces no enricher or config may read: cursorAuth/* holds Cursor's session tokens.
 var deniedKeyPrefixes = []string{"cursorauth/", "cursorauth."}
 
 // deniedFields are stripped from every value at any depth: Cursor's blob keys, stored beside the content they protect.

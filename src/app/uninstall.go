@@ -8,10 +8,8 @@ import (
 )
 
 type UninstallStep struct {
-	Done   string
-	Detail string
-	Skip   string
-	Err    error
+	Done, Detail, Skip string
+	Err                error
 }
 
 func Uninstall(purge bool, report func(UninstallStep)) (bool, error) {
@@ -69,10 +67,7 @@ func uninstallState(stateDir string, purge bool, report func(UninstallStep)) err
 		report(UninstallStep{Skip: "local state kept", Detail: stateDir})
 		return nil
 	}
-	if err := packaging.RemoveState(stateDir); err != nil {
-		report(UninstallStep{Done: "local state removed", Detail: stateDir, Err: err})
-		return err
-	}
-	report(UninstallStep{Done: "local state removed", Detail: stateDir})
-	return nil
+	err := packaging.RemoveState(stateDir)
+	report(UninstallStep{Done: "local state removed", Detail: stateDir, Err: err})
+	return err
 }

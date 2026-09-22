@@ -39,8 +39,12 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		return nil, paths, controlplane.Remote{}, err
 	}
 
-	// Only local layers may set state_dir, which must be known before the remote fetch.
-	paths.StateDir = stateDirFrom(layers, paths.StateDir)
+	// Only local layers may set state_dir, which must be known before the remote fetch; the last one wins, as in Resolve.
+	for _, ld := range layers {
+		if ld.Doc != nil && ld.Doc.StateDir != nil && *ld.Doc.StateDir != "" {
+			paths.StateDir = *ld.Doc.StateDir
+		}
+	}
 
 	// An unusable record is refused, or an enrolled install would silently downgrade to standalone.
 	enrollment, err := controlplane.LoadEnrollment(paths.StateDir)
@@ -65,15 +69,4 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 	// The identity unit and the fingerprint document persist together in the directory in force.
 	paths.StateDir = eff.StateDir
 	return eff, paths, remote, nil
-}
-
-// stateDirFrom lets the last layer that sets state_dir win, as Resolve does.
-func stateDirFrom(layers []config.LayeredDocument, def string) string {
-	out := def
-	for _, ld := range layers {
-		if ld.Doc != nil && ld.Doc.StateDir != nil && *ld.Doc.StateDir != "" {
-			out = *ld.Doc.StateDir
-		}
-	}
-	return out
 }

@@ -53,9 +53,7 @@ type Derived struct {
 
 // EnrichResult is one enricher's whole contribution to a flush.
 type EnrichResult struct {
-	EnricherID string
-	Version    int
-	Objects    []Derived // empty is a normal outcome
+	Objects []Derived // empty is a normal outcome
 
 	Skipped, Mismatched, Errors int // inputs that produced nothing; only Mismatched is an alarm
 
@@ -75,9 +73,6 @@ type Enricher interface {
 
 	// Compiled-in agent database locations in preference order, with catalog-root ~ and $VAR syntax.
 	DBCandidates() []string
-
-	// A unit-free enricher runs on EVERY flush, since the store moves while an install sits idle.
-	NeedsUnits() bool
 
 	// Enrich returns a result, never an error: no enricher failure should stop a flush.
 	Enrich(Input) EnrichResult

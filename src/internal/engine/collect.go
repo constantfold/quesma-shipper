@@ -60,7 +60,7 @@ func (o Options) collectSource(ctx context.Context, store *commitBuffer, src sou
 
 	// Enrichment runs after every raw unit has shipped, so an enricher cannot hold up a raw file.
 	for _, enricher := range enrichers {
-		if len(staged) == 0 && enricher.NeedsUnits() {
+		if len(staged) == 0 {
 			continue
 		}
 		if err := o.enrichSource(ctx, store, src, enricher, staged, &out, rep); err != nil {

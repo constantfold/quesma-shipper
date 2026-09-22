@@ -4,7 +4,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,9 +41,7 @@ func TestGOMEMLIMITWins(t *testing.T) {
 // The cap is process-wide, so a test that moves it puts it back, registered before the t.Setenv that follows.
 func capFromEnv(t *testing.T, value string) {
 	t.Helper()
-	t.Cleanup(func() {
-		require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv())
-	})
+	t.Cleanup(func() { require.NoError(t, platform.ApplyMaxInFlightBytesFromEnv()) })
 	t.Setenv(platform.EnvMaxInFlightBytes, value)
 }
 
@@ -76,8 +73,8 @@ func TestAnUnusableInFlightCapIsRefused(t *testing.T) {
 			capFromEnv(t, value)
 
 			err := platform.ApplyMaxInFlightBytesFromEnv()
-			require.Error(t, err)
-			assert.Truef(t, strings.Contains(err.Error(), platform.EnvMaxInFlightBytes) && strings.Contains(err.Error(), value), "diagnostic %q names neither the variable nor the value", err)
+			require.ErrorContains(t, err, platform.EnvMaxInFlightBytes, "the diagnostic must name the variable")
+			assert.ErrorContains(t, err, value, "the diagnostic must name the value")
 			assert.Equal(t, platform.MaxInFlightBytes(), before)
 		})
 	}

@@ -24,18 +24,14 @@ var PauseChoices = []PauseChoice{
 	{"6 h", "6h", after(6 * time.Hour)},
 	{"12 h", "12h", after(12 * time.Hour)},
 	{"24 h", "24h", after(24 * time.Hour)},
-	{"until tomorrow 9:00", "tomorrow", tomorrowAt(9, 0)},
+	{"until tomorrow 9:00", "tomorrow", func(now time.Time) time.Time {
+		t := now.AddDate(0, 0, 1)
+		return time.Date(t.Year(), t.Month(), t.Day(), 9, 0, 0, 0, now.Location())
+	}},
 }
 
 func after(d time.Duration) func(time.Time) time.Time {
 	return func(now time.Time) time.Time { return now.Add(d) }
-}
-
-func tomorrowAt(h, m int) func(time.Time) time.Time {
-	return func(now time.Time) time.Time {
-		t := now.AddDate(0, 0, 1)
-		return time.Date(t.Year(), t.Month(), t.Day(), h, m, 0, 0, now.Location())
-	}
 }
 
 func ParsePauseUntil(args []string, now time.Time) (time.Time, error) {
@@ -87,8 +83,7 @@ func Resume() (wasPaused bool, warning string, err error) {
 	if err != nil {
 		return false, "", err
 	}
-	was := platform.Read(stateDir).Paused
-	return was, warning, platform.Clear(stateDir)
+	return platform.Read(stateDir).Paused, warning, platform.Clear(stateDir)
 }
 
 func FormatUntil(t, now time.Time) string {

@@ -68,10 +68,8 @@ func (d *List) MatchPair(given, resolved string) (bool, string) {
 // MatchTree reports whether a directory is a denied tree, or sits inside one. Only a "<root>/**" pattern may prune a tree.
 func (d *List) MatchTree(dir string) (bool, string) {
 	c := normalize(dir)
-	for _, pat := range d.patterns {
-		if matchesTree(pat, c) {
-			return true, pat
-		}
+	if i := slices.IndexFunc(d.patterns, func(pat string) bool { return matchesTree(pat, c) }); i >= 0 {
+		return true, d.patterns[i]
 	}
 	return false, ""
 }

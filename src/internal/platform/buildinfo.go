@@ -11,7 +11,6 @@ import (
 	"sync"
 )
 
-// Info is what this binary knows about itself.
 type Info struct {
 	// Version is the module version when the toolchain derives one, and the commit otherwise: a subdirectory module never gets a tag.
 	Version string
@@ -34,7 +33,6 @@ type Info struct {
 // releaseVersion is set by release CI via -ldflags -X; believed only when applyStamp corroborates it.
 var releaseVersion string
 
-// Current reads the stamped information once.
 var Current = sync.OnceValue(read)
 
 func read() Info {

@@ -76,11 +76,9 @@ type browser struct {
 	rows []app.AgentRow
 	pal  palette
 
-	open   string
-	sel    int
-	top    int
-	height int
-	status string // shown dim under the table until the next move
+	open             string
+	sel, top, height int
+	status           string // shown dim under the table until the next move
 }
 
 func (b *browser) refresh() error {
@@ -150,21 +148,18 @@ func (b *browser) clip(tbl string) string {
 }
 
 func (b *browser) screen(now time.Time, raw bool) string {
+	a := b.agent()
 	var body string
-	if a := b.agent(); a != nil {
-		body = renderRepos(*a, b.sel, now, b.pal)
+	if a != nil {
+		body = b.clip(renderRepos(*a, b.sel, now, b.pal))
 	} else {
-		body = renderAgents(b.rows, b.sel, now, b.pal)
+		body = b.clip(renderAgents(b.rows, b.sel, now, b.pal))
 	}
-	body = b.clip(body)
 	if b.status != "" {
 		body += "\n" + styled(b.pal.dim, b.status, b.pal.reset) + "\n"
 	}
-	off := false
-	if a := b.agent(); a != nil && b.sel < len(a.Repos) {
-		off = a.Repos[b.sel].Off
-	}
-	body += "\n" + trackingHelp(b.pal, b.agent() != nil, off) + "\n"
+	off := a != nil && b.sel < len(a.Repos) && a.Repos[b.sel].Off
+	body += "\n" + trackingHelp(b.pal, a != nil, off) + "\n"
 	if raw {
 		body = strings.ReplaceAll(body, "\n", "\r\n")
 	}

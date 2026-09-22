@@ -10,10 +10,8 @@ func TestNewer(t *testing.T) {
 	const latest = "0.0.1-124.def456def456"
 
 	for _, tc := range []struct {
-		name    string
-		latest  string
-		current string
-		want    bool
+		name, latest, current string
+		want                  bool
 	}{
 		{"older release", latest, "0.0.1-123.abcdef123456", true},
 		{"same release", latest, latest, false},

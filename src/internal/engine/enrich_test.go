@@ -59,18 +59,12 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 	rows := []struct{ table, key, value string }{
 		{"ItemTable", "cursorAuth/accessToken", sessionToken},
 		{"cursorDiskKV", "cursorAuth/refreshToken", sessionToken},
-		{
-			"cursorDiskKV", "composerData:" + enrichConv,
-			fmt.Sprintf(`{"composerId":%q,"blobEncryptionKey":%q,"%s":"x",
-				"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]}`,
-				enrichConv, blobKey, unusedRowMarker),
-		},
+		{"cursorDiskKV", "composerData:" + enrichConv, fmt.Sprintf(`{"composerId":%q,"blobEncryptionKey":%q,"%s":"x",
+			"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2}]}`,
+			enrichConv, blobKey, unusedRowMarker)},
 		{"cursorDiskKV", "bubbleId:" + enrichConv + ":b1", `{"bubbleId":"b1","type":1,"text":"list the workspace"}`},
 		{"cursorDiskKV", "bubbleId:" + enrichConv + ":b2", `{"bubbleId":"b2","type":2,"text":"Listing the workspace folder contents."}`},
-		{
-			"cursorDiskKV", "bubbleId:" + enrichConv + ":b3",
-			toolResult("total 24\n-rw-r--r-- 1 jane staff 812 main.go"),
-		},
+		{"cursorDiskKV", "bubbleId:" + enrichConv + ":b3", toolResult("total 24\n-rw-r--r-- 1 jane staff 812 main.go")},
 		// A checkpoint row, outside the declared keyspaces entirely.
 		{"cursorDiskKV", "checkpointId:" + enrichConv + ":x", `{"` + unusedRowMarker + `":"y"}`},
 	}
@@ -202,9 +196,8 @@ func TestTheDerivedObjectReShipsOnlyWhenItsOutputChanges(t *testing.T) {
 // Whatever the enricher does, exactly the raw object ships; only a mismatch, not a missing database, raises the alarm.
 func TestRawShipsAloneWhenThereIsNoJoin(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		enricherOn bool
-		mismatch   bool
+		name                 string
+		enricherOn, mismatch bool
 	}{
 		{"disabled", false, false},
 		{"mismatch", true, true},

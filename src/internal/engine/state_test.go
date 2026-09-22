@@ -136,11 +136,7 @@ func TestEnsureSpecDropsOnlyTheChangedSource(t *testing.T) {
 		_, ensureSpecErr := s.EnsureSpec(id, sha)
 		require.NoError(t, ensureSpecErr)
 	}
-	entries := []engine.Key{
-		{SourceID: "claude-code-transcripts", NativePath: "/x/a.jsonl"},
-		{SourceID: "claude-code-transcripts", NativePath: "/x/b.jsonl"},
-		{SourceID: "codex-rollouts", NativePath: "/y/r.jsonl"},
-	}
+	entries := []engine.Key{key("/x/a.jsonl"), key("/x/b.jsonl"), {SourceID: "codex-rollouts", NativePath: "/y/r.jsonl"}}
 	for _, k := range entries {
 		require.NoError(t, commit(s, k, fingerprint()))
 	}

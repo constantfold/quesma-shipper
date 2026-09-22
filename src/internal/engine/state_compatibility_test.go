@@ -3,7 +3,6 @@ package engine_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,8 +53,8 @@ func TestNegativeAttemptsIsRejectedOnLoad(t *testing.T) {
 	doc := `{"state_schema": 1, "entries": [{"source_id": "claude-code-transcripts", "native_path": "/x/a.jsonl", "attempts": -5}]}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte(doc), 0o600))
 	_, err := engine.Peek(dir)
-	require.Error(t, err, "a negative attempts count must be rejected")
-	assert.Truef(t, strings.Contains(err.Error(), "attempts") && strings.Contains(err.Error(), "/x/a.jsonl"), "the error must name the value and the entry, got: %v", err)
+	require.ErrorContains(t, err, "attempts", "a negative attempts count must be rejected, naming the value")
+	assert.ErrorContains(t, err, "/x/a.jsonl", "the error must name the entry")
 }
 
 // The schema is enforced on the way out, so a bad commit fails and the old document stays.
@@ -66,8 +65,7 @@ func TestCommitOfAnUnserializableEntryFails(t *testing.T) {
 	before, err := os.ReadFile(filepath.Join(dir, engine.FileName))
 	require.NoError(t, err)
 
-	bad := engine.Key{SourceID: "claude-code-transcripts", NativePath: ""}
-	require.Error(t, commit(s, bad, fingerprint()), "a document that would not satisfy its own schema must not be written")
+	require.Error(t, commit(s, key(""), fingerprint()), "a document that would not satisfy its own schema must not be written")
 
 	after, err := os.ReadFile(filepath.Join(dir, engine.FileName))
 	require.NoError(t, err)

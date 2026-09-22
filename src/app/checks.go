@@ -15,15 +15,9 @@ const (
 )
 
 type Row struct {
-	Sev    Severity
-	Label  string
-	Detail string
-	Fix    string
-	Rollup bool
-	Sub    bool
-	Brief  string
-	Name   bool
-	Tag    string
+	Sev                            Severity
+	Label, Detail, Fix, Brief, Tag string
+	Rollup, Sub, Name              bool
 }
 
 func (r Row) Head() string {
@@ -41,12 +35,10 @@ type Section struct {
 }
 
 type Report struct {
-	Sections         []Section
-	Update           UpdateStatus
-	Organization     string
-	Endpoint         string
-	AgentsCollecting int
-	FilesFound       int
+	Sections                     []Section
+	Update                       UpdateStatus
+	Organization, Endpoint       string
+	AgentsCollecting, FilesFound int
 }
 
 func (r *Report) Issues() (out []string, fails int) {

@@ -112,9 +112,6 @@ var absolutePath = regexp.MustCompile(`(?:/[^/ \t\n"',;:)]+){3,}`)
 
 // shortenTelemetryPaths keeps the last two segments of any absolute path.
 func shortenTelemetryPaths(message string) string {
-	if !strings.Contains(message, "/") {
-		return message
-	}
 	return absolutePath.ReplaceAllStringFunc(message, func(path string) string {
 		segments := strings.Split(path, "/")
 		return "…/" + strings.Join(segments[len(segments)-2:], "/")

@@ -227,9 +227,8 @@ func ServiceState(ctx context.Context) Status {
 		return st
 	}
 	st.Path = launchdPath(home)
-	if _, err := os.Stat(st.Path); err == nil {
-		st.Installed = true
-	}
+	_, err = os.Stat(st.Path)
+	st.Installed = err == nil
 
 	out, err := exec.CommandContext(ctx, launchctl, "print", guiService()).CombinedOutput()
 	if err != nil {

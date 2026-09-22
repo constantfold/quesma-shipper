@@ -44,12 +44,11 @@ func TestOversizeSummaries(t *testing.T) {
 		source formats.SourceOutcome
 		want   []string
 	}{
-		{formats.SourceOutcome{SourceID: "codex-rollouts", Health: formats.Collected,
-			Oversize: 1, OversizeLargest: 412 << 20, OversizeLimit: 256 << 20, OversizeExample: "sessions/2026/08/01/rollout-2026-08-01-abc.jsonl",
-		}, []string{"codex-rollouts", "1 file over the", "256.0 MB", "412.0 MB", "rollout-2026-08-01-abc.jsonl"}},
-		{formats.SourceOutcome{SourceID: "claude-code-transcripts", Health: formats.Collected,
-			Oversize: 3, OversizeLargest: 900 << 20, OversizeLimit: 256 << 20, OversizeExample: "projects/x/big.jsonl",
-		}, []string{"claude-code-transcripts", "3 files over the", "256.0 MB", "900.0 MB", "projects/x/big.jsonl"}},
+		{formats.SourceOutcome{SourceID: "codex-rollouts", Health: formats.Collected, Oversize: 1, OversizeLargest: 412 << 20, OversizeLimit: 256 << 20,
+			OversizeExample: "sessions/2026/08/01/rollout-2026-08-01-abc.jsonl"},
+			[]string{"codex-rollouts", "1 file over the", "256.0 MB", "412.0 MB", "rollout-2026-08-01-abc.jsonl"}},
+		{formats.SourceOutcome{SourceID: "claude-code-transcripts", Health: formats.Collected, Oversize: 3, OversizeLargest: 900 << 20, OversizeLimit: 256 << 20,
+			OversizeExample: "projects/x/big.jsonl"}, []string{"claude-code-transcripts", "3 files over the", "256.0 MB", "900.0 MB", "projects/x/big.jsonl"}},
 	} {
 		out := summaryOutput(formats.Report{Sources: []formats.SourceOutcome{tc.source}}, false)
 		for _, want := range append(tc.want, "max_file_bytes") {

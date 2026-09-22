@@ -65,8 +65,7 @@ func HomeTilde(path string) string {
 	return path
 }
 
-func controlPlaneRows(enr *controlplane.Enrollment, enrErr error,
-	eff *config.Effective, remote controlplane.Remote) []Row {
+func controlPlaneRows(enr *controlplane.Enrollment, enrErr error, eff *config.Effective, remote controlplane.Remote) []Row {
 	if enr == nil {
 		if enrErr != nil && !errors.Is(enrErr, os.ErrNotExist) {
 			return []Row{{Sev: SevWarn, Label: "server", Detail: fmt.Sprintf("enrollment record unreadable: %v", enrErr),
@@ -90,8 +89,7 @@ func controlPlaneRows(enr *controlplane.Enrollment, enrErr error,
 	return rows
 }
 
-func enrollmentRows(stateDir string, enr *controlplane.Enrollment, enrErr error,
-	eff *config.Effective, remote controlplane.Remote) []Row {
+func enrollmentRows(stateDir string, enr *controlplane.Enrollment, enrErr error, eff *config.Effective, remote controlplane.Remote) []Row {
 	if enr == nil {
 		if enrErr == nil || errors.Is(enrErr, os.ErrNotExist) {
 			return []Row{{Sev: SevDim, Label: "enrollment",
@@ -100,9 +98,7 @@ func enrollmentRows(stateDir string, enr *controlplane.Enrollment, enrErr error,
 		return []Row{{Sev: SevWarn, Label: "enrollment", Detail: fmt.Sprintf("unreadable: %v", enrErr)}}
 	}
 
-	rows := []Row{
-		{Sev: SevDim, Label: "enrollment", Detail: fmt.Sprintf("%s - organization %s", enr.Endpoint, enr.Organization)},
-	}
+	rows := []Row{{Sev: SevDim, Label: "enrollment", Detail: fmt.Sprintf("%s - organization %s", enr.Endpoint, enr.Organization)}}
 	if root, err := formats.InstallRoot(enr.Organization, enr.InstallID); err == nil {
 		rows = append(rows, Row{Sev: SevDim, Label: "install_key_root", Detail: root})
 	}

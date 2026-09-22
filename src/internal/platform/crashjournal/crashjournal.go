@@ -114,15 +114,13 @@ type Summary struct {
 // LastRun reports the undelivered crash before this process, or nil. Call it before Open, which may rotate the file.
 func LastRun(stateDir string) *Summary {
 	raw, err := readCapped(filepath.Join(stateDir, fileName))
-	if err != nil || len(raw) == 0 {
+	if err != nil {
 		return nil
 	}
 
 	byRun := map[string]*Summary{}
 	var order []*Summary
-	for len(raw) > 0 {
-		line, rest, _ := bytes.Cut(raw, []byte{'\n'})
-		raw = rest
+	for line := range bytes.SplitSeq(raw, []byte{'\n'}) {
 		var e entry
 		if json.Unmarshal(line, &e) != nil || e.RunID == "" {
 			continue
@@ -144,9 +142,6 @@ func LastRun(stateDir string) *Summary {
 			s.Reported = true
 		}
 	}
-	if len(order) == 0 {
-		return nil
-	}
 
 	// Only a "reported" run proves delivery, so the walk stops there; a live run with no exit is concurrent, not dead.
 	var crash *Summary
@@ -166,7 +161,7 @@ func LastRun(stateDir string) *Summary {
 	return crash
 }
 
-// readCapped reads at most the trailing maxReadBytes, dropping a leading partial line.
+// readCapped reads at most the trailing maxReadBytes; LastRun skips the leading partial line that may leave.
 func readCapped(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -177,7 +172,6 @@ func readCapped(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A leading partial line needs no trimming: LastRun skips anything that does not unmarshal.
 	if info.Size() > maxReadBytes {
 		if _, err := f.Seek(-maxReadBytes, io.SeekEnd); err != nil {
 			return nil, err

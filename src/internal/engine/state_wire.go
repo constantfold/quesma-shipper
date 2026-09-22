@@ -99,7 +99,7 @@ func load(stateDir string, maxBytes int64) (Document, error) {
 	path := filepath.Join(stateDir, FileName)
 	raw, _, err := platform.ReadWhole(path, maxBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return Document{Entries: map[Key]Fingerprint{}}, nil // first run: everything is unshipped
+		return Document{SourceSpecs: map[string]string{}, Entries: map[Key]Fingerprint{}}, nil // first run: everything is unshipped
 	}
 	if err != nil {
 		return Document{}, fmt.Errorf("state: read %s: %w", path, err)

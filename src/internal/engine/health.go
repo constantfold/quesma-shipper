@@ -35,7 +35,6 @@ type Heartbeat struct {
 	Sources []SourceHealth `json:"sources"`
 }
 
-// SourceHealth is one source's discovery state.
 type SourceHealth struct {
 	SourceID string `json:"source_id"`
 	Family   string `json:"family,omitempty"`
@@ -112,7 +111,6 @@ func (hb Heartbeat) WithReport(rep formats.Report, now time.Time) Heartbeat {
 	return hb
 }
 
-// Encode serializes the heartbeat.
 func (h Heartbeat) Encode() ([]byte, error) {
 	body, err := json.MarshalIndent(h, "", "  ")
 	if err != nil {

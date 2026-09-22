@@ -35,9 +35,6 @@ func (*Enricher) ID() string    { return id }
 func (*Enricher) Version() int  { return version }
 func (*Enricher) Table() string { return table }
 
-// The join derives from the transcript lines, so with no staged units there is nothing to do.
-func (*Enricher) NeedsUnits() bool { return true }
-
 // Prefixes rather than the whole table: state.vscdb also holds checkpoints, diffs and tokens.
 func (*Enricher) Keyspaces() []string { return []string{composerPrefix, bubblePrefix} }
 
@@ -57,7 +54,7 @@ func (*Enricher) DBCandidates() []string {
 }
 
 func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
-	res := transforms.EnrichResult{EnricherID: id, Version: version}
+	var res transforms.EnrichResult
 
 	if in.DBPath == "" {
 		// Not an alarm: nothing to derive from, and the raw transcripts ship as always.

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -95,8 +94,7 @@ func TestAuthorizeUploadsRefusesIncompleteRequest(t *testing.T) {
 		req := sampleAuthorizeRequest()
 		blank(&req)
 		_, err := c.AuthorizeUploads(context.Background(), req)
-		require.Error(t, err)
-		assert.True(t, strings.Contains(err.Error(), field), "a batch missing %s must be refused by name, got %v", field, err)
+		require.ErrorContains(t, err, field, "a batch missing %s must be refused by name", field)
 		assert.Empty(t, got.path)
 	}
 }

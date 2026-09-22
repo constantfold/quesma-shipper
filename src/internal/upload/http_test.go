@@ -99,8 +99,7 @@ func TestUploadNonOKStatusIsAFailure(t *testing.T) {
 	var status *StatusError
 	require.ErrorAs(t, err, &status)
 	require.Equal(t, http.StatusForbidden, status.Status)
-	require.NotContains(t, status.Reason, "\n", "reason was not sanitized")
-	require.NotContains(t, status.Reason, "\t", "reason was not sanitized")
+	require.Falsef(t, strings.ContainsAny(status.Reason, "\n\t"), "reason was not sanitized: %q", status.Reason)
 	require.Contains(t, status.Reason, "AccessDenied", "reason lost the store's diagnostic")
 	assertNoURLLeak(t, err, ticket.URL)
 }

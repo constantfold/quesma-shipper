@@ -84,8 +84,7 @@ func renderAgents(rows []app.AgentRow, sel int, now time.Time, pal palette) stri
 		if len(a.Repos) == 0 {
 			state = "not installed"
 		} else {
-			repos, size, last = strconv.Itoa(len(a.Repos)), bytesCell(a.Bytes), app.Ago(a.Last, now)
-			pending = toSync(a.Pending, a.PendingKnown)
+			repos, size, pending, last = strconv.Itoa(len(a.Repos)), bytesCell(a.Bytes), toSync(a.Pending, a.PendingKnown), app.Ago(a.Last, now)
 		}
 		cells[i] = []string{cursor(i == sel), a.Display, repos, size, pending, last, state}
 		styles[i] = rowStyle(pal, i == sel, len(a.Repos) == 0)

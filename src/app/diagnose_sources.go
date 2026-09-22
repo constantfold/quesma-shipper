@@ -135,24 +135,21 @@ func enricherRows(src config.ResolvedSource) []Row {
 	var rows []Row
 	compiled := Enrichers()
 	for _, id := range slices.Sorted(maps.Keys(src.Enrichers)) {
-		e := compiled[id]
-		if e == nil {
+		switch e := compiled[id]; {
+		case e == nil:
 			rows = append(rows, Row{Sev: SevWarn, Label: "  enricher " + id,
 				Detail: fmt.Sprintf("declared but not in this build: enrich: no enricher %q in this build", id)})
-			continue
-		}
-		if !src.Enrichers[id] {
+		case !src.Enrichers[id]:
 			rows = append(rows, Row{Sev: SevDim, Label: "  enricher " + id,
 				Detail: "disabled - no tool results, call ids or timestamps will be collected"})
-			continue
-		}
-		label := fmt.Sprintf("  enricher %s@%d", id, e.Version())
-		if db := firstExistingDB(e); db == "" {
-			rows = append(rows, Row{Sev: SevWarn, Label: label,
-				Detail: strings.Join(e.DBCandidates(), ", ") + " not found, raw files only"})
-		} else {
-			rows = append(rows, Row{Sev: SevOK, Label: label,
-				Detail: fmt.Sprintf("reads %s (%s, keyspaces %v)", db, e.Table(), e.Keyspaces())})
+		default:
+			row := Row{Sev: SevOK, Label: fmt.Sprintf("  enricher %s@%d", id, e.Version())}
+			if db := firstExistingDB(e); db == "" {
+				row.Sev, row.Detail = SevWarn, strings.Join(e.DBCandidates(), ", ")+" not found, raw files only"
+			} else {
+				row.Detail = fmt.Sprintf("reads %s (%s, keyspaces %v)", db, e.Table(), e.Keyspaces())
+			}
+			rows = append(rows, row)
 		}
 	}
 	return rows

@@ -27,9 +27,7 @@ import (
 )
 
 // recoverFlush turns a panicking flush into an announced, audited error so the daemon survives it.
-func recoverFlush(errOut io.Writer, log *auditlog.Log, flush func() (formats.Report, error)) (
-	rep formats.Report, err error, panicked bool,
-) {
+func recoverFlush(errOut io.Writer, log *auditlog.Log, flush func() (formats.Report, error)) (rep formats.Report, err error, panicked bool) {
 	defer func() {
 		r := recover()
 		if r == nil {

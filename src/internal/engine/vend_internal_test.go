@@ -59,16 +59,14 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 	for i := range tiny {
 		tiny[i] = 1 << 10
 	}
-	cases := []struct {
+	for _, c := range []struct {
 		name  string
 		sizes []int
 	}{
 		{"count", tiny},
 		{"bytes", []int{40 << 20, 30 << 20, 10 << 20}},
 		{"one object over the whole bound rides alone", []int{70 << 20, 1 << 10}},
-	}
-
-	for _, c := range cases {
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			groups := stageAll(t, c.sizes)
 			objects := 0

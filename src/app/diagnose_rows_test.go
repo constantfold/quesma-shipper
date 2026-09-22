@@ -76,12 +76,7 @@ func TestCheckUpdate(t *testing.T) {
 		return "", time.Time{}, false, nil
 	}
 
-	disabled := func(k string) string {
-		if k == NoSelfUpdateEnv {
-			return "1"
-		}
-		return ""
-	}
+	disabled := func(k string) string { return map[string]string{NoSelfUpdateEnv: "1"}[k] }
 	assert.Equal(t, "disabled", checkUpdate(ctx, Build{Release: true}, true, disabled, boom).State)
 	assert.Equal(t, "disabled", checkUpdate(ctx, Build{Release: true}, false, noEnv, boom).State)
 	// A dev build never checks: no TUF, no source repository, no network.
@@ -126,12 +121,8 @@ func probe(id, family string, enabled bool, d sources.Discovery) sourceProbe {
 func TestFamilyRows(t *testing.T) {
 	t.Run("healthy multi-source agent is one line", func(t *testing.T) {
 		rows, collecting, files := familyRows("Claude Code", []sourceProbe{
-			probe("claude-code-transcripts", "claude-code", true,
-				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
-					Candidates: make([]sources.Candidate, 1200)}),
-			probe("claude-code-context", "claude-code", true,
-				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
-					Candidates: make([]sources.Candidate, 34)}),
+			probe("claude-code-transcripts", "claude-code", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK, Candidates: make([]sources.Candidate, 1200)}),
+			probe("claude-code-context", "claude-code", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK, Candidates: make([]sources.Candidate, 34)}),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, collecting && files == 1234, "collecting=%v files=%d", collecting, files)
 		require.Lenf(t, rows, 1, "healthy agent must be one row: %+v", rows)
@@ -143,19 +134,16 @@ func TestFamilyRows(t *testing.T) {
 
 	t.Run("headline version tag comes from the sniffed store, not an exec", func(t *testing.T) {
 		rows, _, _ := familyRows("Claude Code", []sourceProbe{
-			probe("claude-code-transcripts", "claude-code", true,
-				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
-					AgentVersion: "2.1.245", Candidates: make([]sources.Candidate, 3)}),
+			probe("claude-code-transcripts", "claude-code", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
+				AgentVersion: "2.1.245", Candidates: make([]sources.Candidate, 3)}),
 		}, familyUpload{}, time.Now(), false)
 		assert.Equalf(t, "2.1.245", rows[0].Tag, "headline tag %q, want the sniffed version 2.1.245", rows[0].Tag)
 	})
 
 	t.Run("a sibling source with no files is a note, not a finding", func(t *testing.T) {
 		probes := []sourceProbe{
-			probe("codex-rollouts", "codex", true,
-				sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK}),
-			probe("codex-rollouts-compressed", "codex", true,
-				sources.Discovery{Health: formats.RootPresentNoMatch, Reason: "nothing matched"}),
+			probe("codex-rollouts", "codex", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK}),
+			probe("codex-rollouts-compressed", "codex", true, sources.Discovery{Health: formats.RootPresentNoMatch, Reason: "nothing matched"}),
 		}
 		rows, _, _ := familyRows("Codex", probes, familyUpload{}, time.Now(), false)
 		require.Truef(t, len(rows) == 1 && rows[0].Sev == SevOK, "default view: headline ✓ and nothing else, got %+v", rows)
@@ -174,9 +162,7 @@ func TestFamilyRows(t *testing.T) {
 	})
 
 	t.Run("disabled source is dim, never a finding", func(t *testing.T) {
-		rows, collecting, _ := familyRows("Cursor", []sourceProbe{
-			probe("cursor-transcripts", "cursor", false, sources.Discovery{}),
-		}, familyUpload{}, time.Now(), true)
+		rows, collecting, _ := familyRows("Cursor", []sourceProbe{probe("cursor-transcripts", "cursor", false, sources.Discovery{})}, familyUpload{}, time.Now(), true)
 		require.Truef(t, !collecting && rows[0].Sev == SevDim && strings.Contains(rows[0].Detail, "disabled by configuration"), "a deliberately disabled agent must headline dim: %+v", rows)
 		iss, fails := (&Report{Sections: []Section{{Rows: rows}}}).Issues()
 		assert.True(t, fails == 0 && len(iss) == 0, "disabled by configuration must not count: %v", iss)
@@ -184,8 +170,7 @@ func TestFamilyRows(t *testing.T) {
 
 	t.Run("absent agent is one dim line", func(t *testing.T) {
 		rows, collecting, _ := familyRows("Wire-capture proxy", []sourceProbe{
-			probe("wire-proxy-flows", "wire-proxy", true,
-				sources.Discovery{Health: formats.AgentAbsent, Reason: "no root"}),
+			probe("wire-proxy-flows", "wire-proxy", true, sources.Discovery{Health: formats.AgentAbsent, Reason: "no root"}),
 		}, familyUpload{}, time.Now(), true)
 		require.Truef(t, !collecting && len(rows) == 1 && rows[0].Sev == SevDim, "absence must be one dim row: %+v", rows)
 		assert.Containsf(t, rows[0].Detail, "not installed", "detail %q should say not installed", rows[0].Detail)
@@ -217,18 +202,12 @@ func TestClaudeHeadline(t *testing.T) {
 	cand := func(rel string) sources.Candidate { return sources.Candidate{RelPath: rel} }
 	probes := []sourceProbe{
 		probe("claude-code-transcripts", "claude-code", true, sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK,
-			Candidates: []sources.Candidate{
-				cand("projects/alpha/a.jsonl"),
-				cand("projects/alpha/b.jsonl"),
-				cand("projects/beta/c.jsonl"),
-				cand("projects/beta/c.meta.json"), // join metadata, not a session
-			}}),
+			// c.meta.json is join metadata, not a session.
+			Candidates: []sources.Candidate{cand("projects/alpha/a.jsonl"), cand("projects/alpha/b.jsonl"), cand("projects/beta/c.jsonl"), cand("projects/beta/c.meta.json")}}),
 		probe("claude-code-settings", "claude-code", true,
 			sources.Discovery{Health: formats.Collected, Sniff: formats.SniffOK, Candidates: make([]sources.Candidate, 2)}),
 	}
-	got := claudeHeadline(probes, true)
-	want := "3 sessions in 2 projects, plus settings"
-	assert.Equalf(t, want, got, "claudeHeadline = %q, want %q", got, want)
+	assert.Equal(t, "3 sessions in 2 projects, plus settings", claudeHeadline(probes, true))
 
 	assert.Equal(t, "", claudeHeadline([]sourceProbe{probe("codex-rollouts", "codex", false, sources.Discovery{})}, true))
 }

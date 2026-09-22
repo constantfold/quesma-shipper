@@ -18,9 +18,7 @@ func TestTheVersionStringIsOneSpelling(t *testing.T) {
 		{"never doubled", Info{Version: "v0.4.1+dirty", Modified: true}, "v0.4.1+dirty"},
 		{"an untagged build", Info{Version: "0.0.0-031a7faa8c16"}, "0.0.0-031a7faa8c16"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.in.String(), tc.want)
-		})
+		assert.Equal(t, tc.want, tc.in.String(), tc.name)
 	}
 }
 

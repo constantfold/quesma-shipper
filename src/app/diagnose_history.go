@@ -35,10 +35,9 @@ func loadLastUpload(stateDir string) lastUpload {
 }
 
 type familyUpload struct {
-	recorded        bool
-	at              time.Time
-	shipped, failed int
-	pending         int
+	recorded                 bool
+	at                       time.Time
+	shipped, failed, pending int
 }
 
 func familyUploadFor(probes []sourceProbe, up lastUpload) familyUpload {
@@ -103,11 +102,8 @@ func lastFailureRows(stateDir string, now time.Time, verbose bool) []Row {
 		return nil
 	}
 	rec := readFailureRecord(stateDir)
-	if rec.ConsecutiveFailures > 0 {
-		return nil
-	}
 	latest := rec.Latest()
-	if latest == nil {
+	if rec.ConsecutiveFailures > 0 || latest == nil {
 		return nil
 	}
 	at, _ := time.Parse(time.RFC3339, latest.At)

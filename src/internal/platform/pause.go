@@ -49,10 +49,10 @@ func Clear(stateDir string) error {
 // Read fails closed: an unparseable flag reads as paused, and one past its end as not paused.
 func Read(stateDir string) State {
 	raw, _, err := ReadWhole(filepath.Join(stateDir, File), 64<<10)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return State{}
-		}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return State{}
+	case err != nil:
 		return State{Paused: true, Reason: "the pause flag exists but could not be read: " + err.Error()}
 	}
 	var s State

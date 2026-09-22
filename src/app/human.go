@@ -50,9 +50,6 @@ func Ago(t, now time.Time) string {
 }
 
 func CountNoun(n int, noun string) string {
-	if n == 1 {
-		return "1 " + noun
-	}
 	return HumanCount(n) + " " + Plural(n, noun)
 }
 
