@@ -1,30 +1,51 @@
 package packs
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+type probe struct {
+	in   string // the scanned value
+	want string // exact span the rule must produce; "" means it must find nothing
+}
+
+func tok(s string) probe { return probe{in: "out: " + s + " done", want: s} }
+func not(s string) probe { return probe{in: "out: " + s + " done"} }
+
+func rep(alphabet string, n int) string {
+	return strings.Repeat(alphabet, n/len(alphabet)+1)[:n]
+}
+
+func alnum(n int) string {
+	return rep("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n)
+}
+
+func checkProbes(t *testing.T, r *Rule, probes []probe) {
+	t.Helper()
+	for _, p := range probes {
+		var got []string
+		for _, s := range r.MatchScanned(p.in) {
+			got = append(got, p.in[s.Start:s.End])
+		}
+		var want []string
+		if p.want != "" {
+			want = []string{p.want}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s on %q: spans %q, want %q", r.id, p.in, got, want)
+		}
+	}
+}
 
 // Adversarial coverage for every quesma-extra rule: true tokens the rule must redact as
 // one exact span, and near-misses (length off by one, wrong charset or case, glued
 // prefix, missing delimiter) it must leave alone, so a widened or narrowed regex fails loud.
 func TestQuesmaExtraAdversarial(t *testing.T) {
-	rep := func(alphabet string, n int) string {
-		return strings.Repeat(alphabet, n/len(alphabet)+1)[:n]
-	}
 	hexs := func(n int) string { return rep("0123456789abcdef", n) }
-	alnum := func(n int) string {
-		return rep("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n)
-	}
 	letters := func(n int) string { return rep("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", n) }
 	bech := func(n int) string { return rep("QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L", n) }
-
-	type probe struct {
-		in   string // the scanned value
-		want string // exact span the rule must produce; "" means it must find nothing
-	}
-	tok := func(s string) probe { return probe{in: "out: " + s + " done", want: s} }
-	not := func(s string) probe { return probe{in: "out: " + s + " done"} }
 
 	const s40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 	azTail := alnum(31) + "~_."
@@ -224,10 +245,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 		},
 	}
 
-	rules, err := Load(QuesmaExtra)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rules := loadedRules(t, QuesmaExtra)
 	byID := map[string]*Rule{}
 	for _, r := range rules {
 		byID[r.id] = r
@@ -238,24 +256,7 @@ func TestQuesmaExtraAdversarial(t *testing.T) {
 			t.Errorf("%s: in the table, not in the pack", id)
 			continue
 		}
-		for _, p := range probes {
-			spans := r.MatchScanned(p.in)
-			if p.want == "" {
-				if len(spans) != 0 {
-					t.Errorf("%s: near-miss %q matched: %v", id, p.in, spans)
-				}
-				continue
-			}
-			found := false
-			for _, s := range spans {
-				if p.in[s.Start:s.End] == p.want {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("%s: %q: want exact span %q, got %v", id, p.in, p.want, spans)
-			}
-		}
+		checkProbes(t, r, probes)
 	}
 	for _, r := range rules {
 		if _, ok := cases[r.id]; !ok {
