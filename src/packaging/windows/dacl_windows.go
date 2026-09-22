@@ -64,22 +64,16 @@ func directoryACEs(dir string) ([]ace, error) {
 func describeTrustees(sids []string) []string {
 	described := make([]string, 0, len(sids))
 	for _, raw := range sids {
-		described = append(described, describeTrustee(raw))
+		name := raw
+		if sid, err := windows.StringToSid(raw); err == nil {
+			if account, domain, _, err := sid.LookupAccount(""); err == nil && account != "" {
+				name = account
+				if domain != "" {
+					name = domain + `\` + account
+				}
+			}
+		}
+		described = append(described, name)
 	}
 	return described
-}
-
-func describeTrustee(raw string) string {
-	sid, err := windows.StringToSid(raw)
-	if err != nil {
-		return raw
-	}
-	account, domain, _, err := sid.LookupAccount("")
-	if err != nil || account == "" {
-		return raw
-	}
-	if domain == "" {
-		return account
-	}
-	return domain + `\` + account
 }
