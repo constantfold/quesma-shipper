@@ -31,12 +31,10 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Captured before anything overrides HOME: a `go build` under a synthetic HOME re-downloads the
-// module cache into a temp directory the test framework then cannot delete.
+// Captured before anything overrides HOME: a `go build` under a synthetic HOME re-downloads the module cache.
 var realHome = os.Getenv("HOME")
 
-// Fixed, so object keys (HMACs under name_key) match across worlds and two runs stay comparable key
-// by key. Published in a public repository: it protects nothing and must never be used elsewhere.
+// Fixed, so object keys match across worlds. Published: it protects nothing and must never be used elsewhere.
 const (
 	testAgeIdentity = "AGE-SECRET-KEY-1JF0Y36Z2RMJNJNN2AYUUF6HMHZVK3FCGK4GUADGRF9M3R57S2UCSDMJWD7"
 	testNameKey     = "0101010101010101010101010101010101010101010101010101010101010101"
@@ -45,46 +43,42 @@ const (
 // The pre-filter compares size and mtime, so staged files cannot carry a wall-clock stamp.
 var fixtureMTime = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 
-// Pins the child's view of the machine: the engine sizes its pools off GOMAXPROCS, so unpinned, every
-// bound would have to be written for the weakest box. A scenario that changes it writes its own bounds.
+// The child's view of the machine: the engine sizes its pools off GOMAXPROCS, and the bounds follow it.
 const childGOMAXPROCS = 8
 
 // Generous on purpose: a deadlock catcher, not a performance bound.
 const syncTimeout = 10 * time.Minute
 
 // One synthetic machine enrolled against the protocol peer and allowed exactly one upload origin.
-// The settings are fields rather than stageWorld arguments: a scenario sets at most one of them.
 type world struct {
 	Home   string
 	Config string // XDG_CONFIG_HOME
 	State  string // XDG_STATE_HOME
 
-	// installID changes with every staging and reset; keyRoot is the subtree it gives this world.
-	installID string
+	installID string // changes with every reset, and keyRoot with it
 	org       string
 	keyRoot   string
 
-	// The store the tickets this world accepts may name, and the prefix under it.
-	origin string
-	bucket string
+	origin, bucket string // what the tickets this world accepts may name
 
-	binary string
-
-	// gomaxprocs is the child's view of the machine. See childGOMAXPROCS.
+	binary     string
 	gomaxprocs int
 
-	// Appended last, so a scenario can hand the child a limit of its own without a launcher.
-	extraEnv []string
-
-	// Goes in front of the binary when the child must run inside a cap; a prefix, not a replacement,
-	// so the launch path stays the same. A launcher that resets the environment carries childVars itself.
-	launcher []string
+	extraEnv []string // appended last, so a scenario's own limit wins
+	launcher []string // in front of the binary for a capped run; one that resets the environment carries childVars
 }
 
-// Environment rather than flags, because that is how a real install is configured.
 func stageWorld(t *testing.T) *world {
 	t.Helper()
 	return stageWorldIn(t, perfOrg, storeEndpoint, perfBucket)
+}
+
+// A world whose child sees smokeGOMAXPROCS cores, the machine every smoke scenario runs on.
+func stageSmokeWorld(t *testing.T) *world {
+	t.Helper()
+	w := stageWorld(t)
+	w.gomaxprocs = smokeGOMAXPROCS
+	return w
 }
 
 func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
@@ -107,89 +101,61 @@ func stageWorldIn(t *testing.T, org, origin, bucket string) *world {
 	return w
 }
 
-// Everything a run remembers lives in the state directory, so emptying it and enrolling again is a
-// first sync. A new install id, not the old one: the fingerprint document is refused under another.
+// Empties the state directory and enrolls again, making the next run a first sync. A new install id,
+// because the fingerprint document is refused under another.
 func (w *world) reset(t *testing.T) {
 	t.Helper()
-	if err := os.RemoveAll(filepath.Join(w.State, "trajectory-shipper")); err != nil {
-		t.Fatalf("clear the state directory: %v", err)
-	}
+	stateDir := filepath.Join(w.State, "trajectory-shipper")
+	require.NoError(t, os.RemoveAll(stateDir), "clear the state directory")
+	require.NoError(t, os.MkdirAll(stateDir, 0o700))
 	w.installID = uuid.New().String()
 	w.keyRoot = "v1/organization=" + w.org + "/install=" + w.installID
-	seedIdentity(t, w)
-	writeClientConfig(t, w)
-	seedEnrollment(t, w)
-	allowUploadTarget(t, w)
-}
 
-func seedIdentity(t *testing.T, w *world) {
-	t.Helper()
 	id, err := age.ParseX25519Identity(testAgeIdentity)
-	require.Falsef(t, err != nil, "the test identity does not parse: %v", err)
-	dir := filepath.Join(w.State, "trajectory-shipper")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	unit := map[string]any{
+	require.NoError(t, err, "the test identity does not parse")
+	writeJSON(t, filepath.Join(stateDir, "identity.json"), map[string]any{
 		"identity_schema": 1,
 		"install_id":      w.installID,
 		"age_identity":    testAgeIdentity,
 		"age_recipient":   id.Recipient().String(),
 		"name_key":        testNameKey,
 		"created_at":      fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.Marshal(unit)
-	require.NoError(t, err)
-	// 0600: Load refuses a unit any wider.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "identity.json"), raw, 0o600))
-}
+	})
 
-// Carries no send block on purpose: the destination arrives in the signed document.
-func writeClientConfig(t *testing.T, w *world) {
-	t.Helper()
-	dir := filepath.Join(w.Config, "trajectory-shipper")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	body := "config_version: 1\n" +
-		// The 64-file default would truncate the corpus; this must stay above corpusFiles.
-		"max_files_per_run: 100000\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600))
-}
-
-// Enrollment is fixture state here: performance measures the shipper, not a particular control plane.
-func seedEnrollment(t *testing.T, w *world) {
-	t.Helper()
+	// Enrollment is fixture state here: performance measures the shipper, not a control plane.
 	pub, private, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
-	peer.register(w.installID, w.org, pub, w.origin, w.bucket)
-	record := map[string]any{
+	peer.register(perfInstall{id: w.installID, org: w.org, key: pub, origin: w.origin, bucket: w.bucket})
+	writeJSON(t, filepath.Join(stateDir, "enrollment.json"), map[string]any{
 		"enrollment_schema": 2,
 		"install_id":        w.installID,
 		"organization":      w.org,
-		"endpoint":          peer.url,
+		"endpoint":          peer.server.URL,
 		"device_key":        base64.StdEncoding.EncodeToString(private),
 		"enrolled_at":       fixtureMTime.Format(time.RFC3339),
-	}
-	raw, err := json.MarshalIndent(record, "", "  ")
-	require.NoError(t, err)
-	path := filepath.Join(w.State, "trajectory-shipper", "enrollment.json")
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
-}
+	})
 
-// The machine owner's half of the presigned path: this list alone decides whether a ticket's origin
-// may be spoken to, and no served layer can add to it.
-func allowUploadTarget(t *testing.T, w *world) {
-	t.Helper()
-	path := filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
-	body, err := os.ReadFile(path)
-	require.Falsef(t, err != nil, "no user config to pin an upload target in: %v", err)
-	// The proxy serves plain HTTP, and the client refuses a cleartext origin nobody opted into.
-	block := "upload_targets:\n" +
+	// No send block: the destination arrives in the signed document. The proxy serves plain HTTP,
+	// which needs the opt-in, and the 64-file default would truncate the corpus.
+	configDir := filepath.Join(w.Config, "trajectory-shipper")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	body := "config_version: 1\n" +
+		"max_files_per_run: 100000\n" +
+		"upload_targets:\n" +
 		"  - origin: " + w.origin + "\n" +
 		"    addressing: path-style\n" +
 		"    path_prefix: /" + w.bucket + "\n" +
 		"    allow_loopback_http: true\n"
-	require.NoError(t, os.WriteFile(path, append(body, block...), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(body), 0o600))
 }
 
-// --- the binaries, built once ------------------------------------------------
+// 0600: the shipper refuses identity and enrollment files any wider.
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+}
 
 var (
 	buildOnce   sync.Once
@@ -198,81 +164,54 @@ var (
 	buildErr    error
 )
 
-func buildBinaries() {
-	dir, err := os.MkdirTemp("", "shipper-perf")
-	if err != nil {
-		buildErr = err
-		return
-	}
-	buildDir = dir
-	build := func(out, moduleDir, pkg string) error {
-		cmd := exec.Command("go", "build", "-o", out, pkg)
-		cmd.Dir = moduleDir
-		// The REAL home: see realHome.
-		cmd.Env = append(os.Environ(), "HOME="+realHome)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("build %s: %v: %s", pkg, err, b)
-		}
-		return nil
-	}
-	shipperPath = filepath.Join(dir, "quesma-shipper")
-	buildErr = build(shipperPath, "..", "./cmd/quesma-shipper")
-}
-
 // The client under measurement, built once for the whole tier.
 func shipperBinary(t *testing.T) string {
 	t.Helper()
-	buildOnce.Do(buildBinaries)
-	require.Falsef(t, buildErr != nil, "%v", buildErr)
+	buildOnce.Do(func() {
+		if buildDir, buildErr = os.MkdirTemp("", "shipper-perf"); buildErr != nil {
+			return
+		}
+		shipperPath = filepath.Join(buildDir, "quesma-shipper")
+		cmd := exec.Command("go", "build", "-o", shipperPath, "./cmd/quesma-shipper")
+		cmd.Dir = ".."
+		cmd.Env = append(os.Environ(), "HOME="+realHome)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("build the shipper: %v: %s", err, out)
+		}
+	})
+	require.NoError(t, buildErr)
 	return shipperPath
 }
 
-// Package level, so there is no t.TempDir to do it: every run would otherwise leak two binaries.
+// Package level, so there is no t.TempDir to do it: every run would otherwise leak the binary.
 func removeBinaries() {
 	if buildDir != "" {
 		_ = os.RemoveAll(buildDir)
 	}
 }
 
-// --- the child's world -------------------------------------------------------
-
-// Everything this world tells the child about itself, and nothing inherited; separate from childEnv
-// because a launcher such as sudo resets what it was called with. It names no store and no credential.
+// What this world tells the child, and nothing inherited: a launcher such as sudo resets the rest.
 func (w *world) childVars() []string {
-	vars := []string{
+	return append([]string{
 		"HOME=" + w.Home,
 		"XDG_CONFIG_HOME=" + w.Config,
 		"XDG_STATE_HOME=" + w.State,
 		fmt.Sprintf("GOMAXPROCS=%d", w.gomaxprocs),
-	}
-	// Last, so a scenario's own limit wins over anything above it.
-	return append(vars, w.extraEnv...)
+	}, w.extraEnv...)
 }
 
-// This process's environment minus anything that would move the measurement, then this world's own
-// variables on top: an exported GOMEMLIMIT or SHIPPER_* would retune the run with nothing to show it.
+// This environment minus what would silently retune the run, such as an exported GOMEMLIMIT or SHIPPER_*.
 func (w *world) childEnv() []string {
-	inherited := os.Environ()
-	env := make([]string, 0, len(inherited)+len(w.childVars()))
-	for _, kv := range inherited {
-		if measuredVar(kv) {
-			continue
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "HOME", "GOMAXPROCS", "GOMEMLIMIT", "GOGC":
+			return true
 		}
-		env = append(env, kv)
-	}
+		return strings.HasPrefix(name, "SHIPPER_") || strings.HasPrefix(name, "XDG_") ||
+			strings.HasPrefix(name, "AWS_")
+	})
 	return append(env, w.childVars()...)
-}
-
-// Variables that must reach the child from this world or not at all; childVars names the wanted ones.
-func measuredVar(kv string) bool {
-	name, _, _ := strings.Cut(kv, "=")
-	switch name {
-	case "HOME", "GOMAXPROCS", "GOMEMLIMIT", "GOGC":
-		return true
-	}
-	return strings.HasPrefix(name, "SHIPPER_") ||
-		strings.HasPrefix(name, "XDG_") ||
-		strings.HasPrefix(name, "AWS_")
 }
 
 // A scenario that needs to survive a failed run uses observedSync directly.
@@ -283,20 +222,29 @@ func (w *world) mustSync(t *testing.T) childObservation {
 	return obs
 }
 
-// One sync as a user would run it: what it printed and how long it took.
-func (w *world) runSync(t *testing.T) (string, time.Duration) {
-	t.Helper()
-	obs := w.mustSync(t)
-	return obs.Output, obs.Elapsed
-}
+// The whole row, in the order the client prints it.
+var summaryWords = []string{"shipped", "unchanged", "skipped", "parked", "failed"}
 
-// The run's own counters, read from its summary row; counting objects in the store cannot answer
-// "did this run ship anything", because an overwritten key leaves the listing unchanged. Only a
-// single line carrying all five words counts: any other line with a number would overwrite the verdict.
+// The run's own counters: an overwritten key leaves the store's listing unchanged. Only a line
+// carrying all five words, each with a whole number, counts.
 func summary(t *testing.T, out string) map[string]int {
 	t.Helper()
+lines:
 	for line := range strings.SplitSeq(out, "\n") {
-		if counts, ok := summaryLine(line); ok {
+		counts := map[string]int{}
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if !slices.Contains(summaryWords, fields[i]) {
+				continue
+			}
+			// Atoi rather than Sscanf: "12abc" is not twelve.
+			n, err := strconv.Atoi(fields[i+1])
+			if err != nil {
+				continue lines
+			}
+			counts[fields[i]] = n
+		}
+		if len(counts) == len(summaryWords) {
 			return counts
 		}
 	}
@@ -304,29 +252,7 @@ func summary(t *testing.T, out string) map[string]int {
 	return nil
 }
 
-// The whole row, in the order the client prints it.
-var summaryWords = []string{"shipped", "unchanged", "skipped", "parked", "failed"}
-
-// Accepted only when every word carried a whole number; Atoi rather than Sscanf: "12abc" is not twelve.
-func summaryLine(line string) (map[string]int, bool) {
-	counts := map[string]int{}
-	fields := strings.Fields(line)
-	for i := 0; i+1 < len(fields); i++ {
-		if !slices.Contains(summaryWords, fields[i]) {
-			continue
-		}
-		n, err := strconv.Atoi(fields[i+1])
-		if err != nil {
-			return nil, false
-		}
-		counts[fields[i]] = n
-	}
-	return counts, len(counts) == len(summaryWords)
-}
-
-// --- what landed in the store ------------------------------------------------
-
-// Relative to the install root, which changes with every reset; the key under it is what two runs share.
+// Relative to the install root, which changes with every reset.
 func (w *world) currentKeys(t *testing.T) []string {
 	t.Helper()
 	var keys []string
@@ -336,7 +262,7 @@ func (w *world) currentKeys(t *testing.T) []string {
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(context.Background())
-		require.Falsef(t, err != nil, "list keys: %v", err)
+		require.NoError(t, err, "list keys")
 		for _, o := range page.Contents {
 			keys = append(keys, strings.TrimPrefix(aws.ToString(o.Key), w.keyRoot+"/"))
 		}
@@ -351,7 +277,7 @@ func (w *world) versionCounts(t *testing.T) map[string]int {
 	in := &awss3.ListObjectVersionsInput{Bucket: aws.String(w.bucket), Prefix: aws.String(w.keyRoot + "/")}
 	for {
 		out, err := adminS3.ListObjectVersions(context.Background(), in)
-		require.Falsef(t, err != nil, "list versions: %v", err)
+		require.NoError(t, err, "list versions")
 		for _, v := range out.Versions {
 			counts[strings.TrimPrefix(aws.ToString(v.Key), w.keyRoot+"/")]++
 		}

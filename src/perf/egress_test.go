@@ -1,8 +1,7 @@
 //go:build perf
 
-// The isolation the rest of the tier assumes, asserted rather than trusted: every byte figure in
-// this package rests on the shipper's only route to the store being the shaped proxy, and a tier
-// that stopped seeing half the traffic would not fail, it would just report smaller numbers.
+// The isolation the rest of the tier assumes, asserted rather than trusted: a tier that stopped
+// seeing half the traffic would not fail, it would just report smaller numbers.
 package perf
 
 import (
@@ -16,20 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Three claims, in the order they can break: the store has no working address on the host, the
-// proxied route does work (so the first claim is isolation and not a dead container), and the
-// store cannot reach out either.
+// The store has no working address on the host, the proxied route works (so that is isolation, not
+// a dead container), and the store cannot reach out either.
 func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	ctx := context.Background()
 
-	// The assertion is the dial, not the lookup: where an engine publishes an address anyway,
-	// that address must not carry traffic.
+	// The dial, not the lookup: where an engine publishes an address anyway, it must not carry traffic.
 	port, err := minioCtr.MappedPort(ctx, "9000/tcp")
 	if err != nil {
 		t.Logf("the store published no host port for 9000/tcp: %v", err)
 	} else {
 		host, err := minioCtr.Host(ctx)
-		require.NoErrorf(t, err, "the store's host: %v", err)
+		require.NoError(t, err, "the store's host")
 		addr := net.JoinHostPort(host, port.Port())
 		conn, dialErr := net.DialTimeout("tcp", addr, 5*time.Second)
 		if dialErr == nil {
@@ -42,31 +39,27 @@ func TestTheStoreIsReachableOnlyThroughTheProxy(t *testing.T) {
 	}
 
 	resp, err := http.Get(storeEndpoint + "/minio/health/live")
-	require.Falsef(t, err != nil, "the proxied route to the store is down: %v", err)
+	require.NoError(t, err, "the proxied route to the store is down")
 	resp.Body.Close()
-	require.Falsef(t, resp.StatusCode != http.StatusOK, "the proxied route to the store answered HTTP %d", resp.StatusCode)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "the proxied route to the store")
 
 	// An address, not a name: the claim is about routing, not about docker's resolver.
 	code, _, err := minioCtr.Exec(ctx, []string{"curl", "-sS", "--max-time", "5", "http://1.1.1.1/"})
-	require.Falsef(t, err != nil, "probe the store's egress: %v", err)
+	require.NoError(t, err, "probe the store's egress")
 	if code == 0 {
 		t.Errorf("the store reached 1.1.1.1 from its own network: the network is not internal, " +
 			"and nothing here can claim the shipper's traffic is the only traffic")
 	}
 }
 
-// The client must not have a route the harness did not give it: the failure worth a test is a sync
-// that quietly finds somewhere else to put the data, or reports success having put it nowhere. The
-// dead address is configured where a deployment configures one, as a second org's store endpoint.
-// The exit code is logged and not asserted: a plain sync reports per-file failures in its summary
-// and still exits 0 by design.
+// A sync must not quietly find somewhere else to put the data, or report success having put it
+// nowhere. The dead address is a second org's store endpoint, where a deployment configures one.
 func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 	bucket, err := createVersionedBucket(context.Background(),
 		fmt.Sprintf("perf-nowhere-%d", time.Now().UnixNano()))
-	require.Falsef(t, err != nil, "create the second org's bucket: %v", err)
 	// Real, so the emptiness assertion below is an answer rather than a NoSuchBucket.
-	const slug = "nowhere"
-	w := stageWorldIn(t, slug, deadEndpoint, bucket)
+	require.NoError(t, err, "create the second org's bucket")
+	w := stageWorldIn(t, "nowhere", deadEndpoint, bucket)
 	files := smallCorpusFiles
 	stageCorpusFiles(t, w, files)
 
@@ -94,6 +87,5 @@ func TestASyncAgainstABogusEndpointFailsWithoutFallingBack(t *testing.T) {
 	}
 }
 
-// A privileged port, not an ephemeral one bound and closed to learn its number: that number is
-// free for anything else in this process to take, and a sync reaching it would look like a bug.
+// A privileged port: an ephemeral one bound and closed to learn its number is free for anything to take.
 const deadEndpoint = "http://127.0.0.1:1"

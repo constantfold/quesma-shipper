@@ -18,37 +18,34 @@ import (
 	"time"
 )
 
-// The runtime gets three quarters of the kernel cap, giving GC a chance before SIGKILL.
-const memoryLimitNumerator, memoryLimitDenominator = 3, 4
+const (
+	// The runtime gets three quarters of the kernel cap, giving GC a chance before SIGKILL.
+	memoryLimitNumerator, memoryLimitDenominator = 3, 4
 
-// Leave headroom above the test budget so ordinary breaches produce a measured failure.
-const memoryCapHeadroom = 2
+	// Leave headroom above the test budget so ordinary breaches produce a measured failure.
+	memoryCapHeadroom = 2
+
+	// The memory controller must exist before systemd-run can enforce a cap.
+	cgroupControllers = "/sys/fs/cgroup/cgroup.controllers"
+
+	// The hog probe's cap; it touches memoryHogOvershoot times as much, bounded even where unenforced.
+	memoryCapProbeBytes   int64 = 128 << 20
+	memoryHogOvershoot          = 4
+	memoryCapProbeTimeout       = 2 * time.Minute
+
+	memoryHogEnv = "SHIPPER_PERF_MEMORY_HOG_BYTES"
+)
 
 // Snapshot the environment after setting GOMEMLIMIT; sudo will not inherit later changes.
 func stageCappedWorld(t *testing.T, budget int64) *world {
 	t.Helper()
-	w := stageWorld(t)
-	w.gomaxprocs = smokeGOMAXPROCS
+	w := stageSmokeWorld(t)
 	hard := budget * memoryCapHeadroom
 	w.extraEnv = append(w.extraEnv,
 		fmt.Sprintf("GOMEMLIMIT=%d", hard*memoryLimitNumerator/memoryLimitDenominator))
 	w.launcher = memoryCapArgs(hard, w.childVars())
 	return w
 }
-
-// The memory controller must exist before systemd-run can enforce a cap.
-const cgroupControllers = "/sys/fs/cgroup/cgroup.controllers"
-
-// Above runtime startup cost, but cheap enough for the bounded hog probe.
-const memoryCapProbeBytes int64 = 128 << 20
-
-// Bound the hog even when the host accepts a cap without enforcing it.
-const memoryHogOvershoot = 4
-
-// An allocation probe still running after two minutes is stuck.
-const memoryCapProbeTimeout = 2 * time.Minute
-
-const ciEnv = "GITHUB_ACTIONS"
 
 var (
 	capOnce sync.Once
@@ -65,7 +62,7 @@ func requireMemoryCap(t *testing.T) {
 	if capErr == nil {
 		return
 	}
-	if os.Getenv(ciEnv) == "true" {
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Fatalf("no enforceable memory cap on this CI runner, where it is a precondition "+
 			"rather than an option: %v", capErr)
 	}
@@ -106,24 +103,19 @@ func probeMemoryCap() error {
 		return fmt.Errorf("a capped child ran as uid %s, not %s: it would leave a world this "+
 			"test cannot clean up", got, want)
 	}
-	return probeMemoryCapKills()
-}
 
-// Run this test binary as a bounded hog to prove the kernel enforces its accepted cap.
-func probeMemoryCapKills() error {
+	// Run this test binary as a bounded hog to prove the kernel enforces the cap it accepted.
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("no path to this test binary to run a hog with: %v", err)
 	}
 	want := memoryCapProbeBytes * memoryHogOvershoot
-
 	ctx, cancel := context.WithTimeout(context.Background(), memoryCapProbeTimeout)
 	defer cancel()
-	argv := append(memoryCapArgs(memoryCapProbeBytes, []string{fmt.Sprintf("%s=%d", memoryHogEnv, want)}), self)
+	argv = append(memoryCapArgs(memoryCapProbeBytes, []string{fmt.Sprintf("%s=%d", memoryHogEnv, want)}), self)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.WaitDelay = waitDelay
-	out, err := cmd.CombinedOutput()
-
+	out, err = cmd.CombinedOutput()
 	if err == nil {
 		return fmt.Errorf("a child that touched %d bytes under a %d byte cap exited cleanly: "+
 			"the cap is accepted and not enforced, so nothing below it would be capped either",
@@ -131,33 +123,27 @@ func probeMemoryCapKills() error {
 	}
 	st := cmd.ProcessState
 	if st == nil {
-		return fmt.Errorf("the hog left no process state behind: %v: %s",
-			err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("the hog left no process state behind: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	ws, ok := st.Sys().(syscall.WaitStatus)
-	killed := (ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL) ||
-		st.ExitCode() == 128+int(syscall.SIGKILL)
-	if !killed {
+	obs := childObservation{ExitCode: st.ExitCode()}
+	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		obs.Signal = ws.Signal()
+	}
+	if !obs.Killed() {
 		return fmt.Errorf("a child that touched %d bytes under a %d byte cap ended %v rather "+
 			"than being killed: %s", want, memoryCapProbeBytes, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-const memoryHogEnv = "SHIPPER_PERF_MEMORY_HOG_BYTES"
-
 // Touch every page: untouched address space does not count toward the cgroup cap.
 func runMemoryHog(spec string) int {
 	want, err := strconv.ParseInt(strings.TrimSpace(spec), 10, 64)
 	if err != nil || want <= 0 {
-		fmt.Fprintf(os.Stderr, "perf: %s=%q is not a positive whole number of bytes\n",
-			memoryHogEnv, spec)
+		fmt.Fprintf(os.Stderr, "perf: %s=%q is not a positive whole number of bytes\n", memoryHogEnv, spec)
 		return 2
 	}
-	const (
-		chunk = 1 << 20
-		page  = 4 << 10
-	)
+	const chunk, page = 1 << 20, 4 << 10
 	held := make([][]byte, 0, want/chunk+1)
 	for total := int64(0); total < want; total += chunk {
 		buf := make([]byte, chunk)

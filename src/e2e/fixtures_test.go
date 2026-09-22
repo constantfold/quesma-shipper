@@ -3,6 +3,7 @@ package e2e
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,17 @@ func stageClaude(t *testing.T, w *world, username string) string {
 	return stageClaudeSession(t, w, username, claudeSessionID)
 }
 
+// The world most tests start from: enrolled, with one Claude transcript under the real username.
+func stageClaudeWorld(t *testing.T) *world {
+	t.Helper()
+	w := stageWorld(t)
+	stageClaude(t, w, realUsername(t))
+	return w
+}
+
+// Generated observations change on every run, so tests about unchanged files turn them off.
+const withoutGeneratedSources = "sources:\n  - id: project-map\n    enabled: false\n  - id: claude-account\n    enabled: false\n"
+
 func stageClaudeSession(t *testing.T, w *world, username, sessionID string) string {
 	t.Helper()
 	// Claude's encoded-cwd slug carries the username in the other shape the placeholder handles:
@@ -78,8 +90,6 @@ func stageClaudeSession(t *testing.T, w *world, username, sessionID string) stri
 	rel := filepath.ToSlash(filepath.Join(".claude", "projects", slug, sessionID+".jsonl"))
 	return stageFile(t, w, rel, claudeSession2026_07(username, sessionID))
 }
-
-// --- cursor -------------------------------------------------------------------
 
 // The conversation id appears in the file name and the store keys but nowhere inside the
 // transcript, which is why the join exists and why the ETL recovers it from the path.
@@ -166,7 +176,7 @@ func stageCursor(t *testing.T, w *world, username string, turns []cursorTurn, wi
 func writeCursorStore(t *testing.T, w *world, turns []cursorTurn) {
 	t.Helper()
 	path := filepath.Join(w.Home, filepath.FromSlash(cursorStatePath()))
-	require.NoError(t, ensureDir(filepath.Dir(path)))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
@@ -215,5 +225,5 @@ func writeCursorStore(t *testing.T, w *world, turns []cursorTurn) {
 		}
 	}
 	// The enricher records DB provenance, so an unstable mtime would reach the manifest.
-	touch(t, path)
+	require.NoError(t, os.Chtimes(path, fixtureMTime, fixtureMTime))
 }

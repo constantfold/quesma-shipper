@@ -15,28 +15,21 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/identity"
 )
 
-func statePath(w *world) string {
-	return filepath.Join(w.State, "trajectory-shipper")
-}
-
-func userConfigPath(w *world) string {
-	return filepath.Join(w.Config, "trajectory-shipper", "config.yaml")
-}
-
+// status points a virgin machine at login, and describes the local install once local-dev ran.
 func TestLocalDevMintsIdentityAndWritesNoConfig(t *testing.T) {
 	w := stageBareWorld(t)
+	before, err := runExpectingFailure(t, "status")
+	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
 
 	out := run(t, "local-dev")
 
 	unit, err := identity.Load(statePath(w))
 	require.NoErrorf(t, err, "no loadable identity after local-dev: %v", err)
 	assert.Containsf(t, out, unit.InstallID.String(), "output does not name the identity:\n%s", out)
-	if _, err := os.Stat(userConfigPath(w)); !os.IsNotExist(err) {
-		t.Errorf("local-dev must not write a config file, stat: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(statePath(w), backend.EnrollmentFile)); !os.IsNotExist(err) {
-		t.Errorf("local-dev must not write an enrollment record, stat: %v", err)
-	}
+	assert.NoFileExistsf(t, userConfigPath(w), "local-dev must not write a config file")
+	assert.NoFileExistsf(t, filepath.Join(statePath(w), backend.EnrollmentFile), "local-dev must not write an enrollment record")
+	after := run(t, "status")
+	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
 }
 
 func TestLocalDevRerunKeepsIdentityAndConfig(t *testing.T) {
@@ -69,9 +62,7 @@ func TestLoginWithoutTokenOrServerFails(t *testing.T) {
 	out, err = runExpectingFailure(t, "login", "tsg1.payload.sig")
 	require.Errorf(t, err, "login with a token and no server succeeded:\n%s", out)
 	assert.Containsf(t, err.Error(), "--server", "error does not name the missing server: %v", err)
-	if _, err := os.Stat(filepath.Join(statePath(w), identity.FileName)); !os.IsNotExist(err) {
-		t.Errorf("a refused login minted an identity anyway, stat: %v", err)
-	}
+	assert.NoFileExistsf(t, filepath.Join(statePath(w), identity.FileName), "a refused login minted an identity anyway")
 }
 
 func TestLocalDevRefusesLoggedInInstall(t *testing.T) {
@@ -86,9 +77,7 @@ func TestLocalDevRefusesLoggedInInstall(t *testing.T) {
 	for _, want := range []string{"already logged in", "acme"} {
 		assert.Containsf(t, err.Error(), want, "refusal does not mention %q: %v", want, err)
 	}
-	if _, err := os.Stat(filepath.Join(statePath(w), identity.FileName)); !os.IsNotExist(err) {
-		t.Errorf("the refused local-dev minted an identity, stat: %v", err)
-	}
+	assert.NoFileExistsf(t, filepath.Join(statePath(w), identity.FileName), "the refused local-dev minted an identity")
 }
 
 func TestLocalDevSurfacesUnreadableIdentity(t *testing.T) {
@@ -105,23 +94,7 @@ func TestLocalDevSurfacesUnreadableIdentity(t *testing.T) {
 func TestRunOnceOnVirginMachineWaitsForLogin(t *testing.T) {
 	stageBareWorld(t)
 
-	out, err := runUntilCancelled(t, "run", "--once")
-	require.NoErrorf(t, err, "cancelled wait failed: %v", err)
-	assert.Truef(t, strings.Contains(out, "waiting for enrollment") && strings.Contains(out, "quesma-shipper login"), "the enrollment wait was not logged:\n%s", out)
-}
-
-func TestStatusBeforeAndAfterLocalDevSetup(t *testing.T) {
-	w := stageBareWorld(t)
-
-	before, err := runExpectingFailure(t, "status")
-	assert.Truef(t, err != nil && strings.Contains(before, "not logged in") && strings.Contains(before, "quesma-shipper login"), "status on a virgin machine does not point at login (err %v):\n%s", err, before)
-
-	run(t, "local-dev")
-
-	after := run(t, "status")
-	assert.Truef(t, strings.Contains(after, "shipper local") && strings.Contains(after, "nothing is sent"), "status after local-dev does not describe the local install and its destination:\n%s", after)
-	_, loadErr := identity.Load(statePath(w))
-	require.NoError(t, loadErr)
+	assertWaitsForEnrollment(t)
 }
 
 func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
@@ -132,6 +105,11 @@ func TestLocalDevPreviewsButRunStillWaitsForEnrollment(t *testing.T) {
 	out := run(t, "preview")
 	require.Containsf(t, out, claudeSource, "preview on a standalone install decided nothing:\n%s", out)
 
+	assertWaitsForEnrollment(t)
+}
+
+func assertWaitsForEnrollment(t *testing.T) {
+	t.Helper()
 	out, err := runUntilCancelled(t, "run", "--once")
 	require.NoErrorf(t, err, "cancelled wait failed: %v", err)
 	assert.Truef(t, strings.Contains(out, "waiting for enrollment") && strings.Contains(out, "quesma-shipper login"), "the enrollment wait was not logged:\n%s", out)

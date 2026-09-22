@@ -23,7 +23,7 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	username := realUsername(t)
 	stageClaudeSession(t, w, username, claudeSessionID)
 	grown := stageClaudeSession(t, w, username, numericSessionID)
-	writeConfig(t, w, "sources:\n  - id: project-map\n    enabled: false\n  - id: claude-account\n    enabled: false\n")
+	writeConfig(t, w, withoutGeneratedSources)
 
 	runOneShot(t)
 	require.Equal(t, 2, len(mirrorObjects(collect(t, w))))
@@ -35,7 +35,7 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 
 	// Both commit: the plane answered for the unchanged one and the grown one was PUT, so
 	// the unchanged key keeps its single version.
-	assert.Equal(t, 2, countOf(shippedFromLog(t, w), claudeSource))
+	assert.Equal(t, 2, shippedClaude(t, w))
 	present := w.plane.answeredPresent()
 	for _, o := range mirrorObjects(collect(t, w)) {
 		changed := strings.Contains(string(o.Payload), "one more")
@@ -51,6 +51,6 @@ func TestALostDocumentReShipsOnlyWhatChanged(t *testing.T) {
 	_, peekErr := engine.Peek(statePath(w))
 	require.NoErrorf(t, peekErr, "the replacement document does not load: %v", peekErr)
 	out := runOneShot(t)
-	assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource))
+	assert.Equal(t, 0, shippedClaude(t, w))
 	assert.NotEqual(t, 0, summary(t, out)["unchanged"])
 }

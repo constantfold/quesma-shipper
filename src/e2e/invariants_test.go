@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"encoding/hex"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,7 +19,7 @@ const (
 	cursorSource = "cursor-transcripts"
 )
 
-// These checks inspect one unchanged fixture; only the final subtest starts a second sync.
+// These checks inspect one unchanged fixture; only the final subtests start more syncs.
 func TestClaudeCollectionContract(t *testing.T) {
 	before := time.Now().UTC().Add(-time.Second)
 	w := stageWorld(t)
@@ -100,12 +99,19 @@ func TestClaudeCollectionContract(t *testing.T) {
 		}
 	})
 	t.Run("UnchangedSync", func(t *testing.T) {
-		require.Equal(t, 1, countOf(shippedFromLog(t, w), claudeSource), firstOut)
+		require.Equal(t, 1, shippedClaude(t, w), firstOut)
 		require.Contains(t, firstOut, "sealed of")
 		secondOut := runOneShot(t)
-		assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource), "the new run log must not retain the first sync's upload")
+		assert.Equal(t, 0, shippedClaude(t, w), "the new run log must not retain the first sync's upload")
 		assert.NotZero(t, summary(t, secondOut)["unchanged"], secondOut)
 		assert.NotContains(t, secondOut, "sealed of")
+	})
+	// mtime is a pre-filter and the content hash is the authority: a Cursor session leaves
+	// hundreds of files with new mtimes and identical bytes.
+	t.Run("TouchingEveryFileShipsNothing", func(t *testing.T) {
+		touchEverything(t, w)
+		out := runOneShot(t)
+		assert.Equal(t, 0, shippedClaude(t, w), out)
 	})
 }
 
@@ -128,9 +134,8 @@ func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
 	for _, o := range mirrorObjects(collect(t, w)) {
 		// The source id is deliberately in the clear so a reader can select by source without a
 		// key; everything after it must be opaque.
-		name := o.Key[strings.LastIndex(o.Key, "/")+1:]
-		hexPart := strings.TrimSuffix(name, ".age")
-		assert.NotEqual(t, name, hexPart)
+		hexPart, sealed := strings.CutSuffix(o.Key[strings.LastIndex(o.Key, "/")+1:], ".age")
+		assert.True(t, sealed, o.Key)
 		if _, err := hex.DecodeString(hexPart); err != nil {
 			t.Errorf("%s: name is not hex: %v", o.Key, err)
 		}
@@ -141,19 +146,6 @@ func TestKeysRevealNothingAboutTheFileTheyName(t *testing.T) {
 	}
 }
 
-func TestTouchingEveryFileShipsNothing(t *testing.T) {
-	// mtime is a pre-filter and the content hash is the authority: a Cursor session leaves
-	// hundreds of files with new mtimes and identical bytes.
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
-	runOneShot(t)
-
-	touchEverything(t, w)
-	out := runOneShot(t)
-
-	assert.Equal(t, 0, countOf(shippedFromLog(t, w), claudeSource), out)
-}
-
 func TestAppendingOneLineShipsTheFileAgain(t *testing.T) {
 	w := stageWorld(t)
 	path := stageClaude(t, w, realUsername(t))
@@ -162,14 +154,13 @@ func TestAppendingOneLineShipsTheFileAgain(t *testing.T) {
 
 	appendLine(t, path, `{"type":"user","uuid":"u3","message":{"role":"user","content":[{"type":"text","text":"one more"}]}}`)
 	runOneShot(t)
-	assert.Equal(t, 1, countOf(shippedFromLog(t, w), claudeSource))
+	assert.Equal(t, 1, shippedClaude(t, w))
 	second := mirrorObjects(collect(t, w))
 
 	// A grown file keeps its key, an HMAC over the path, so growth shows up as a second version
 	// rather than a second object.
 	require.Lenf(t, second, len(first), "append produced %d objects, want the same %d under new content", len(second), len(first))
-	first = slices.DeleteFunc(first, func(o object) bool { return o.Manifest.SourceID != claudeSource })
-	second = slices.DeleteFunc(second, func(o object) bool { return o.Manifest.SourceID != claudeSource })
+	first, second = bySourceID(first, claudeSource), bySourceID(second, claudeSource)
 	require.Truef(t, len(first) == 1 && len(second) == 1, "want one transcript before and after append, got %d and %d", len(first), len(second))
 	assert.Equal(t, 2, w.store.versions(second[0].Key))
 	assert.NotEqual(t, first[0].Manifest.SourceHash, second[0].Manifest.SourceHash, "the transcript grew and source_hash did not move")
@@ -178,22 +169,17 @@ func TestAppendingOneLineShipsTheFileAgain(t *testing.T) {
 
 func TestCursorPairYieldsADerivedObjectAndKeepsTheRaw(t *testing.T) {
 	w := stageWorld(t)
-	username := realUsername(t)
-	stageCursor(t, w, username, cursorConversation2026_07(), true)
+	stageCursor(t, w, realUsername(t), cursorConversation2026_07(), true)
 	runOneShot(t)
 
 	objects := bySourceID(mirrorObjects(collect(t, w)), cursorSource)
 	require.Lenf(t, objects, 2, "want two objects — the raw transcript and the derived join — got %d", len(objects))
 
-	var raw, derived *object
-	for i := range objects {
-		if objects[i].Manifest.Derived {
-			derived = &objects[i]
-		} else {
-			raw = &objects[i]
-		}
+	raw, derived := objects[0], objects[1]
+	if raw.Manifest.Derived {
+		raw, derived = derived, raw
 	}
-	require.True(t, raw != nil && derived != nil, "want exactly one raw object and one derived object")
+	require.True(t, !raw.Manifest.Derived && derived.Manifest.Derived, "want exactly one raw object and one derived object")
 	assert.Equalf(t, "ok", derived.Manifest.EnrichStatus, "derived object reports enrich_status %q, want ok", derived.Manifest.EnrichStatus)
 	assert.NotEqual(t, 0, len(derived.Manifest.DerivedFrom), "the derived object does not name what it came from")
 	// The point of the join: the store holds the tool output and the transcript does not. Passing
@@ -207,8 +193,7 @@ func TestATranscriptTheStoreDoesNotKnowShipsRawAndSaysSo(t *testing.T) {
 	// The drift case: when the join stops aligning, the raw transcript must still ship and the
 	// manifest must say the join failed. Silence would be data loss that looks like success.
 	w := stageWorld(t)
-	username := realUsername(t)
-	stageCursor(t, w, username, cursorConversation2026_07(), false)
+	stageCursor(t, w, realUsername(t), cursorConversation2026_07(), false)
 	runOneShot(t)
 
 	objects := bySourceID(mirrorObjects(collect(t, w)), cursorSource)
@@ -220,17 +205,16 @@ func TestATranscriptTheStoreDoesNotKnowShipsRawAndSaysSo(t *testing.T) {
 // The log belongs to whichever sync holds the lock. A manual sync during a scheduled one is
 // refused rather than interleaved, and must leave the running run's log where the notice said.
 func TestASyncRefusedForTheLockDoesNotTouchTheRunLog(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
+	w := stageClaudeWorld(t)
 	runOneShot(t)
 	before := runLogLines(t, w)
 
 	// Empty install id, so this stands in for another process rather than opening as this install.
-	held, err := state.Open(filepath.Join(w.State, "trajectory-shipper"), "")
+	held, err := state.Open(statePath(w), "")
 	require.NoErrorf(t, err, "could not stand in for a running sync: %v", err)
 	defer held.Close()
 
-	if out, err := runOneShotExpectingFailure(t, "--quiet"); err == nil {
+	if out, err := runExpectingFailure(t, "run", "--once", "--quiet"); err == nil {
 		t.Fatalf("a second sync was not refused for the lock:\n%s", out)
 	}
 
@@ -242,20 +226,13 @@ func TestASyncRefusedForTheLockDoesNotTouchTheRunLog(t *testing.T) {
 
 // --quiet is for cron: it drops the console output and keeps the log, the run's only record.
 func TestAQuietSyncStillWritesTheRunLog(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
+	w := stageClaudeWorld(t)
 
 	out := runOneShot(t, "--quiet")
 	assert.NotContainsf(t, out, "shipped", "--quiet printed a summary:\n%s", out)
 	logged := runLogLines(t, w)
-	require.NotEqual(t, 0, len(logged), "a quiet sync wrote an empty run log")
-	var shippedLines int
-	for _, line := range logged {
-		if strings.Contains(line, "  shipped (") {
-			shippedLines++
-		}
-	}
-	assert.NotEqual(t, 0, shippedLines)
+	assert.Truef(t, slices.ContainsFunc(logged, func(line string) bool { return strings.Contains(line, "  shipped (") }),
+		"a quiet sync logged no shipped file:\n%s", strings.Join(logged, "\n"))
 }
 
 func TestADisabledSourceShipsNothing(t *testing.T) {
@@ -272,8 +249,7 @@ func TestADisabledSourceShipsNothing(t *testing.T) {
 }
 
 func TestThePauseSwitchStopsCollection(t *testing.T) {
-	w := stageWorld(t)
-	stageClaude(t, w, realUsername(t))
+	w := stageClaudeWorld(t)
 	run(t, "pause", "1h")
 
 	require.Len(t, mirrorObjects(collect(t, w)), 0)
@@ -282,5 +258,5 @@ func TestThePauseSwitchStopsCollection(t *testing.T) {
 
 	run(t, "resume")
 	runOneShot(t)
-	assert.NotEqual(t, 0, countOf(shippedFromLog(t, w), claudeSource), "resumed, and nothing was collected")
+	assert.NotEqual(t, 0, shippedClaude(t, w), "resumed, and nothing was collected")
 }

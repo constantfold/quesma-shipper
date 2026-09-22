@@ -1,5 +1,6 @@
 //go:build perf
 
+// What the store was asked for, read off toxiproxy's and MinIO's Prometheus pages.
 package perf
 
 import (
@@ -22,38 +23,27 @@ type storeCounters struct {
 // tier. Nothing else may talk to the store while fn runs: adminS3 lands in the same request count.
 func aroundStore(t *testing.T, fn func()) storeCounters {
 	t.Helper()
-	upBefore, downBefore := proxiedBytesByDirection(t)
-	requestsBefore := s3RequestCount(t)
-
+	before, requestsBefore := settledStoreBytes(t), s3RequestCount(t)
 	fn()
-
-	up, down := proxiedBytesByDirection(t)
-	return storeCounters{up: up - upBefore, down: down - downBefore, requests: s3RequestCount(t) - requestsBefore}
+	after := settledStoreBytes(t)
+	return storeCounters{
+		up:       after.up - before.up,
+		down:     after.down - before.down,
+		requests: s3RequestCount(t) - requestsBefore,
+	}
 }
 
-// One reading of the shaped proxy's four byte counters; toxiproxy counts each link's bytes twice,
-// once received and once sent, so total is not up+down.
+// One reading of the shaped proxy. toxiproxy counts each link's bytes twice, once received and once
+// sent: up and down are the received counters alone, total is all four.
 type storeBytes struct {
-	receivedUp, receivedDown int64
-	sentUp, sentDown         int64
-}
-
-func (b storeBytes) total() int64 {
-	return b.receivedUp + b.receivedDown + b.sentUp + b.sentDown
+	up, down, total int64
 }
 
 // Call only after the child has exited: toxiproxy accounts a link's bytes when the link closes, and
 // even then the flush trails the process, hence the poll for a value that stopped moving.
 func proxiedBytes(t *testing.T) int64 {
 	t.Helper()
-	return settledStoreBytes(t).total()
-}
-
-// Only the received counters, so the figures are bytes and not bytes counted twice.
-func proxiedBytesByDirection(t *testing.T) (up, down int64) {
-	t.Helper()
-	b := settledStoreBytes(t)
-	return b.receivedUp, b.receivedDown
+	return settledStoreBytes(t).total
 }
 
 func settledStoreBytes(t *testing.T) storeBytes {
@@ -67,15 +57,14 @@ func settledStoreBytes(t *testing.T) storeBytes {
 	last, same := int64(-1), 0
 	for {
 		b := scrapeStoreBytes(t)
-		v := b.total()
-		if v == last {
+		if b.total == last {
 			if same++; same >= stableReads-1 {
 				return b
 			}
 		} else {
-			last, same = v, 0
+			last, same = b.total, 0
 		}
-		require.Falsef(t, time.Now().After(give), "toxiproxy's byte counters never settled: last read %d bytes", v)
+		require.Falsef(t, time.Now().After(give), "toxiproxy's byte counters never settled: last read %d bytes", b.total)
 		time.Sleep(interval)
 	}
 }
@@ -86,29 +75,23 @@ func scrapeStoreBytes(t *testing.T) storeBytes {
 	t.Helper()
 	var b storeBytes
 	eachSample(t, metricsURL, scrapePage(t, metricsURL), func(name, labels string, value float64) {
-		if name != "toxiproxy_proxy_received_bytes_total" &&
-			name != "toxiproxy_proxy_sent_bytes_total" {
-			return
-		}
-		if !strings.Contains(labels, `proxy="`+storeProxyName+`"`) {
-			return
-		}
 		received := name == "toxiproxy_proxy_received_bytes_total"
+		if !received && name != "toxiproxy_proxy_sent_bytes_total" ||
+			!strings.Contains(labels, `proxy="`+storeProxyName+`"`) {
+			return
+		}
+		b.total += int64(value)
 		switch {
-		case strings.Contains(labels, `direction="upstream"`) && received:
-			b.receivedUp += int64(value)
-		case strings.Contains(labels, `direction="upstream"`):
-			b.sentUp += int64(value)
-		case strings.Contains(labels, `direction="downstream"`) && received:
-			b.receivedDown += int64(value)
-		default:
-			b.sentDown += int64(value)
+		case received && strings.Contains(labels, `direction="upstream"`):
+			b.up += int64(value)
+		case received && strings.Contains(labels, `direction="downstream"`):
+			b.down += int64(value)
 		}
 	})
 	return b
 }
 
-// Named here because a pinned MinIO that renamed it would report every run as zero requests.
+// Named here because a MinIO upgrade that renamed it would report every run as zero requests.
 const s3RequestCountMetric = "minio_api_requests_total"
 
 // A running total like the byte counters, read either side of a child run. Unlike them it counts the
@@ -116,10 +99,8 @@ const s3RequestCountMetric = "minio_api_requests_total"
 func s3RequestCount(t *testing.T) int64 {
 	t.Helper()
 	page := scrapePage(t, minioMetricsURL)
-	if !strings.Contains(page, s3RequestCountMetric) {
-		t.Fatalf("no %s on %s: the pinned MinIO renamed the counter and every request "+
-			"figure would read zero", s3RequestCountMetric, minioMetricsURL)
-	}
+	require.Truef(t, strings.Contains(page, s3RequestCountMetric), "no %s on %s: the pinned MinIO "+
+		"renamed the counter and every request figure would read zero", s3RequestCountMetric, minioMetricsURL)
 	var total int64
 	eachSample(t, minioMetricsURL, page, func(name, labels string, value float64) {
 		if name == s3RequestCountMetric && strings.Contains(labels, `type="s3"`) {
@@ -133,11 +114,11 @@ func s3RequestCount(t *testing.T) int64 {
 func scrapePage(t *testing.T, url string) string {
 	t.Helper()
 	resp, err := http.Get(url)
-	require.Falsef(t, err != nil, "scrape %s: %v", url, err)
+	require.NoErrorf(t, err, "scrape %s", url)
 	defer resp.Body.Close()
-	require.Falsef(t, resp.StatusCode != http.StatusOK, "scrape %s: HTTP %d", url, resp.StatusCode)
+	require.Equalf(t, http.StatusOK, resp.StatusCode, "scrape %s", url)
 	body, err := io.ReadAll(resp.Body)
-	require.Falsef(t, err != nil, "read %s: %v", url, err)
+	require.NoErrorf(t, err, "read %s", url)
 	return string(body)
 }
 
@@ -150,9 +131,9 @@ func eachSample(t *testing.T, url, page string, fn func(name, labels string, val
 			continue
 		}
 		labels, value, ok := strings.Cut(labelled, "} ")
-		require.Falsef(t, !ok, "unparseable sample line from %s: %q", url, line)
+		require.Truef(t, ok, "unparseable sample line from %s: %q", url, line)
 		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		require.Falsef(t, err != nil, "unparseable sample value in %q: %v", line, err)
+		require.NoErrorf(t, err, "unparseable sample value in %q", line)
 		fn(name, labels, f)
 	}
 }

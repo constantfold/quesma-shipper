@@ -2,7 +2,7 @@
 
 // What a child run cost, and what it left behind. The shipper runs as an ordinary child, so peak
 // memory, CPU and exit status are three syscalls away. Peak memory is read two ways (VmHWM cannot
-// undercount but misses the last moments; Maxrss arrives only after exit) and the larger is gated.
+// undercount but misses the last moments; Maxrss arrives only after exit) and the larger is checked.
 package perf
 
 import (
@@ -15,10 +15,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -30,8 +28,7 @@ import (
 // Not a sampling rate: VmHWM only ever grows, so this decides how likely a read lands before exit.
 const vmHWMInterval = 20 * time.Millisecond
 
-// Without it the deadline is not one: Wait blocks on the output pipe copy, and cancelling the
-// context kills only the direct child, which for a capped run is sudo rather than the shipper.
+// Without it Wait blocks on the pipe copy: cancelling kills only the direct child, sudo for a capped run.
 const waitDelay = 30 * time.Second
 
 // One run of the shipper, measured rather than judged; nothing here fails a test.
@@ -39,21 +36,13 @@ type childObservation struct {
 	Output  string
 	Elapsed time.Duration
 
-	// The larger of the two readings and which one it was; VmHWM is zero where /proc is not.
-	PeakRSS       int64
-	PeakRSSSource string
-
-	// User plus system time: the "did it hang or did it work" figure.
-	CPUSeconds float64
-
-	ExitCode int
-	Signal   syscall.Signal
-
-	// Separates a syncTimeout kill from the SIGKILL a scenario was expecting.
-	TimedOut bool
-
-	// What Wait returned: nil for a clean exit, non-nil for anything else.
-	Err error
+	PeakRSS       int64  // the larger of the two readings
+	PeakRSSSource string // which one it was
+	CPUSeconds    float64
+	ExitCode      int
+	Signal        syscall.Signal
+	TimedOut      bool  // separates a syncTimeout kill from the SIGKILL a scenario expected
+	Err           error // what Wait returned
 }
 
 // The one-word form that goes into the results file.
@@ -74,8 +63,7 @@ func (o childObservation) Killed() bool {
 	return o.Signal == syscall.SIGKILL || o.ExitCode == 128+int(syscall.SIGKILL)
 }
 
-// The wall clock covers the whole process, startup included: skipping it would flatter every
-// steady-state result.
+// The wall clock covers the whole process, startup included, or it would flatter every steady state.
 func (w *world) observedSync(t *testing.T) childObservation {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
@@ -86,13 +74,10 @@ func (w *world) observedSync(t *testing.T) childObservation {
 	cmd.Env = w.childEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	// See waitDelay: the deadline above only ends the run because of this line.
 	cmd.WaitDelay = waitDelay
 
 	start := time.Now()
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start the shipper: %v", err)
-	}
+	require.NoError(t, cmd.Start(), "start the shipper")
 	peak := watchPeakRSS(cmd.Process.Pid)
 	err := cmd.Wait()
 	vmHWM := peak()
@@ -105,38 +90,29 @@ func (w *world) observedSync(t *testing.T) childObservation {
 		obs.Signal = ws.Signal()
 	}
 	ru, ok := st.SysUsage().(*syscall.Rusage)
-	if !ok {
-		t.Fatalf("no rusage for the child on %s: peak memory cannot be observed", runtime.GOOS)
-	}
+	require.Truef(t, ok, "no rusage for the child on %s: peak memory cannot be observed", runtime.GOOS)
+	seconds := func(tv syscall.Timeval) float64 { return float64(tv.Sec) + float64(tv.Usec)/1e6 }
 	obs.CPUSeconds = seconds(ru.Utime) + seconds(ru.Stime)
 
-	obs.PeakRSS, obs.PeakRSSSource = ru.Maxrss*maxrssUnit(t), "Maxrss"
+	// Maxrss is kilobytes on Linux, bytes on darwin; a loud stop elsewhere rather than a peak off by 1000x.
+	var unit int64
+	switch runtime.GOOS {
+	case "linux":
+		unit = 1 << 10
+	case "darwin":
+		unit = 1
+	default:
+		t.Fatalf("the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
+	}
+	obs.PeakRSS, obs.PeakRSSSource = ru.Maxrss*unit, "Maxrss"
 	if vmHWM > obs.PeakRSS {
 		obs.PeakRSS, obs.PeakRSSSource = vmHWM, "VmHWM"
 	}
 	return obs
 }
 
-func seconds(tv syscall.Timeval) float64 {
-	return float64(tv.Sec) + float64(tv.Usec)/1e6
-}
-
-// Kilobytes on Linux, bytes on darwin, a loud stop elsewhere rather than a peak off by 1000x.
-func maxrssUnit(t *testing.T) int64 {
-	t.Helper()
-	switch runtime.GOOS {
-	case "linux":
-		return 1 << 10
-	case "darwin":
-		return 1
-	default:
-		t.Fatalf("the unit of Rusage.Maxrss on %s is not known here", runtime.GOOS)
-		return 0
-	}
-}
-
-// Returns a function that stops the watch and reports it; zero where /proc is not. Nothing may be
-// read after the stop: a reaped pid's numbers are gone or belong to someone else.
+// The returned function, called once after Wait, stops the watch: a reaped pid's numbers belong to
+// someone else. Zero where /proc is not.
 func watchPeakRSS(pid int) func() int64 {
 	if runtime.GOOS != "linux" {
 		return func() int64 { return 0 }
@@ -145,15 +121,10 @@ func watchPeakRSS(pid int) func() int64 {
 	result := make(chan int64, 1)
 	go func() {
 		var peak int64
-		read := func() {
-			if v := peakVmHWM(pid); v > peak {
-				peak = v
-			}
-		}
 		tick := time.NewTicker(vmHWMInterval)
 		defer tick.Stop()
 		for {
-			read()
+			peak = max(peak, peakVmHWM(pid))
 			select {
 			case <-done:
 				result <- peak
@@ -162,40 +133,29 @@ func watchPeakRSS(pid int) func() int64 {
 			}
 		}
 	}()
-
-	var (
-		once sync.Once
-		peak int64
-	)
 	return func() int64 {
-		once.Do(func() {
-			close(done)
-			peak = <-result
-		})
-		return peak
+		close(done)
+		return <-result
 	}
 }
 
-// The subtree and not the process: a capped run has wrappers in between, and the reading worth
-// having is the deepest one, which is also the largest by orders of magnitude.
+// The subtree, since a capped run has wrappers above the shipper; zero once the process is gone.
 func peakVmHWM(pid int) int64 {
-	peak, _ := readVmHWM(pid)
-	for _, child := range procChildren(pid) {
-		if v := peakVmHWM(child); v > peak {
-			peak = v
+	var peak int64
+	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status"); err == nil {
+		for line := range strings.SplitSeq(string(raw), "\n") {
+			if rest, ok := strings.CutPrefix(line, "VmHWM:"); ok {
+				if fields := strings.Fields(rest); len(fields) > 0 {
+					if kb, err := strconv.ParseInt(fields[0], 10, 64); err == nil {
+						peak = kb << 10
+					}
+				}
+				break
+			}
 		}
 	}
-	return peak
-}
-
-// A process's direct children; empty where there are none and where /proc is not.
-func procChildren(pid int) []int {
 	tasks := filepath.Join("/proc", strconv.Itoa(pid), "task")
-	entries, err := os.ReadDir(tasks)
-	if err != nil {
-		return nil
-	}
-	var out []int
+	entries, _ := os.ReadDir(tasks)
 	for _, e := range entries {
 		raw, err := os.ReadFile(filepath.Join(tasks, e.Name(), "children"))
 		if err != nil {
@@ -203,94 +163,53 @@ func procChildren(pid int) []int {
 		}
 		for _, field := range strings.Fields(string(raw)) {
 			if child, err := strconv.Atoi(field); err == nil {
-				out = append(out, child)
+				peak = max(peak, peakVmHWM(child))
 			}
 		}
 	}
-	return out
+	return peak
 }
 
-// Not ok once the process is gone, which is expected rather than an error.
-func readVmHWM(pid int) (int64, bool) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
-	if err != nil {
-		return 0, false
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		rest, ok := strings.CutPrefix(line, "VmHWM:")
-		if !ok {
-			continue
-		}
-		fields := strings.Fields(rest)
-		if len(fields) < 1 {
-			return 0, false
-		}
-		kb, err := strconv.ParseInt(fields[0], 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return kb << 10, true
-	}
-	return 0, false
-}
-
-// --- the memory budget -------------------------------------------------------
-
-// Touching the budget is a failure, killed or not. A hard gate only on Linux, where VmHWM does not
-// depend on when the harness looked; elsewhere the log says the gate did not run.
+// Touching the budget is a failure. Enforced only on Linux, where VmHWM does not depend on when the
+// harness looked; elsewhere the log says the check did not run.
 func assertPeakUnderBudget(t *testing.T, scenario string, obs childObservation, budget int64) {
 	t.Helper()
 	require.Falsef(t, budget <= 0, "%s declared a memory budget of %d bytes; a budget is a positive number of bytes", scenario, budget)
-	// A reading of zero is under every budget there is: a broken instrument must not pass a gate.
-	if obs.PeakRSS <= 0 {
-		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this gate would "+
+	switch {
+	case obs.PeakRSS <= 0:
+		t.Errorf("%s: peak RSS read as %d bytes from %s: the instrument is what this check would "+
 			"be passing, not the run", scenario, obs.PeakRSS, obs.PeakRSSSource)
-		return
-	}
-	if runtime.GOOS != "linux" {
+	case runtime.GOOS != "linux":
 		t.Logf("%s: peak %d bytes (%s) against a %d byte budget, recorded only: "+
-			"the memory gate needs VmHWM and %s has no /proc",
+			"the memory check needs VmHWM and %s has no /proc",
 			scenario, obs.PeakRSS, obs.PeakRSSSource, budget, runtime.GOOS)
-		return
-	}
-	if obs.PeakRSS >= budget {
+	case obs.PeakRSS >= budget:
 		t.Errorf("%s: peak RSS %d bytes (%s) reached its %d byte budget",
 			scenario, obs.PeakRSS, obs.PeakRSSSource, budget)
-		return
+	default:
+		t.Logf("%s: peak RSS %d bytes (%s), %d bytes under the %d byte budget",
+			scenario, obs.PeakRSS, obs.PeakRSSSource, budget-obs.PeakRSS, budget)
 	}
-	t.Logf("%s: peak RSS %d bytes (%s), %d bytes under the %d byte budget",
-		scenario, obs.PeakRSS, obs.PeakRSSSource, budget-obs.PeakRSS, budget)
 }
 
-// --- the CPU budget ----------------------------------------------------------
-
-// A zero budget is a scenario that made no CPU claim, not a broken one; where the memory gate treats
-// zero as a mistake, this one returns. Unlike that gate it runs on every platform, so the budget has
-// to hold on the slowest machine that runs it. Reaching the budget is a failure.
+// A zero budget makes no CPU claim. This runs on every platform, so it must hold on the slowest one.
 func assertCPUUnderBudget(t *testing.T, scenario string, obs childObservation, budget float64) {
 	t.Helper()
-	if budget <= 0 {
-		return
-	}
-	// A reading of zero is under every budget there is; a child that ran burned CPU.
-	if obs.CPUSeconds <= 0 {
-		t.Errorf("%s: child CPU read as %.3f seconds: the instrument is what this gate would "+
+	switch {
+	case budget <= 0:
+	case obs.CPUSeconds <= 0:
+		t.Errorf("%s: child CPU read as %.3f seconds: the instrument is what this check would "+
 			"be passing, not the run", scenario, obs.CPUSeconds)
-		return
-	}
-	if obs.CPUSeconds >= budget {
+	case obs.CPUSeconds >= budget:
 		t.Errorf("%s: the child burned %.2f CPU seconds, reaching its %.2f second budget",
 			scenario, obs.CPUSeconds, budget)
-		return
+	default:
+		t.Logf("%s: %.2f CPU seconds, %.2f under the %.2f second budget",
+			scenario, obs.CPUSeconds, budget-obs.CPUSeconds, budget)
 	}
-	t.Logf("%s: %.2f CPU seconds, %.2f under the %.2f second budget",
-		scenario, obs.CPUSeconds, budget-obs.CPUSeconds, budget)
 }
 
-// --- what the run left behind ------------------------------------------------
-
-// Every durable local write is temp-then-rename, so a temp file that outlived the process is a
-// write that never committed.
+// Every durable local write is temp-then-rename, so a leftover temp file is a write that never committed.
 func assertNoResidualScratch(t *testing.T, w *world) {
 	t.Helper()
 	var leftover []string
@@ -299,41 +218,27 @@ func assertNoResidualScratch(t *testing.T, w *world) {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && isScratchName(d.Name()) {
+			name := d.Name()
+			if !d.IsDir() && (strings.Contains(name, ".tmp-") || strings.HasSuffix(name, ".tmp") ||
+				strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".partial")) {
 				leftover = append(leftover, path)
 			}
 			return nil
 		})
-		require.Falsef(t, err != nil, "walk %s for scratch files: %v", root, err)
+		require.NoErrorf(t, err, "walk %s for scratch files", root)
 	}
-	if len(leftover) == 0 {
-		return
+	if len(leftover) > 0 {
+		slices.Sort(leftover)
+		shown := leftover[:min(10, len(leftover))]
+		t.Errorf("a drained sync left %d scratch files behind, first %d: %s",
+			len(leftover), len(shown), strings.Join(shown, " "))
 	}
-	sort.Strings(leftover)
-	shown := leftover
-	if len(shown) > 10 {
-		shown = shown[:10]
-	}
-	t.Errorf("a drained sync left %d scratch files behind, first %d: %s",
-		len(leftover), len(shown), strings.Join(shown, " "))
 }
 
-// The shapes the shipper writes while a write is still in flight.
-func isScratchName(name string) bool {
-	return strings.Contains(name, ".tmp-") ||
-		strings.HasSuffix(name, ".tmp") ||
-		strings.HasSuffix(name, ".part") ||
-		strings.HasSuffix(name, ".partial")
-}
-
-// --- the instruments, checked against a run that is not being measured ------
-
-// Deliberately loose: this proves the gate reads a real number, so a tight bound here would only
-// make the harness's own smoke check the flakiest thing in the tier.
+// Deliberately loose: this proves the check reads a real number, not that the run is small.
 const selfTestMemoryBudget = 512 << 20
 
-// The tier's own smoke check: a helper nothing calls stops working quietly, and the scenarios that
-// call these cost minutes each. One cheap sync exercises the whole chain.
+// The instruments, checked against one cheap sync: the scenarios that rely on them cost minutes each.
 func TestTheHarnessObservesAChildRun(t *testing.T) {
 	w := stageWorld(t)
 	files := smallCorpusFiles
@@ -349,9 +254,7 @@ func TestTheHarnessObservesAChildRun(t *testing.T) {
 
 	assert.Falsef(t, c.up <= 0 || c.down <= 0, "the run shipped %d files and the proxy counted %d bytes up, %d down", files, c.up, c.down)
 	assert.Falsef(t, c.requests <= 0, "the run shipped %d files and MinIO counted %d new S3 requests", files, c.requests)
-	if objects < files {
-		t.Errorf("the run shipped %d files and left %d objects under %s", files, objects, w.keyRoot)
-	}
+	assert.GreaterOrEqualf(t, objects, files, "the run shipped %d files and left %d objects under %s", files, objects, w.keyRoot)
 	assert.Falsef(t, obs.PeakRSS <= 0, "the child's peak RSS read as %d bytes from %s", obs.PeakRSS, obs.PeakRSSSource)
 	assert.Falsef(t, obs.CPUSeconds <= 0, "the child's CPU time read as %v seconds", obs.CPUSeconds)
 

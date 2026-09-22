@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,7 @@ import (
 // The harness consumes a binary; assertInFlightCapIsWired checks this literal reaches it.
 const envMaxInFlightBytes = "SHIPPER_MAX_IN_FLIGHT_BYTES"
 
-// S3's acceptance gate: the requirement, not a measurement; see smokeBigFileAcceptance.
+// S3's acceptance bound: the requirement, not a measurement; see smokeBigFileAcceptance.
 const (
 	acceptanceFileBytes int64 = 500 << 20
 	acceptanceBudget    int64 = 200 << 20
@@ -36,11 +35,11 @@ const (
 	inFlightFileBytes int64 = 8 << 20
 	inFlightFiles           = 4
 
-	// Between the serial and concurrent peaks, so a broken gate fails this budget.
+	// Between the serial and concurrent peaks, so broken admission fails this budget.
 	inFlightBudget int64 = 208 << 20
 )
 
-// PROVISIONAL on the same terms as bigFileBudget, and gating for the first time where VmHWM exists.
+// PROVISIONAL on the same terms as bigFileBudget, and enforced for the first time where VmHWM exists.
 const (
 	singleLineFileBytes int64 = 50 << 20
 	singleLineBudget    int64 = 250 << 20
@@ -59,7 +58,7 @@ func smokeBigFileAcceptance(t *testing.T) {
 		w := stageCappedWorld(t, acceptanceBudget)
 		// The compiled 256 MiB source ceiling would skip this fixture rather than ship it.
 		raiseMaxFileBytes(t, w, acceptanceFileBytes*2)
-		staged := stageIncompressibleFile(t, w, 0, acceptanceFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, acceptanceFileBytes, 0)
 		runUnderBudget(t, w, acceptanceScenario, resourceBudget{memory: acceptanceBudget}, 1, staged)
 	})
 }
@@ -69,7 +68,7 @@ func smokeBigFile(t *testing.T) {
 	t.Run("S3-big-file", func(t *testing.T) {
 		requireMemoryCap(t)
 		w := stageCappedWorld(t, bigFileBudget)
-		staged := stageIncompressibleFile(t, w, 0, bigFileBytes)
+		staged, _ := stageIncompressibleFile(t, w, 0, bigFileBytes, 0)
 		runUnderBudget(t, w, bigFileScenario, resourceBudget{memory: bigFileBudget}, 1, staged)
 	})
 }
@@ -77,16 +76,15 @@ func smokeBigFile(t *testing.T) {
 // No cgroup or GOMEMLIMIT: either could mask whether admission serializes these files.
 func smokeInFlightCap(t *testing.T) {
 	t.Run("S4-in-flight-cap", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		w.extraEnv = append(w.extraEnv,
-			fmt.Sprintf("%s=%d", envMaxInFlightBytes, inFlightCap))
+		w := stageSmokeWorld(t)
+		w.extraEnv = append(w.extraEnv, fmt.Sprintf("%s=%d", envMaxInFlightBytes, inFlightCap))
 
 		assertInFlightCapIsWired(t, w)
 
 		staged := 0
 		for i := range inFlightFiles {
-			staged += stageIncompressibleFile(t, w, i, inFlightFileBytes)
+			n, _ := stageIncompressibleFile(t, w, i, inFlightFileBytes, 0)
+			staged += n
 		}
 		t.Logf("%s: %d files of %d bytes under a %d byte in-flight cap, so no two can be "+
 			"admitted together", inFlightScenario, inFlightFiles, inFlightFileBytes, inFlightCap)
@@ -117,9 +115,8 @@ func assertInFlightCapIsWired(t *testing.T, w *world) {
 // One large JSON string forces a whole decoded value; its CPU cost has no calibrated budget.
 func smokeSingleLine(t *testing.T) {
 	t.Run("S6-single-line-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged := stageSingleLineFile(t, w, singleLineFileBytes)
+		w := stageSmokeWorld(t)
+		staged, _ := stageSingleLineFile(t, w, "-Users-perf-work-oneline", singleLineFileBytes, "")
 		runUnderBudget(t, w, singleLineScenario, resourceBudget{memory: singleLineBudget}, 1, staged)
 	})
 }
@@ -127,11 +124,9 @@ func smokeSingleLine(t *testing.T) {
 // Secrets add replacement and quoted-output copies, covered by singleLineDirtyBudget.
 func smokeSingleLineSecrets(t *testing.T) {
 	t.Run("S7-single-line-secret-transcript", func(t *testing.T) {
-		w := stageWorld(t)
-		w.gomaxprocs = smokeGOMAXPROCS
-		staged, secrets := stageSingleLineSecretFile(t, w, singleLineFileBytes)
-		runUnderBudget(t, w, singleLineSecretScenario,
-			resourceBudget{memory: singleLineDirtyBudget}, 1, staged)
+		w := stageSmokeWorld(t)
+		staged, secrets := stageSingleLineFile(t, w, "-Users-perf-work-oneline-secrets", singleLineFileBytes, corpusGitHubToken)
+		runUnderBudget(t, w, singleLineSecretScenario, resourceBudget{memory: singleLineDirtyBudget}, 1, staged)
 
 		assertRuleHits(t, w, corpusSessionID(0), map[string]int{"github-pat": secrets})
 	})
@@ -139,10 +134,8 @@ func smokeSingleLineSecrets(t *testing.T) {
 
 // Zero leaves a dimension unmonitored.
 type resourceBudget struct {
-	memory int64 // bytes of peak RSS, gated on every run
-
-	// The scenario judges its chosen repetition; gating each run would select the noisiest one.
-	cpu float64
+	memory int64   // bytes of peak RSS, checked on every run
+	cpu    float64 // judged by the scenario over its repetitions, not per run
 }
 
 // Judge both resource cost and actual wire bytes; compressible fixtures could pass vacuously.
@@ -153,19 +146,12 @@ func runUnderBudget(t *testing.T, w *world, scenario string, budget resourceBudg
 	c := aroundStore(t, func() { obs = w.observedSync(t) })
 	objects := len(w.currentKeys(t))
 
-	t.Logf("%s: %d files, %d logical bytes, budget %d: %s in %v, peak %d bytes (%s), "+
-		"%.2f cpu seconds, %d up and %d down (%.3f wire ratio), %d S3 requests, %d objects",
-		scenario, files, logical, budget.memory, obs.exitStatus(), obs.Elapsed.Round(time.Millisecond),
-		obs.PeakRSS, obs.PeakRSSSource, obs.CPUSeconds, c.up, c.down,
-		float64(c.up+c.down)/float64(logical), c.requests, objects)
-
 	// Recorded before anything is judged: a breach with no row is one nobody can calibrate against.
 	recordResult(t, perfResult{
-		Scenario:        scenario,
-		CorpusFiles:     files,
-		CorpusBytes:     logical,
-		ChildGOMAXPROCS: w.gomaxprocs,
-		// Record shaping even when the scenario does not judge latency.
+		Scenario:          scenario,
+		CorpusFiles:       files,
+		CorpusBytes:       logical,
+		ChildGOMAXPROCS:   w.gomaxprocs,
 		ShapedRTTMillis:   smokeRTT.Milliseconds(),
 		RepSeconds:        []float64{obs.Elapsed.Seconds()},
 		BestSeconds:       obs.Elapsed.Seconds(),
