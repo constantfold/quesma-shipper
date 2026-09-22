@@ -19,42 +19,35 @@ import (
 )
 
 func serviceCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "service", Short: "Remove or show how to restart the background service", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
-	uninstall := &cobra.Command{Use: "uninstall", Short: "Unload and delete the service entry", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			kind, err := packaging.UninstallService()
-			if packaging.RemovalUnverified(err) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s service removed\n", kind)
+	cmd := verb("service", "Remove or show how to restart the background service", (*cobra.Command).Help)
+	uninstall := verb("uninstall", "Unload and delete the service entry", func(cmd *cobra.Command) error {
+		kind, err := packaging.UninstallService()
+		if packaging.RemovalUnverified(err) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
 			return nil
-		}}
-	restart := &cobra.Command{Use: "restart", Short: "Print the command that restarts the service", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if c := packaging.RestartCommand(); c != "" {
-				fmt.Fprintln(cmd.OutOrStdout(), c)
-			}
-			return nil
-		}}
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s service removed\n", kind)
+		return nil
+	})
+	restart := verb("restart", "Print the command that restarts the service", func(cmd *cobra.Command) error {
+		if c := packaging.RestartCommand(); c != "" {
+			fmt.Fprintln(cmd.OutOrStdout(), c)
+		}
+		return nil
+	})
 	cmd.AddCommand(uninstall, restart)
 	return cmd
 }
 
 func postinstallCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:  "postinstall",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			warning, err := app.PostInstallPackage()
-			printWarning(cmd.ErrOrStderr(), warning)
-			return err
-		},
-	}
+	return verb("postinstall", "", func(cmd *cobra.Command) error {
+		warning, err := app.PostInstallPackage()
+		printWarning(cmd.ErrOrStderr(), warning)
+		return err
+	})
 }
 
 func reportRemote(w io.Writer, r *app.Runtime) {
@@ -72,83 +65,68 @@ func reportRemote(w io.Writer, r *app.Runtime) {
 
 func previewCmd(build app.Build) *cobra.Command {
 	var sourceFilter string
-	cmd := &cobra.Command{
-		Use:   "preview",
-		Short: "Show what would be sent, without sending or recording anything",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			env, err := app.New(build)
-			if err != nil {
-				return err
-			}
-			if sourceFilter != "" {
-				env.FilterSources(sourceFilter)
-			}
-			rep, err := env.Flush(cmd.Context(), true)
-			if err != nil {
-				return err
-			}
-			printPreview(cmd.OutOrStdout(), rep, env)
-			return nil
-		},
-	}
+	cmd := verb("preview", "Show what would be sent, without sending or recording anything", func(cmd *cobra.Command) error {
+		env, err := app.New(build)
+		if err != nil {
+			return err
+		}
+		if sourceFilter != "" {
+			env.FilterSources(sourceFilter)
+		}
+		rep, err := env.Flush(cmd.Context(), true)
+		if err != nil {
+			return err
+		}
+		printPreview(cmd.OutOrStdout(), rep, env)
+		return nil
+	})
 	cmd.Flags().StringVar(&sourceFilter, "source", "", "one source only")
 	return cmd
 }
 
 func logCmd() *cobra.Command {
 	var lines int
-	cmd := &cobra.Command{
-		Use:   "log",
-		Short: "Recent audit entries: what was decided about each file",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, paths, err := app.ResolveEffective()
-			if err != nil {
-				return err
-			}
-			log, err := auditlog.Open(paths.StateDir)
-			if err != nil {
-				return err
-			}
-			entries, err := auditlog.Tail(log.Path(), lines)
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no entries yet")
-				return nil
-			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			defer w.Flush()
-			fmt.Fprintf(w, "WHEN\tDECISION\tSOURCE\tIN\tOUT\tDENSITY\tDETAIL\n")
-			for _, e := range entries {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%.4f\t%s\n",
-					e.At.Local().Format("15:04:05"), e.Decision, e.SourceID, e.BytesIn, e.BytesOut, e.RedactionDensity,
-					cmp.Or(e.Reason, e.File))
-			}
+	cmd := verb("log", "Recent audit entries: what was decided about each file", func(cmd *cobra.Command) error {
+		_, paths, err := app.ResolveEffective()
+		if err != nil {
+			return err
+		}
+		log, err := auditlog.Open(paths.StateDir)
+		if err != nil {
+			return err
+		}
+		entries, err := auditlog.Tail(log.Path(), lines)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "no entries yet")
 			return nil
-		},
-	}
+		}
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+		defer w.Flush()
+		fmt.Fprintf(w, "WHEN\tDECISION\tSOURCE\tIN\tOUT\tDENSITY\tDETAIL\n")
+		for _, e := range entries {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%.4f\t%s\n",
+				e.At.Local().Format("15:04:05"), e.Decision, e.SourceID, e.BytesIn, e.BytesOut, e.RedactionDensity,
+				cmp.Or(e.Reason, e.File))
+		}
+		return nil
+	})
 	cmd.Flags().IntVarP(&lines, "lines", "n", 50, "how many entries")
 	return cmd
 }
 
 func configCmd() *cobra.Command {
 	var withProvenance bool
-	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "The effective configuration and where each value came from",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			eff, paths, err := app.ResolveEffective()
-			if err != nil {
-				return err
-			}
-			printEffective(cmd.OutOrStdout(), eff, paths, withProvenance)
-			return nil
-		},
-	}
+	cmd := verb("config", "The effective configuration and where each value came from", func(cmd *cobra.Command) error {
+		eff, paths, err := app.ResolveEffective()
+		if err != nil {
+			return err
+		}
+		printEffective(cmd.OutOrStdout(), eff, paths, withProvenance)
+		return nil
+	})
 	cmd.Flags().BoolVar(&withProvenance, "with-provenance", false, "name the layer that set each value")
 	return cmd
 }
@@ -216,35 +194,32 @@ func printEffective(out io.Writer, eff *config.Effective, paths config.Paths, wi
 }
 
 func stateCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "state", Short: "Inspect and repair the local record of what was sent", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
+	cmd := verb("state", "Inspect and repair the local record of what was sent", (*cobra.Command).Help)
 	var apply bool
-	reset := &cobra.Command{Use: "reset", Short: "Forget everything so the next run re-hashes every file and asks the archive what it already holds", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			stateDir, unit, err := installIdentity()
-			if err != nil {
-				return err
-			}
-			removed, err := engine.Reset(stateDir, unit.InstallID.String(), !apply)
-			if err != nil {
-				return err
-			}
-			reportStateChange(cmd.OutOrStdout(), removed, 0, apply, "forgotten")
-			return nil
-		}}
-	prune := &cobra.Command{Use: "prune", Short: "Forget files that no longer exist", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			stateDir, unit, err := installIdentity()
-			if err != nil {
-				return err
-			}
-			removed, kept, err := engine.Prune(stateDir, unit.InstallID.String(), !apply)
-			if err != nil {
-				return err
-			}
-			reportStateChange(cmd.OutOrStdout(), removed, kept, apply, "pruned")
-			return nil
-		}}
+	reset := verb("reset", "Forget everything so the next run re-hashes every file and asks the archive what it already holds", func(cmd *cobra.Command) error {
+		stateDir, unit, err := installIdentity()
+		if err != nil {
+			return err
+		}
+		removed, err := engine.Reset(stateDir, unit.InstallID.String(), !apply)
+		if err != nil {
+			return err
+		}
+		reportStateChange(cmd.OutOrStdout(), removed, 0, apply, "forgotten")
+		return nil
+	})
+	prune := verb("prune", "Forget files that no longer exist", func(cmd *cobra.Command) error {
+		stateDir, unit, err := installIdentity()
+		if err != nil {
+			return err
+		}
+		removed, kept, err := engine.Prune(stateDir, unit.InstallID.String(), !apply)
+		if err != nil {
+			return err
+		}
+		reportStateChange(cmd.OutOrStdout(), removed, kept, apply, "pruned")
+		return nil
+	})
 	for _, c := range []*cobra.Command{reset, prune} {
 		c.Flags().BoolVar(&apply, "apply", false, "write the change instead of reporting it")
 	}
@@ -252,32 +227,27 @@ func stateCmd() *cobra.Command {
 	return cmd
 }
 
-func reportStateChange(w io.Writer, removed, kept int, apply bool, verb string) {
+func reportStateChange(w io.Writer, removed, kept int, apply bool, action string) {
 	switch {
 	case removed == 0:
 		fmt.Fprintf(w, "nothing to do (%d entries)\n", kept)
 	case apply:
-		fmt.Fprintf(w, "%d entries %s, %d remain\n", removed, verb, kept)
+		fmt.Fprintf(w, "%d entries %s, %d remain\n", removed, action, kept)
 	default:
-		fmt.Fprintf(w, "%d entries would be %s; re-run with --apply\n", removed, verb)
+		fmt.Fprintf(w, "%d entries would be %s; re-run with --apply\n", removed, action)
 	}
 }
 
 func localDevCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "local-dev",
-		Short: "Set up without a control plane: preview works, nothing can be sent",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			paths, unit, err := app.LocalDev()
-			if err != nil {
-				return err
-			}
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "identity %s\nstate    %s\nconfig   %s\n", unit.InstallID, paths.StateDir, paths.User)
-			return nil
-		},
-	}
+	return verb("local-dev", "Set up without a control plane: preview works, nothing can be sent", func(cmd *cobra.Command) error {
+		paths, unit, err := app.LocalDev()
+		if err != nil {
+			return err
+		}
+		w := cmd.OutOrStdout()
+		fmt.Fprintf(w, "identity %s\nstate    %s\nconfig   %s\n", unit.InstallID, paths.StateDir, paths.User)
+		return nil
+	})
 }
 
 // installIdentity is the prologue of a verb that edits the local record: the state directory in

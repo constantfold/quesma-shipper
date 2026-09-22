@@ -14,41 +14,36 @@ import (
 
 func doctorCmd(build app.Build) *cobra.Command {
 	var asJSON, verbose bool
-	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Check collecting and sending, explain anything wrong",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
-			rep := app.Diagnose(cmd.Context(), build, verbose || asJSON)
-			issues, fails := rep.Issues()
-			if asJSON {
-				enc := json.NewEncoder(out)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(toDoctorJSON(build, rep, fails, issues)); err != nil {
-					return err
-				}
-			} else {
-				p := paletteFor(out)
-				if st, err := app.CurrentStatus(build); err == nil {
-					printHeader(out, p, st, time.Now())
-				}
-				for _, line := range updateLines(build, rep.Update, p, verbose) {
-					fmt.Fprintln(out, line)
-				}
-				fmt.Fprintln(out)
-				renderSections(out, p, rep.Sections)
-				renderVerdict(out, p, fails, rep.AgentsCollecting, issues)
-				if !verbose {
-					fmt.Fprintf(out, "\n%s %s\n", styled(p.dim, "More:", p.reset), styled(p.cyan, app.Name+" doctor --all", p.reset))
-				}
+	cmd := verb("doctor", "Check collecting and sending, explain anything wrong", func(cmd *cobra.Command) error {
+		out := cmd.OutOrStdout()
+		rep := app.Diagnose(cmd.Context(), build, verbose || asJSON)
+		issues, fails := rep.Issues()
+		if asJSON {
+			enc := json.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(toDoctorJSON(build, rep, fails, issues)); err != nil {
+				return err
 			}
-			if fails > 0 {
-				return errSilent{code: 1}
+		} else {
+			p := paletteFor(out)
+			if st, err := app.CurrentStatus(build); err == nil {
+				printHeader(out, p, st, time.Now())
 			}
-			return nil
-		},
-	}
+			for _, line := range updateLines(build, rep.Update, p, verbose) {
+				fmt.Fprintln(out, line)
+			}
+			fmt.Fprintln(out)
+			renderSections(out, p, rep.Sections)
+			renderVerdict(out, p, fails, rep.AgentsCollecting, issues)
+			if !verbose {
+				fmt.Fprintf(out, "\n%s %s\n", styled(p.dim, "More:", p.reset), styled(p.cyan, app.Name+" doctor --all", p.reset))
+			}
+		}
+		if fails > 0 {
+			return errSilent{code: 1}
+		}
+		return nil
+	})
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON, always with the technical sections")
 	_ = cmd.Flags().MarkHidden("json")
 	cmd.Flags().BoolVar(&verbose, "all", false, "Add the technical sections")

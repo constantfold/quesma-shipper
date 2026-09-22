@@ -23,29 +23,24 @@ func clearSelfUpdateHop() {
 }
 
 func updateCmd(build app.Build) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "Install the newest version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			w := cmd.OutOrStdout()
-			p := paletteFor(w)
-			opts := packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()}
-			if !build.Release {
-				return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
-			}
-			res, err := packaging.Update(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			if !res.Updated {
-				fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
-				return nil
-			}
-			fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
-			return restartService(cmd.Context(), w)
-		},
-	}
+	cmd := verb("update", "Install the newest version", func(cmd *cobra.Command) error {
+		w := cmd.OutOrStdout()
+		p := paletteFor(w)
+		opts := packaging.UpdateOptions{Current: build.Version, Out: cmd.ErrOrStderr()}
+		if !build.Release {
+			return fmt.Errorf("this is a dev build, it does not update itself, `make build` replaces it")
+		}
+		res, err := packaging.Update(cmd.Context(), opts)
+		if err != nil {
+			return err
+		}
+		if !res.Updated {
+			fmt.Fprintf(w, "Up to date (%s)\n", styled(p.cyan, res.From, p.reset))
+			return nil
+		}
+		fmt.Fprintf(w, "Updated %s → %s\n", styled(p.cyan, res.From, p.reset), styled(p.cyan, res.To, p.reset))
+		return restartService(cmd.Context(), w)
+	})
 	return cmd
 }
 

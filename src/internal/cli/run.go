@@ -115,62 +115,57 @@ func flushBeforeExit(cmd *cobra.Command, env *app.Runtime) error {
 func runCmd(build app.Build) *cobra.Command {
 	var once, drain, quiet bool
 
-	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run the scheduler loop in the foreground",
-		Long: "The development and debug mode: logs to stderr, Ctrl-C to stop, zero installation.\n" +
-			"A tick is change DETECTION - size and mtime pre-filter, then a content hash - so\n" +
-			"only changed sources go on to redact, seal and upload. Missed ticks are harmless:\n" +
-			"the backlog is fingerprint-driven and oldest-first, so a late tick is a catch-up.\n" +
-			"A tick cut short by max_files_per_run re-ticks after a short pause instead of\n" +
-			"waiting the full interval, so a backlog converges at upload speed.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !once && (drain || quiet) {
-				return fmt.Errorf("--drain and --quiet require --once")
+	cmd := verb("run", "Run the scheduler loop in the foreground", func(cmd *cobra.Command) error {
+		if !once && (drain || quiet) {
+			return fmt.Errorf("--drain and --quiet require --once")
+		}
+		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		// Resolved once, offline: a config that will not parse also reads as "not logged in"
+		// and cannot repair itself between polls, so waiting on it waits forever. A resolve
+		// error skips the wait and the gates below, and lets app.New report the real reason.
+		eff, paths, resolveErr := app.ResolveEffective()
+		waiting := false
+		for resolveErr == nil {
+			if _, err := controlplane.LoadEnrollment(paths.StateDir); err == nil {
+				break
 			}
-			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
-			defer stop()
-			// Resolved once, offline: a config that will not parse also reads as "not logged in"
-			// and cannot repair itself between polls, so waiting on it waits forever. A resolve
-			// error skips the wait and the gates below, and lets app.New report the real reason.
-			eff, paths, resolveErr := app.ResolveEffective()
-			waiting := false
-			for resolveErr == nil {
-				if _, err := controlplane.LoadEnrollment(paths.StateDir); err == nil {
-					break
-				}
-				if !waiting {
-					fmt.Fprintln(cmd.ErrOrStderr(), "waiting for enrollment; run `quesma-shipper login` to continue")
-					waiting = true
-				}
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(enrollmentPollInterval):
-				}
-				// Login can land in a state_dir edited during the wait: each poll reads the
-				// current one, and the gates below see the config as of enrollment.
-				eff, paths, resolveErr = app.ResolveEffective()
+			if !waiting {
+				fmt.Fprintln(cmd.ErrOrStderr(), "waiting for enrollment; run `quesma-shipper login` to continue")
+				waiting = true
 			}
-			if !once {
-				maybeSelfUpdate(ctx, build, resolveErr != nil || eff.AutoupdateEnabled, cmd.ErrOrStderr())
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(enrollmentPollInterval):
 			}
+			// Login can land in a state_dir edited during the wait: each poll reads the
+			// current one, and the gates below see the config as of enrollment.
+			eff, paths, resolveErr = app.ResolveEffective()
+		}
+		if !once {
+			maybeSelfUpdate(ctx, build, resolveErr != nil || eff.AutoupdateEnabled, cmd.ErrOrStderr())
+		}
 
-			// After the self-update, whose re-exec never returns and would read as a death. NOT
-			// deferred: a panic has to unwind past the Exit call, and that missing entry is the
-			// crash record. A config too broken to resolve still gets a journal, in the default
-			// state directory, the way pause does.
-			stateDir, dirErr := paths.StateDir, error(nil)
-			if resolveErr != nil {
-				stateDir, dirErr = app.StateDirWithoutConfig()
-			}
-			fl, runID, lastCrash := startCrashJournal(cmd.ErrOrStderr(), stateDir, dirErr)
-			err := runLoop(cmd, ctx, build, once, drain, quiet, fl, runID, lastCrash)
-			fl.Exit()
-			return err
-		},
-	}
+		// After the self-update, whose re-exec never returns and would read as a death. NOT
+		// deferred: a panic has to unwind past the Exit call, and that missing entry is the
+		// crash record. A config too broken to resolve still gets a journal, in the default
+		// state directory, the way pause does.
+		stateDir, dirErr := paths.StateDir, error(nil)
+		if resolveErr != nil {
+			stateDir, dirErr = app.StateDirWithoutConfig()
+		}
+		fl, runID, lastCrash := startCrashJournal(cmd.ErrOrStderr(), stateDir, dirErr)
+		err := runLoop(cmd, ctx, build, once, drain, quiet, fl, runID, lastCrash)
+		fl.Exit()
+		return err
+	})
+	cmd.Long = "The development and debug mode: logs to stderr, Ctrl-C to stop, zero installation.\n" +
+		"A tick is change DETECTION - size and mtime pre-filter, then a content hash - so\n" +
+		"only changed sources go on to redact, seal and upload. Missed ticks are harmless:\n" +
+		"the backlog is fingerprint-driven and oldest-first, so a late tick is a catch-up.\n" +
+		"A tick cut short by max_files_per_run re-ticks after a short pause instead of\n" +
+		"waiting the full interval, so a backlog converges at upload speed."
 	cmd.Flags().BoolVar(&once, "once", false, "collect and send once, then exit")
 	cmd.Flags().BoolVar(&drain, "drain", false, "send everything pending and block until done or drain_deadline")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "no progress or summary; warnings, errors and the run log stay")

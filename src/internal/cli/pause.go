@@ -48,25 +48,20 @@ func pauseCmd() *cobra.Command {
 }
 
 func resumeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "resume",
-		Short: "Start collecting again",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			was, warning, err := app.Resume()
-			if err != nil {
-				return err
-			}
-			printWarning(cmd.ErrOrStderr(), warning)
-			p := paletteFor(cmd.OutOrStdout())
-			why := ""
-			if !was {
-				why = "was not paused"
-			}
-			banner(cmd.OutOrStdout(), p, p.green, "on", why)
-			return nil
-		},
-	}
+	return verb("resume", "Start collecting again", func(cmd *cobra.Command) error {
+		was, warning, err := app.Resume()
+		if err != nil {
+			return err
+		}
+		printWarning(cmd.ErrOrStderr(), warning)
+		p := paletteFor(cmd.OutOrStdout())
+		why := ""
+		if !was {
+			why = "was not paused"
+		}
+		banner(cmd.OutOrStdout(), p, p.green, "on", why)
+		return nil
+	})
 }
 
 func labels(choices []app.PauseChoice) []string {
