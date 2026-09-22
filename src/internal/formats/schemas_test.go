@@ -13,15 +13,15 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/formats"
 )
 
-// Every embedded schema compiles and All matches what is embedded; otherwise it fails at runtime.
+// Every embedded schema compiles under a name the package exports; otherwise it fails at runtime.
 func TestAllCompile(t *testing.T) {
-	for _, name := range formats.All {
+	entries, err := fs.Glob(formats.FS, "*.schema.json")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{formats.FingerprintState, formats.Manifest, formats.SourceSpec}, entries)
+	for _, name := range entries {
 		_, err := formats.Compile(name)
 		assert.NoError(t, err, name)
 	}
-	entries, err := fs.Glob(formats.FS, "*.schema.json")
-	require.NoError(t, err)
-	assert.Len(t, entries, len(formats.All), "embedded schemas and All must stay in step")
 }
 
 const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

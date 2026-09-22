@@ -68,21 +68,21 @@ func readHead(path string, budget int64) ([]byte, os.FileInfo, error) {
 	return buf[:n], info, nil
 }
 
-// sniffSampleSize is how many files are asked before condemning a source, spread across the ordering rather than taken from one end.
+// sniffSampleSize is how many files are asked before condemning a source.
 const sniffSampleSize = 5
 
-// sniffSample asks several files and returns the best answer. Deterministic: a source must not oscillate across ticks.
+// sniffSample asks several files spread evenly across the ordering, always including the first and
+// the last, and returns the best answer. Deterministic: a source must not oscillate across ticks.
 func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
-	if len(matched) == 0 {
-		return SniffUnreadable, "", 0
-	}
-	idx := sampleIndexes(len(matched), sniffSampleSize)
-
 	var best SniffResult
 	failures, version := 0, ""
 	// Scan the whole sample so every unreadable file is counted, and take the version from the
-	// newest readable one (idx ascends by mtime): the closest proxy for the current install.
-	for i, at := range idx {
+	// newest readable one (the sample ascends by mtime): the closest proxy for the current install.
+	for i := range min(len(matched), sniffSampleSize) {
+		at := i
+		if len(matched) > sniffSampleSize {
+			at = i * (len(matched) - 1) / (sniffSampleSize - 1)
+		}
 		result, agentVersion := sniff(matched[at].Path, spec)
 		if result == SniffUnreadable || result == SniffUnexpectedShape {
 			failures++
@@ -94,18 +94,6 @@ func sniffSample(matched []Candidate, spec *Sniff) (SniffResult, string, int) {
 		best, version = result, agentVersion
 	}
 	return best, version, failures
-}
-
-// sampleIndexes picks up to n positions spread evenly across length, always including the first and the last.
-func sampleIndexes(length, n int) []int {
-	out := make([]int, min(length, n))
-	for i := range out {
-		out[i] = i
-		if length > n {
-			out[i] = i * (length - 1) / (n - 1)
-		}
-	}
-	return out
 }
 
 // sniffJSONL asserts the first non-empty line parses as JSON, and opportunistically reads the producer version out of the head.

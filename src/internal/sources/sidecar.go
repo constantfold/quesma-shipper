@@ -39,48 +39,36 @@ func discoverSidecar(req Request) (Discovery, error) {
 		d.Reason = "sidecar source has no cwd_probe"
 		return d, nil
 	}
-
-	// Inputs are the candidate files of the sources this probe names.
-	inputs := map[string][]Candidate{}
-	for _, other := range req.All {
-		if !slices.Contains(probe.From, other.ID) || other.Root == "" || !other.Enabled {
-			continue
-		}
-		// The map exists to name repositories; not the ones nobody wants named.
-		found, _, _, _ := walkGlobs(other, req.Deny, req.Ignore)
-		if len(found) > 0 {
-			inputs[other.ID] = found
-		}
-	}
-	if len(inputs) == 0 {
-		d.Reason = "no probe input sources resolved"
-		return d, nil
-	}
-
 	now := time.Now().UTC()
 	if req.Now != nil {
 		now = req.Now()
 	}
 
-	// One record per project directory, not per file: the mapping is a property of the directory.
+	// Inputs are the candidate files of the sources this probe names, one record per project
+	// directory: the mapping is a property of the directory, not of a file.
+	anyInput := false
 	seen := map[string]bool{}
 	var records []ProjectRecord
-	for sourceID, candidates := range inputs {
+	for _, other := range req.All {
+		if !slices.Contains(probe.From, other.ID) || other.Root == "" || !other.Enabled {
+			continue
+		}
+		// The map exists to name repositories; not the ones nobody wants named.
+		candidates, _, _, _ := walkGlobs(other, req.Deny, req.Ignore)
+		anyInput = anyInput || len(candidates) > 0
 		for _, c := range candidates {
 			projectDir := projectDirOf(c.RelPath)
 			if projectDir == "" || seen[projectDir] {
 				continue
 			}
 			seen[projectDir] = true
-
 			rec := ProjectRecord{
 				At:   now.Format(time.RFC3339),
 				Kind: "git_project_map",
 				// Placeholdered at build time: this directory NAME encodes the username, and the file sits on disk between runs.
 				ProjectDir: formats.ApplyUserPlaceholder(projectDir, req.Username),
-				SourceID:   sourceID,
+				SourceID:   other.ID,
 			}
-
 			if cwd, ok := probeCWD(c.Path, probe); ok {
 				rec.CWD = formats.ApplyUserPlaceholder(cwd, req.Username)
 				rec.Remote, rec.Project, rec.GaveUp = gitRemoteFor(cwd, src.GitRead)
@@ -89,6 +77,10 @@ func discoverSidecar(req Request) (Discovery, error) {
 			}
 			records = append(records, rec)
 		}
+	}
+	if !anyInput {
+		d.Reason = "no probe input sources resolved"
+		return d, nil
 	}
 
 	slices.SortFunc(records, func(a, b ProjectRecord) int { return strings.Compare(a.ProjectDir, b.ProjectDir) })

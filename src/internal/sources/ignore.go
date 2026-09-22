@@ -165,7 +165,7 @@ func (f *RepoFilter) Untrack(dir string) error {
 }
 
 func (f *RepoFilter) Track(dir string) error {
-	if err := os.Remove(MarkerPath(dir)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(MarkerPath(dir)); !os.IsNotExist(err) {
 		return err
 	}
 	return nil

@@ -1,7 +1,6 @@
 // Package formats holds the vocabulary every layer shares: these words appear in the heartbeat
-// document and the audit log, so they are wire values. The vocabulary types below depend on
-// nothing but the standard library; a type belongs here only when several layers must agree on it
-// and none owns it.
+// document and the audit log, so they are wire values. A type belongs here only when several
+// layers must agree on it and none owns it; it depends on nothing but the standard library.
 package formats
 
 import (

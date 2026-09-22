@@ -28,9 +28,6 @@ const (
 	SourceSpec       = "source-spec.schema.json"
 )
 
-// All lists every embedded schema, so tests can assert the set is complete.
-var All = []string{FingerprintState, Manifest, SourceSpec}
-
 var (
 	mu       sync.Mutex
 	compiled = map[string]*jsonschema.Schema{}
