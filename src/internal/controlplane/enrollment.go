@@ -40,7 +40,7 @@ func (e Enrollment) Save(stateDir string) error {
 }
 
 // LoadEnrollment reads the record. A missing file means standalone, which is not an error. A
-// record at an older schema the ladder still reaches is upgraded and persisted before returning.
+// schema-1 record is upgraded and persisted before returning.
 func LoadEnrollment(stateDir string) (*Enrollment, error) {
 	path := filepath.Join(stateDir, EnrollmentFile)
 	// It holds a private signing key, so ReadPrivate's mode gate applies.
@@ -72,36 +72,20 @@ func LoadEnrollment(stateDir string) (*Enrollment, error) {
 	return &e, nil
 }
 
-// --- schema migrations -----------------------------------------------------------
-
-// enrollmentMigrations climb one schema at a time: the entry at N takes the exact bytes a schema-N
-// binary wrote and returns what a schema-N+1 binary would have written. Fixtures in testdata/ pin it.
-var enrollmentMigrations = map[int]func([]byte) ([]byte, error){
-	1: enrollmentV1toV2,
-}
-
-// migrateEnrollment walks the ladder up to the current schema. Bytes already current, not JSON, or
-// naming a schema with no rung pass through untouched, for the caller's decode and check to judge.
-func migrateEnrollment(raw []byte) (_ []byte, migrated bool, err error) {
+// migrateEnrollment upgrades the sole historical schema; other bytes pass through for the
+// caller's decode and schema check. The frozen schema-1 fixture pins the conversion.
+func migrateEnrollment(raw []byte) ([]byte, bool, error) {
 	var probe struct {
 		EnrollmentSchema int `json:"enrollment_schema"`
 	}
-	if json.Unmarshal(raw, &probe) != nil || probe.EnrollmentSchema == 0 {
+	if json.Unmarshal(raw, &probe) != nil || probe.EnrollmentSchema != 1 {
 		return raw, false, nil
 	}
-	for probe.EnrollmentSchema < enrollmentSchema {
-		step, ok := enrollmentMigrations[probe.EnrollmentSchema]
-		if !ok {
-			return raw, false, nil
-		}
-		if raw, err = step(raw); err != nil {
-			return nil, false, fmt.Errorf("backend: migrate enrollment from schema %d: %w",
-				probe.EnrollmentSchema, err)
-		}
-		probe.EnrollmentSchema++
-		migrated = true
+	upgraded, err := enrollmentV1toV2(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("backend: migrate enrollment from schema 1: %w", err)
 	}
-	return raw, migrated, nil
+	return upgraded, true, nil
 }
 
 // enrollmentV1 is schema 1 FROZEN, exactly as the last schema-1 binary wrote it: never change it.
