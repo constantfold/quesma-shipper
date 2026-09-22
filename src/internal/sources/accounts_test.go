@@ -155,18 +155,8 @@ func TestAccountBucketUsesCollectionInterval(t *testing.T) {
 			}
 			require.NoError(t, err)
 			bucket := req.Now().UTC().Truncate(interval)
-			c := d.Candidates[0]
-			require.Equal(t, "codex.account."+bucket.Format("20060102T150405Z")+".jsonl", c.RelPath, c.RelPath)
-			payload, err := c.Load(req.Context)
-			require.NoError(t, err)
-			for _, line := range bytes.Split(bytes.TrimSpace(payload.Bytes), []byte("\n")) {
-				var record struct {
-					BucketStart time.Time `json:"bucket_start"`
-				}
-				if err := json.Unmarshal(line, &record); err != nil || !record.BucketStart.Equal(bucket) {
-					t.Fatalf("wrong bucket: %s (%v)", line, err)
-				}
-			}
+			// The records' bucket_start comes from the same bucket, checked in TestClaudeUsesActiveCredentials.
+			require.Equal(t, "codex.account."+bucket.Format("20060102T150405Z")+".jsonl", d.Candidates[0].RelPath)
 		})
 	}
 }

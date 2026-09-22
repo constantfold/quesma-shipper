@@ -46,21 +46,13 @@ func TestPauseFlagLifecycle(t *testing.T) {
 
 // The failure directions are not symmetric, so the fail-closed choice is tested explicitly.
 func TestAnUnreadableFlagReadsAsPaused(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-	}{
-		{name: "not json at all", body: "paused\n"},
-		{name: "truncated mid-write", body: `{"paused":tr`},
-		{
-			name: "the flag says paused false",
-			// The file's PRESENCE is the switch: honouring the field would let a partial write silently resume collection.
-			body: `{"paused":false,"at":"2026-07-30T00:00:00Z"}`,
-		},
-		{name: "empty file", body: ""},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range []struct{ name, body string }{
+		{"not json at all", "paused\n"},
+		{"truncated mid-write", `{"paused":tr`},
+		// The file's PRESENCE is the switch: honouring the field would let a partial write silently resume collection.
+		{"the flag says paused false", `{"paused":false,"at":"2026-07-30T00:00:00Z"}`},
+		{"empty file", ""},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, platform.File), []byte(tc.body), 0o644))
