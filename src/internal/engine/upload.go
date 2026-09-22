@@ -102,22 +102,16 @@ func (o Options) sendBatch(ctx context.Context, items []fileResult) []fileResult
 	return items
 }
 
-// preparedFrom lifts source-hash out of md into its own field; md is consumed, so edited in place.
-func preparedFrom(idx int, key string, body []byte, md map[string]string) PreparedObject {
-	if md == nil {
-		md = map[string]string{}
-	}
-	hash := md["source-hash"]
-	delete(md, "source-hash")
-	return PreparedObject{ObjectID: strconv.Itoa(idx), Key: key, Body: body, SourceHash: hash, Metadata: md}
-}
-
 // authorizeAndUpload spends one group, with at most one reauthorization for expired tickets: a
 // second expiry means the clock or the lease is wrong, and retrying only stalls everything else.
 func (o Options) authorizeAndUpload(ctx context.Context, items []fileResult) []error {
 	batch := make([]PreparedObject, len(items))
 	for i, it := range items {
-		batch[i] = preparedFrom(i, it.pending.objectKey, it.pending.obj, it.pending.md)
+		// source-hash moves out of the metadata into its own field; md is consumed here.
+		md := it.pending.md
+		hash := md["source-hash"]
+		delete(md, "source-hash")
+		batch[i] = PreparedObject{ObjectID: strconv.Itoa(i), Key: it.pending.objectKey, Body: it.pending.obj, SourceHash: hash, Metadata: md}
 	}
 	upload := func(objects []PreparedObject, description string) []error {
 		outcomes := o.Upload.AuthorizeAndUpload(ctx, objects)

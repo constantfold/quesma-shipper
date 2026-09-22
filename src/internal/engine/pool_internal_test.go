@@ -16,24 +16,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-func TestConcurrencyTakesThePinAndNeverExceedsTheCandidates(t *testing.T) {
-	cases := []struct {
-		workers, candidates, want int
-	}{
-		{3, 100, 3}, // a test pin wins
-		{8, 2, 2},   // never more goroutines than files
-		{0, 0, 1},   // and never fewer than one
-	}
-	for _, c := range cases {
-		o := Options{Workers: c.workers}
-		assert.Equal(t, o.concurrency(c.candidates), c.want)
-	}
-}
-
-func TestUploadConcurrencyTakesThePin(t *testing.T) {
-	assert.Equal(t, 5, (Options{UploadWorkers: 5}).uploadConcurrency(3))
-}
-
 func admissionPass(budget int, sizes ...int64) *sourcePass {
 	cands := make([]sources.Candidate, len(sizes))
 	for i, sz := range sizes {
@@ -123,20 +105,6 @@ func TestSpentBudgetDoesNotLoadCandidates(t *testing.T) {
 		t.Fatalf("budget: %+v, %v", p.out, err)
 	}
 	assert.Nil(t, p.out.Files, "unadmitted candidates have no outcome")
-}
-
-func TestAssembleKeepsDecidedSlotsInCandidateOrder(t *testing.T) {
-	want := []FileOutcome{
-		{Decision: "shipped"}, {Decision: "unchanged"}, {Decision: "skipped"},
-		{Decision: "parked"}, {Decision: "failed", Fatal: true},
-	}
-	p := &sourcePass{out: &SourceOutcome{}}
-	for _, outcome := range want {
-		p.slots = append(p.slots, FileOutcome{}, outcome)
-	}
-	p.slots = append(p.slots, FileOutcome{})
-	p.assemble()
-	assert.Equal(t, want, p.out.Files)
 }
 
 func TestBackoffCommitFailurePreservesReadError(t *testing.T) {

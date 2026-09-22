@@ -108,13 +108,6 @@ func (p *fakePort) putCount() int {
 	return p.puts
 }
 
-// reset clears the recorded sequence only; stored objects stay.
-func (p *fakePort) reset() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.puts, p.groups, p.calls = 0, nil, 0
-}
-
 // sizes is how many objects each authorization group carried, in call order.
 func (p *fakePort) sizes() []int {
 	p.mu.Lock()

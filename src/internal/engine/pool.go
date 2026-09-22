@@ -77,27 +77,19 @@ type sourcePass struct {
 	haltReason   string
 }
 
-// concurrency is how many files are read, scrubbed and sealed at once: those steps are pure CPU.
-func (o Options) concurrency(candidates int) int {
-	w := o.Workers
-	if w <= 0 {
-		w = runtime.GOMAXPROCS(0)
-	}
-	return max(1, min(w, candidates))
-}
-
-// uploadConcurrency is 8x compute: an upload holds no core, and the width overlaps PUTs with sealing.
-func (o Options) uploadConcurrency(compute int) int {
-	if o.UploadWorkers > 0 {
-		return o.UploadWorkers
-	}
-	return 8 * compute
-}
-
 func (p *sourcePass) run(ctx context.Context) error {
 	n := len(p.disc.Candidates)
-	computeLimit := p.o.concurrency(n)
-	uploadLimit := p.o.uploadConcurrency(computeLimit)
+	// Reading, scrubbing and sealing are pure CPU; an upload holds no core, so 8x compute lets PUTs
+	// overlap sealing.
+	workers := p.o.Workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	computeLimit := max(1, min(workers, n))
+	uploadLimit := p.o.UploadWorkers
+	if uploadLimit <= 0 {
+		uploadLimit = 8 * computeLimit
+	}
 	// A file in flight holds one slot at a time, so channels sized to this never block a sender.
 	limit := computeLimit + uploadLimit
 	p.slots = make([]FileOutcome, n)

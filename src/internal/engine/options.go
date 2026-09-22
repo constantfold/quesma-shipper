@@ -46,7 +46,7 @@ type Options struct {
 	Now   func() time.Time
 
 	// Test knobs, zero for the defaults: fingerprints buffered per state write, compute
-	// workers (GOMAXPROCS), and PUTs in flight (see uploadConcurrency).
+	// workers (GOMAXPROCS), and PUTs in flight (eight times compute).
 	CommitBatch   int
 	Workers       int
 	UploadWorkers int

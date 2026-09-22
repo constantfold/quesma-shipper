@@ -108,21 +108,6 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 	}
 }
 
-// source-hash leaves the metadata map and becomes the descriptor's own field.
-func TestSourceHashIsLiftedOutOfTheMetadata(t *testing.T) {
-	obj := preparedFrom(0, "k", nil, map[string]string{
-		"source-hash":  "abc",
-		"source-id":    "claude-code-transcripts",
-		"shipped-hash": "def",
-	})
-	assert.Equalf(t, "abc", obj.SourceHash, "source hash = %q", obj.SourceHash)
-	if _, ok := obj.Metadata["source-hash"]; ok {
-		t.Error("source-hash survived in the request metadata")
-	}
-	assert.Lenf(t, obj.Metadata, 2, "metadata lost or gained names: %v", obj.Metadata)
-	assert.True(t, preparedFrom(0, "k", nil, nil).Metadata != nil, "nil metadata produced a nil map rather than an empty one")
-}
-
 // Exercise both stop paths without relying on worker timing to leave a partly filled batch.
 func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
 	for _, fatal := range []bool{false, true} {

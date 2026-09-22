@@ -53,13 +53,9 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 	db, err := sql.Open("sqlite", "file:"+dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	for _, stmt := range []string{
-		`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)`,
-		`CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`,
-	} {
-		_, execErr := db.Exec(stmt)
-		require.NoError(t, execErr)
-	}
+	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+		CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)`)
+	require.NoError(t, err)
 
 	rows := []struct{ table, key, value string }{
 		{"ItemTable", "cursorAuth/accessToken", sessionToken},
@@ -80,16 +76,17 @@ func cursorFixture(t *testing.T, f *fixture) (dbPath string) {
 		{"cursorDiskKV", "checkpointId:" + enrichConv + ":x", `{"` + unusedRowMarker + `":"y"}`},
 	}
 	for _, r := range rows {
-		if _, err := db.Exec(`INSERT INTO `+r.table+` (key, value) VALUES (?, ?)`, r.key, r.value); err != nil {
-			t.Fatalf("insert %s: %v", r.key, err)
-		}
+		_, err := db.Exec(`INSERT INTO `+r.table+` (key, value) VALUES (?, ?)`, r.key, r.value)
+		require.NoError(t, err, r.key)
 	}
 	return dbPath
 }
 
-// cursorSource is the catalog source the enricher attaches to.
-func cursorSource(f *fixture, enricherOn bool) sources.Resolved {
-	return sources.Resolved{
+// enrichOpts builds engine options with the enricher registry wired at the fixture's database.
+func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine.Options {
+	t.Helper()
+	o := f.opts()
+	o.Plan.Sources = []sources.Resolved{{
 		Source: sources.Source{
 			ID:            "cursor-transcripts",
 			Family:        "cursor",
@@ -102,14 +99,7 @@ func cursorSource(f *fixture, enricherOn bool) sources.Resolved {
 		Root:            filepath.Join(f.home, ".cursor", "projects"),
 		Enabled:         true,
 		SpecFingerprint: strings.Repeat("c", 64),
-	}
-}
-
-// enrichOpts builds engine options with the enricher registry wired at the fixture's database.
-func enrichOpts(t *testing.T, f *fixture, dbPath string, enricherOn bool) engine.Options {
-	t.Helper()
-	o := f.opts()
-	o.Plan.Sources = []sources.Resolved{cursorSource(f, enricherOn)}
+	}}
 	o.Enrichers = transforms.NewRegistry(&fixtureEnricher{Enricher: cursorjoin.New(), db: dbPath})
 	env, err := sources.OSEnv()
 	require.NoError(t, err)
@@ -139,6 +129,12 @@ func TestEnrichedPairContract(t *testing.T) {
 			if tc.result != "" {
 				updateBubble(t, db, "bubbleId:"+enrichConv+":b3", toolResult(tc.result))
 			}
+			// Preview covers the derived object too, being the one built from a database, and uploads nothing.
+			preview := f.run(func(o *engine.Options) { *o = enrichOpts(t, f, db, true); o.DryRun = true })
+			require.Empty(t, f.port.keys(), "preview uploaded something")
+			require.Len(t, preview.Sources[0].Files, 2)
+			assert.True(t, strings.HasSuffix(preview.Sources[0].Files[1].NativePath, ".enriched.jsonl"), "preview did not report the derived object")
+
 			rep := f.runWith(enrichOpts(t, f, db, true))
 			require.Equal(t, 2, rep.Shipped, "raw and derived must both ship")
 			require.Len(t, f.port.keys(), 2, "raw and derived must have distinct keys")
@@ -254,28 +250,6 @@ func TestRawShipsAloneWhenThereIsNoJoin(t *testing.T) {
 			}
 		})
 	}
-}
-
-// preview computes the derived object and uploads nothing.
-func TestPreviewComputesTheDerivedObjectWithoutUploading(t *testing.T) {
-	f := newFixture(t)
-	db := cursorFixture(t, f)
-
-	o := enrichOpts(t, f, db, true)
-	o.DryRun = true
-	rep := f.runWith(o)
-
-	assert.Lenf(t, f.port.keys(), 0, "preview uploaded %v", f.port.keys())
-	// Preview must cover the derived object too: it is the one built from a database.
-	var derived bool
-	for _, s := range rep.Sources {
-		for _, fo := range s.Files {
-			if strings.HasSuffix(fo.NativePath, ".enriched.jsonl") {
-				derived = true
-			}
-		}
-	}
-	assert.True(t, derived, "preview did not report the derived object it would have shipped")
 }
 
 func toolResult(result string) string {
