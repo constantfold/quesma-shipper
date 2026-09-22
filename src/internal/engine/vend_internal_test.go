@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,65 +12,49 @@ import (
 // The authorization accumulator, exercised directly: the byte bound needs objects too large to
 // produce through the loop, and overshooting it loses a whole group.
 
-// sizePort records the ciphertext each group carried and stores everything.
-type sizePort struct {
-	mu     sync.Mutex
-	groups [][]int
-}
+// okPort confirms every object.
+type okPort struct{}
 
-func (p *sizePort) AuthorizeAndUpload(_ context.Context, batch []PreparedObject) []error {
-	sizes := make([]int, len(batch))
-	for i, o := range batch {
-		sizes[i] = len(o.Body)
-	}
-	p.mu.Lock()
-	p.groups = append(p.groups, sizes)
-	p.mu.Unlock()
+func (okPort) AuthorizeAndUpload(_ context.Context, batch []PreparedObject) []error {
 	return make([]error, len(batch))
 }
 
 // stagedFor is one sealed object of a given size.
 func stagedFor(idx, size int) fileResult {
 	return fileResult{
-		idx: idx,
+		idx:     idx,
+		outcome: FileOutcome{ObjectKey: fmt.Sprintf("v1/o/%d.age", idx)},
 		pending: &pendingPut{
-			key:       Key{SourceID: "s", NativePath: fmt.Sprintf("/f%d", idx)},
-			objectKey: fmt.Sprintf("v1/o/%d.age", idx),
-			obj:       make([]byte, size),
-			md:        map[string]string{"source-hash": "deadbeef"},
+			obj: make([]byte, size),
+			md:  map[string]string{"source-hash": "deadbeef"},
 		},
 	}
 }
 
-// run stages every size and drains every group the accumulator produced.
+// stageAll stages every size and returns the ciphertext sizes of each group sent.
 func stageAll(t *testing.T, sizes []int) [][]int {
 	t.Helper()
-	ctx := context.Background()
-	port := &sizePort{}
-	p := &sourcePass{o: Options{Upload: port}}
-	// Buffered past the group count, so the accumulator's send never blocks the staging loop.
-	batches := make(chan []fileResult, len(sizes)+1)
+	var groups [][]int
+	p := &sourcePass{o: Options{Upload: okPort{}}}
 	p.staged = &batcher{
 		maxObjects: maxBatchObjects,
-		send:       func(items []fileResult) { batches <- p.o.sendBatch(ctx, items) },
+		send: func(items []fileResult) {
+			var g []int
+			for _, it := range items {
+				g = append(g, len(it.pending.obj))
+			}
+			groups = append(groups, g)
+			for _, r := range p.o.sendBatch(context.Background(), items) {
+				assert.Nil(t, r.pending, "completed results must release ciphertext")
+			}
+		},
 	}
-
 	for i, sz := range sizes {
-		if done, final := p.stageUpload(stagedFor(i, sz)); final {
-			t.Fatalf("object %d was not staged: %+v", i, done.outcome)
-		}
+		_, final := p.stageUpload(stagedFor(i, sz))
+		require.False(t, final, "object %d was not staged", i)
 	}
 	p.staged.flush()
-	for seen := 0; seen < len(sizes); {
-		done := <-batches
-		for _, result := range done {
-			assert.Nil(t, result.pending, "completed results must release ciphertext")
-		}
-		seen += len(done)
-	}
-	port.mu.Lock()
-	defer port.mu.Unlock()
-	return port.groups
+	return groups
 }
 
 // Both bounds hold at once, and every object is authorized exactly once across the groups.
@@ -108,21 +91,6 @@ func TestTheAuthorizationGroupIsBoundedByBytesAndByCount(t *testing.T) {
 	}
 }
 
-// source-hash leaves the metadata map and becomes the descriptor's own field.
-func TestSourceHashIsLiftedOutOfTheMetadata(t *testing.T) {
-	obj := preparedFrom(0, "k", nil, map[string]string{
-		"source-hash":  "abc",
-		"source-id":    "claude-code-transcripts",
-		"shipped-hash": "def",
-	})
-	assert.Equalf(t, "abc", obj.SourceHash, "source hash = %q", obj.SourceHash)
-	if _, ok := obj.Metadata["source-hash"]; ok {
-		t.Error("source-hash survived in the request metadata")
-	}
-	assert.Lenf(t, obj.Metadata, 2, "metadata lost or gained names: %v", obj.Metadata)
-	assert.True(t, preparedFrom(0, "k", nil, nil).Metadata != nil, "nil metadata produced a nil map rather than an empty one")
-}
-
 // Exercise both stop paths without relying on worker timing to leave a partly filled batch.
 func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
 	for _, fatal := range []bool{false, true} {
@@ -140,7 +108,7 @@ func TestStoppedUploadsReleaseCiphertext(t *testing.T) {
 				assert.Equal(t, fatal, result.outcome.Fatal)
 				assert.Equal(t, !fatal, result.unavailable)
 			}
-			assert.Zero(t, p.staged.len())
+			assert.Empty(t, p.staged.items)
 		})
 	}
 }

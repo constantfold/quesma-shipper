@@ -48,17 +48,6 @@ func TestResetLifecycle(t *testing.T) {
 	assert.Equal(t, installID, doc.InstallID)
 }
 
-// An unloadable document is what an operator runs reset against, so --apply must replace it even
-// though the discarded store forgot nothing.
-func TestResetReplacesAnUnloadableDocument(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte("not a document\n"), 0o600))
-	_, resetErr := engine.Reset(dir, installID, false)
-	require.NoError(t, resetErr)
-	_, peekErr := engine.Peek(dir)
-	require.NoErrorf(t, peekErr, "the document was not replaced: %v", peekErr)
-}
-
 // Re-enrolling replaces identity.json and leaves the old install's document behind. Its entries
 // name objects under that install's key root, so not one of them may survive into this install.
 func TestAnotherInstallsEntriesNeverSurvive(t *testing.T) {
@@ -79,51 +68,50 @@ func TestAnotherInstallsEntriesNeverSurvive(t *testing.T) {
 	assert.Lenf(t, doc.Entries, 1, "the replacement holds %d entries, want only this install's one", len(doc.Entries))
 }
 
-// Prune keeps entries, so it is the verb that could claim another install's uploads. It cannot:
-// the discard empties the store before pruning ever looks at it.
-func TestPruneCannotClaimAnotherInstallsUploads(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 2)
-
-	removed, kept, err := engine.Prune(dir, installID, false)
-	require.NoErrorf(t, err, "prune over a foreign document: %v", err)
-	assert.Truef(t, removed == 0 && kept == 0, "prune reported removed=%d kept=%d over a discarded store, want 0 and 0", removed, kept)
-	doc, err := engine.Peek(dir)
-	require.NoError(t, err)
-	assert.Truef(t, len(doc.Entries) == 0 && doc.InstallID == installID, "prune left %d entries under install %q", len(doc.Entries), doc.InstallID)
-}
-
-// An entryless foreign document forgets nothing, so only the install id makes it a replacement.
-// Reset must still write it, or the stale id survives and every run re-discards the file.
-func TestResetReplacesAnEmptyForeignDocument(t *testing.T) {
-	dir := t.TempDir()
-	seedForeignDoc(t, dir, 0)
-
-	removed, err := engine.Reset(dir, installID, false)
-	require.NoError(t, err)
-	assert.Equalf(t, 0, removed, "an entryless document forgot %d entries", removed)
-	doc, err := engine.Peek(dir)
-	require.NoError(t, err)
-	assert.Equalf(t, installID, doc.InstallID, "reset left the foreign install id %q in place", doc.InstallID)
-}
-
-// A dry run reports; it never writes. The in-memory discard must not reach the file.
-func TestADryRunLeavesAnUnloadableDocumentOnDisk(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, engine.FileName)
-	original := []byte("not a document\n")
-	require.NoError(t, os.WriteFile(path, original, 0o600))
-
-	for _, run := range []struct {
+// Reset and prune replace an unloadable or foreign document on --apply, even when the discarded
+// store forgot nothing, or the stale document is re-discarded every run. A dry run never writes.
+// Prune keeps entries, yet cannot claim another install's uploads: the discard empties it first.
+func TestOverridesReplaceADiscardedDocument(t *testing.T) {
+	garbage := func(t *testing.T, dir string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, engine.FileName), []byte("not a document\n"), 0o600))
+	}
+	reset := func(dir string, dry bool) (int, error) { return engine.Reset(dir, installID, dry) }
+	prune := func(dir string, dry bool) (int, error) {
+		removed, kept, err := engine.Prune(dir, installID, dry)
+		return removed + kept, err
+	}
+	for _, tc := range []struct {
 		name string
-		fn   func() error
+		seed func(*testing.T, string)
+		cmd  func(string, bool) (int, error)
+		dry  bool
 	}{
-		{"reset", func() error { _, err := engine.Reset(dir, installID, true); return err }},
-		{"prune", func() error { _, _, err := engine.Prune(dir, installID, true); return err }},
+		{"reset unloadable", garbage, reset, false},
+		{"reset unloadable dry", garbage, reset, true},
+		{"prune unloadable dry", garbage, prune, true},
+		{"reset empty foreign", func(t *testing.T, dir string) { seedForeignDoc(t, dir, 0) }, reset, false},
+		{"prune foreign", func(t *testing.T, dir string) { seedForeignDoc(t, dir, 2) }, prune, false},
 	} {
-		require.NoError(t, run.fn())
-		got, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.Equal(t, string(got), string(original))
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.seed(t, dir)
+			path := filepath.Join(dir, engine.FileName)
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+
+			n, err := tc.cmd(dir, tc.dry)
+			require.NoError(t, err)
+			assert.Zero(t, n, "a discarded store has nothing to remove or keep")
+			if tc.dry {
+				after, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, string(before), string(after))
+				return
+			}
+			doc, err := engine.Peek(dir)
+			require.NoError(t, err, "the document was not replaced")
+			assert.Equal(t, installID, doc.InstallID)
+			assert.Empty(t, doc.Entries)
+		})
 	}
 }

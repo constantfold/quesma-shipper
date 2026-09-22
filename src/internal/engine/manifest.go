@@ -8,11 +8,11 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// baseManifest fills the fields every object of this run shares, raw and derived alike, so a
-// wire-contract field added once cannot silently miss one path. The hashes, size and recipient
-// ids are Seal's to fill: it returns the manifest that actually landed.
-func (o Options) baseManifest(src sources.Resolved, nativePath string) transforms.Manifest {
-	return transforms.Manifest{
+// baseManifest fills the fields raw and derived objects share, so a wire-contract field added once
+// cannot miss one path. The manifest is the only place a native path exists on the wire, so the
+// username placeholder applies here too. Seal fills the hashes, size and recipient ids.
+func (o Options) baseManifest(src sources.Resolved, nativePath, sourceHash string, res transforms.Result) transforms.Manifest {
+	m := transforms.Manifest{
 		ManifestVersion: transforms.ManifestVersion,
 		OrganizationID:  orgOf(o.Plan),
 		InstallID:       o.Identity.InstallID.String(),
@@ -23,43 +23,20 @@ func (o Options) baseManifest(src sources.Resolved, nativePath string) transform
 		ArtifactClass:   src.ArtifactClass,
 		SealedAt:        o.Now().Format(time.RFC3339),
 		ConfigVersion:   o.Plan.ConfigVersion,
-		// Stamped per object, so a reader can tell which objects were collected under a stale config.
-		ConfigExpired: o.Plan.ConfigExpired,
-		Client:        o.Client,
-		RunID:         o.RunID,
+		ConfigExpired:   o.Plan.ConfigExpired,
+		Client:          o.Client,
+		RunID:           o.RunID,
+		SourceHash:      sourceHash,
+		ShapeSniff:      string(sources.SniffOK),
 	}
+	if src.Scrub == nil || *src.Scrub {
+		m.Redaction = &transforms.RedactionSummary{Density: res.Density(), RuleHits: res.RuleHits}
+	}
+	return m
 }
 
 // mirrorKey is the key an object ships to. Path-derived, so a re-run lands on the same one.
 func (o Options) mirrorKey(sourceID, relPath string) (string, error) {
 	return formats.MirrorKey(orgOf(o.Plan), o.Identity.InstallID.String(), sourceID,
 		o.Identity.NameKey, formats.CanonicalPath(relPath, o.user))
-}
-
-// Manifest construction for raw objects. The manifest is the only place a native path exists on
-// the wire, so the username placeholder is applied here as well as in the payload.
-func (o Options) manifestFor(
-	src sources.Resolved,
-	cand sources.Candidate,
-	disc sources.Discovery,
-	sourceHash string,
-	mtime time.Time,
-	res transforms.Result,
-) transforms.Manifest {
-	m := o.baseManifest(src, cand.Path)
-	m.SourceHash = sourceHash
-	m.PayloadMTime = &mtime
-	m.AgentVersion = disc.AgentVersion
-	m.ShapeSniff = string(disc.Sniff)
-	if src.Scrub == nil || *src.Scrub {
-		m.Redaction = &transforms.RedactionSummary{
-			Density:  res.Density(),
-			RuleHits: res.RuleHits,
-			ScanMode: res.ScanMode,
-		}
-	}
-	if m.ShapeSniff == "" {
-		m.ShapeSniff = string(sources.SniffOK)
-	}
-	return m
 }

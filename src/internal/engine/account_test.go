@@ -11,11 +11,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/engine"
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
-	f := newFixture(t)
+// accountOpts points the run at a Codex account source over a fixture auth.json.
+func accountOpts(t *testing.T, f *fixture) engine.Options {
+	t.Helper()
 	home := filepath.Join(f.home, ".codex")
 	require.NoError(t, os.MkdirAll(home, 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey"}`), 0600))
@@ -26,16 +28,23 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	o.Plan.Interval = 5 * time.Minute
 	o.Env = sources.Env{Home: f.home, Lookup: func(string) (string, bool) { return "", false }}
 	o.Plan.Sources = []sources.Resolved{{Source: spec, Root: home, Enabled: true, SpecFingerprint: sources.SpecFingerprint(spec)}}
+	return o
+}
+
+func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
+	f := newFixture(t)
+	o := accountOpts(t, f)
+	home := o.Plan.Sources[0].Root
 	now := o.Now()
 	o.Now = func() time.Time { return now }
-	f.port.FailAll = errors.New("offline")
+	f.port.verdict = always(errors.New("offline"))
 	f.runWith(o)
 	if _, err := os.Stat(filepath.Join(f.stateDir, "snapshots")); !os.IsNotExist(err) {
 		t.Fatal("account collection staged files")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"fresh","tokens":{"id_token":"x.eyJlbWFpbCI6ImRldkBleGFtcGxlLm9yZyJ9.x"}}`), 0600))
 	f.reopen()
-	f.port.FailAll = nil
+	f.port.verdict = nil
 	rep := f.runWith(o)
 	require.Lenf(t, rep.Sources, 1, "expected one account source, got %d", len(rep.Sources))
 	require.Truef(t, rep.Shipped == 1 && rep.Sources[0].Unreadable == 1 && rep.Sources[0].Reason != "", "retry current bucket must upload and report partial snapshot: %+v", rep)
@@ -63,15 +72,8 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 
 func TestAccountDisabledAndPreviewDoNotCapture(t *testing.T) {
 	f := newFixture(t)
-	o := f.opts()
-	o.Env = sources.Env{Home: f.home, Lookup: func(string) (string, bool) { return "", false }}
-	catalog, err := sources.Load()
-	require.NoError(t, err)
-	spec, _ := catalog.Source("codex-account")
-	home := filepath.Join(f.home, ".codex")
-	require.NoError(t, os.MkdirAll(home, 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey"}`), 0600))
-	o.Plan.Sources = []sources.Resolved{{Source: spec, Root: home, Enabled: false}}
+	o := accountOpts(t, f)
+	o.Plan.Sources[0].Enabled = false
 	f.runWith(o)
 	o.Plan.Sources[0].Enabled = true
 	o.DryRun = true

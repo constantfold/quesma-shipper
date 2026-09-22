@@ -19,17 +19,17 @@ type fileJob struct {
 	seen bool
 }
 
-// fileResult is what comes back: what was decided, and what the loop thread must make
-// durable. Neither leg commits anything, because the store has exactly one writer.
+// fileResult is what was decided and what the loop thread must make durable; workers commit nothing.
 type fileResult struct {
 	idx     int
 	outcome FileOutcome
-	intent  intent
 
-	// unit is the raw bytes staged for the enricher, carried out through every later exit.
-	unit *transforms.RawUnit
+	// commit is the fingerprint the outcome asks to make durable, keyed by the outcome's path.
+	// Only the loop thread applies it.
+	commit *Fingerprint
 
-	// pending owns ciphertext until upload or abandonment.
+	// unit is the raw bytes staged for the enricher; pending owns ciphertext until upload or abandonment.
+	unit    *transforms.RawUnit
 	pending *pendingPut
 
 	// unavailable stops this run's uploads without outcome.Fatal's permanent-kill meaning.
@@ -37,96 +37,60 @@ type fileResult struct {
 	loadWarning string
 }
 
-// intent is the durable write a file's outcome asks for; only the loop thread applies it.
-type intent struct {
-	kind intentKind
-	key  Key
-	fp   Fingerprint
-}
-
-type intentKind int
-
-const (
-	intentNone    intentKind = iota
-	intentRefresh            // unchanged content: refresh size/mtime
-	intentShipped            // the only durable step, after a verified PUT
-	intentBackoff            // a read or scrub failure holds the file off
-)
-
 // sourcePass is one source's file pass. Every field belongs to the loop goroutine.
 type sourcePass struct {
-	o     Options
-	store *commitBuffer
-	src   sources.Resolved
-	disc  sources.Discovery
-	rep   *Report
-	out   *SourceOutcome
-
-	// budget is the run-wide max_files_per_run remainder: reserved at admission, refunded in fold.
-	budget  *int
+	o       Options
+	store   *commitBuffer
+	src     sources.Resolved
+	disc    sources.Discovery
+	rep     *Report
+	out     *SourceOutcome
+	budget  *int // run-wide remainder: reserved at admission, refunded in fold
 	staging bool
+	staged  *batcher
 
 	// Index-addressed, so the report and enricher input keep candidate order however work finishes.
 	slots []FileOutcome
 	units []*transforms.RawUnit
 
-	decided       int // what Progress reports as done
-	inFlightBytes int64
-	fatal         bool // the first refusal has landed; admit nothing more
-	fatalReason   string
+	decided         int
+	inFlightBytes   int64
+	unchangedElided int
 
-	// staged is the authorization accumulator; it belongs to the loop goroutine alone.
-	staged *batcher
-
-	// uploadHalted is fatal's non-permanent twin: this run sends and commits nothing more.
+	// fatal is a refusal (admit nothing more); uploadHalted is its non-permanent twin.
+	fatal        bool
+	fatalReason  string
 	uploadHalted bool
 	haltReason   string
-
-	// unchangedElided counts unchanged decisions not written per-file, for the one aggregate entry.
-	unchangedElided int
-}
-
-// concurrency is how many files are read, scrubbed and sealed at once: GOMAXPROCS, because the
-// expensive steps are pure CPU and single-threaded per file. Not configuration; Workers is a pin.
-func (o Options) concurrency(candidates int) int {
-	w := o.Workers
-	if w <= 0 {
-		w = runtime.GOMAXPROCS(0)
-	}
-	return max(1, min(w, candidates))
-}
-
-// uploadConcurrency is how many PUTs ride the network at once: 8x compute, because an upload holds
-// no core and the extra width overlaps a group's PUTs with the next group's sealing.
-func (o Options) uploadConcurrency(compute int) int {
-	if o.UploadWorkers > 0 {
-		return o.UploadWorkers
-	}
-	return 8 * compute
 }
 
 func (p *sourcePass) run(ctx context.Context) error {
 	n := len(p.disc.Candidates)
-	computeLimit := p.o.concurrency(n)
-	uploadLimit := p.o.uploadConcurrency(computeLimit)
-	// A file in flight holds exactly one slot at a time, so this many can exist at once.
+	// Reading, scrubbing and sealing are pure CPU; an upload holds no core, so 8x compute lets PUTs
+	// overlap sealing.
+	workers := p.o.Workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	computeLimit := max(1, min(workers, n))
+	uploadLimit := p.o.UploadWorkers
+	if uploadLimit <= 0 {
+		uploadLimit = 8 * computeLimit
+	}
+	// A file in flight holds one slot at a time, so channels sized to this never block a sender.
 	limit := computeLimit + uploadLimit
 	p.slots = make([]FileOutcome, n)
 	p.units = make([]*transforms.RawUnit, n)
 
-	// Buffered to the in-flight limit, so a goroutine never blocks handing a result back.
 	results := make(chan fileResult, limit)
-	// A group can never hold more than the in-flight limit, so a batch goroutine never blocks.
 	batches := make(chan []fileResult, limit)
 	computeSlots := make(chan struct{}, computeLimit)
 	uploadSlots := make(chan struct{}, uploadLimit)
 
-	// Half the upload budget bounds a group below uploadLimit, so seal and PUT overlap.
+	// Half the upload budget bounds a group, so seal and PUT overlap. A group holds one upload slot.
 	p.staged = &batcher{
 		maxObjects: max(1, min(maxBatchObjects, uploadLimit/2)),
 		send: func(items []fileResult) {
-			// One authorization, then one PUT per member. The group holds ONE upload slot for its
-			// whole life; the port bounds the fan-out inside.
 			go func() {
 				uploadSlots <- struct{}{}
 				done := p.o.sendBatch(ctx, items)
@@ -138,7 +102,6 @@ func (p *sourcePass) run(ctx context.Context) error {
 
 	next, inFlight, computing := 0, 0, 0
 	var stopped error
-	// settle releases a decided file's slot and gate share, then folds it; every exit ends here.
 	settle := func(r fileResult) {
 		inFlight--
 		p.inFlightBytes -= p.disc.Candidates[r.idx].Size
@@ -147,16 +110,12 @@ func (p *sourcePass) run(ctx context.Context) error {
 	for {
 		for inFlight < limit && p.canAdmit(ctx, next, inFlight, &stopped) {
 			job := fileJob{idx: next}
-			job.fp, job.seen = p.store.Get(Key{
-				SourceID:   p.src.ID,
-				NativePath: p.disc.Candidates[next].Path,
-			})
+			job.fp, job.seen = p.store.Get(Key{SourceID: p.src.ID, NativePath: p.disc.Candidates[next].Path})
 			p.inFlightBytes += p.disc.Candidates[next].Size
 			go func() {
 				computeSlots <- struct{}{}
 				r := p.o.prepareFile(ctx, job, p.src, p.disc, p.staging)
 				<-computeSlots
-				// A sealed object goes back to the loop thread to join an authorization group.
 				results <- r
 			}()
 			next++
@@ -173,18 +132,16 @@ func (p *sourcePass) run(ctx context.Context) error {
 		select {
 		case r := <-results:
 			computing--
-			if r.pending != nil {
-				if d, final := p.stageUpload(r); final {
-					settle(d)
-				}
-				continue
+			if r.pending == nil {
+				settle(r)
+			} else if d, final := p.stageUpload(r); final {
+				settle(d)
 			}
-			settle(r)
 		case done := <-batches:
 			for _, r := range done {
 				settle(r)
 			}
-			// Sending the objects already accumulated would repeat one verdict per sealed sibling.
+			// Sending what already accumulated would repeat one verdict per sealed sibling.
 			for _, d := range p.drainStaged() {
 				settle(d)
 			}
@@ -193,7 +150,7 @@ func (p *sourcePass) run(ctx context.Context) error {
 
 	p.assemble()
 
-	// The aggregate for the unchanged entries fold elided, written even if a refusal ended the pass.
+	// Written even if a refusal ended the pass.
 	if p.unchangedElided > 0 {
 		noun := "files"
 		if p.unchangedElided == 1 {
@@ -205,13 +162,8 @@ func (p *sourcePass) run(ctx context.Context) error {
 		})
 	}
 
-	// Stop the whole run on a refusal: it has nowhere to put anything more it collects.
 	if p.fatal {
-		_ = p.o.Log.Append(auditlog.Entry{
-			Decision: auditlog.DecisionFailed,
-			SourceID: p.src.ID,
-			Reason:   "run abandoned: " + p.fatalReason,
-		})
+		_ = p.o.Log.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, SourceID: p.src.ID, Reason: "run abandoned: " + p.fatalReason})
 		return fmt.Errorf("%w: collection stopped after %d of %d files; "+
 			"this install may have been revoked or re-enrolled elsewhere. "+
 			"`quesma-shipper doctor` reports what the control plane says",
@@ -220,11 +172,7 @@ func (p *sourcePass) run(ctx context.Context) error {
 	// Not a kill: nothing new was committed, and the next tick tries again.
 	if p.uploadHalted {
 		p.out.Reason = "uploads stopped: " + p.haltReason
-		_ = p.o.Log.Append(auditlog.Entry{
-			Decision: auditlog.DecisionFailed,
-			SourceID: p.src.ID,
-			Reason:   p.out.Reason,
-		})
+		_ = p.o.Log.Append(auditlog.Entry{Decision: auditlog.DecisionFailed, SourceID: p.src.ID, Reason: p.out.Reason})
 		return fmt.Errorf("%w: collection stopped after %d of %d files; "+
 			"nothing new was committed and the next run retries. %s",
 			ErrUploadUnavailable, len(p.out.Files), len(p.disc.Candidates), p.haltReason)
@@ -232,7 +180,6 @@ func (p *sourcePass) run(ctx context.Context) error {
 	if stopped != nil {
 		return stopped
 	}
-	// Truncation is a budget verdict only; cancellation and refusal have already returned above.
 	if next < n {
 		p.rep.Truncated = true
 		p.out.Remaining = n - next
@@ -241,7 +188,7 @@ func (p *sourcePass) run(ctx context.Context) error {
 	return nil
 }
 
-// canAdmit is every gate on starting one more file, in the order they matter.
+// canAdmit is every check on starting one more file, in the order they matter.
 func (p *sourcePass) canAdmit(ctx context.Context, next, inFlight int, stopped *error) bool {
 	if *stopped != nil || p.fatal || p.uploadHalted || next >= len(p.disc.Candidates) {
 		return false
@@ -254,12 +201,11 @@ func (p *sourcePass) canAdmit(ctx context.Context, next, inFlight int, stopped *
 	if *p.budget <= 0 {
 		return false
 	}
-	// Memory, not concurrency: the memstat limit was derived from ONE worst-case file, so the sum
-	// of raw bytes in flight is held to the same figure. A file larger than the gate runs alone.
+	// The memstat limit was derived from one worst-case file, so raw bytes in flight are held to
+	// the same figure. A file larger than the limit runs alone.
 	if sz := p.disc.Candidates[next].Size; inFlight > 0 && p.inFlightBytes+sz > platform.MaxInFlightBytes() {
 		return false
 	}
-	// Budget is RESERVED here and refunded in fold, which is what makes overshoot impossible.
-	*p.budget--
+	*p.budget-- // reserved here and refunded in fold, so overshoot is impossible
 	return true
 }

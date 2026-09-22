@@ -25,16 +25,11 @@ type Heartbeat struct {
 	ClientVersion string `json:"client_version"`
 	ConfigVersion int    `json:"config_version"`
 
-	// ConfigExpired says collection continued under a cached config past its expiry, since expiry
-	// fails toward collecting.
-	ConfigExpired bool `json:"config_expired,omitempty"`
+	// ConfigExpired says collection continued under a cached config past its expiry.
+	ConfigExpired bool   `json:"config_expired,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
 
-	// RunID ties this heartbeat to the crash journal and audit entries the same process wrote.
-	RunID string `json:"run_id,omitempty"`
-
-	// Embedded, so the fields stay at the top level of the document where readers already expect
-	// last_crash. A failed or stalled run can now ship its own record, so the newest event may
-	// describe THIS run, not only past ones.
+	// Embedded, so last_crash stays top-level; the newest event may describe this run.
 	formats.FailureRecord
 
 	Sources []SourceHealth `json:"sources"`
@@ -52,28 +47,21 @@ type SourceHealth struct {
 	Sniff        string `json:"shape_sniff,omitempty"`
 	AgentVersion string `json:"agent_version,omitempty"`
 
-	// FilesSeen and BytesRead describe volume, not content.
-	FilesSeen int `json:"files_seen"`
-	Shipped   int `json:"shipped"`
-	Unchanged int `json:"unchanged"`
-	Parked    int `json:"parked"`
-	Failed    int `json:"failed"`
-
-	// Oversize counts files the size cap excluded: never collected, then reaped by the agent.
-	Oversize int `json:"oversize,omitempty"`
-
-	// Unreadable counts paths discovery could not look at, which this install will never ship.
+	// Volume, not content.
+	FilesSeen  int `json:"files_seen"`
+	Shipped    int `json:"shipped"`
+	Unchanged  int `json:"unchanged"`
+	Parked     int `json:"parked"`
+	Failed     int `json:"failed"`
+	Oversize   int `json:"oversize,omitempty"`
 	Unreadable int `json:"unreadable,omitempty"`
 
-	// EnrichMismatch is a TOP-LEVEL alarm: the derived view is the only carrier of the DB-side
-	// fields, so a mismatch means they are lost until a release fixes the join.
-	Enriched       int `json:"enriched,omitempty"`
-	EnrichSkipped  int `json:"enrich_skipped,omitempty"`
-	EnrichMismatch int `json:"enrich_mismatch,omitempty"`
-	EnrichErrors   int `json:"enrich_errors,omitempty"`
-
-	// Enricher names the code that produced this source's derived objects.
-	Enricher string `json:"enricher,omitempty"`
+	// EnrichMismatch is a top-level alarm: the derived view is the only carrier of the DB-side fields.
+	Enriched       int    `json:"enriched,omitempty"`
+	EnrichSkipped  int    `json:"enrich_skipped,omitempty"`
+	EnrichMismatch int    `json:"enrich_mismatch,omitempty"`
+	EnrichErrors   int    `json:"enrich_errors,omitempty"`
+	Enricher       string `json:"enricher,omitempty"`
 
 	// RedactionDensity is the mean across this source's files; a fleet-wide spike means rule drift.
 	RedactionDensity float64 `json:"redaction_density,omitempty"`
