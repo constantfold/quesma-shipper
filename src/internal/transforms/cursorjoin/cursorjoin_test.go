@@ -18,11 +18,8 @@ import (
 
 // THE JOIN. What the transcript cannot say, the derived object does.
 func TestTheJoinCarriesTheFieldsTheTranscriptLacks(t *testing.T) {
-	res := run(t, fullStore(t), unit(t, transcript))
+	d := successfulObject(t, run(t, fullStore(t), unit(t, transcript)))
 
-	require.Equalf(t, 0, res.Mismatched, "the happy path mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "expected 1 derived object, got %d: %v", len(res.Objects), res.Notes)
-	d := res.Objects[0]
 	require.Equalf(t, transforms.StatusOK, d.Status, "status = %s", d.Status)
 	assert.Truef(t, strings.HasSuffix(d.NativePath, conv+".jsonl.enriched.jsonl"), "derived path = %s", d.NativePath)
 
@@ -45,11 +42,10 @@ func TestTheJoinCarriesTheFieldsTheTranscriptLacks(t *testing.T) {
 
 // The native lines survive byte-for-byte.
 func TestTheNativeTranscriptIsPreservedVerbatim(t *testing.T) {
-	res := run(t, fullStore(t), unit(t, transcript))
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
+	d := successfulObject(t, run(t, fullStore(t), unit(t, transcript)))
 
 	want := strings.Split(strings.TrimRight(transcript, "\n"), "\n")
-	for i, line := range strings.Split(strings.TrimRight(string(res.Objects[0].Payload), "\n"), "\n") {
+	for i, line := range strings.Split(strings.TrimRight(string(d.Payload), "\n"), "\n") {
 		var m struct {
 			Native json.RawMessage `json:"native"`
 		}
@@ -62,9 +58,8 @@ func TestTheNativeTranscriptIsPreservedVerbatim(t *testing.T) {
 
 func TestDerivedFromNamesTheRawInput(t *testing.T) {
 	u := unit(t, transcript)
-	res := run(t, fullStore(t), u)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	d := res.Objects[0]
+	d := successfulObject(t, run(t, fullStore(t), u))
+
 	// Without the pairing, a derived object is an assertion nobody can check.
 	if len(d.DerivedFrom) != 1 || d.DerivedFrom[0] != u.SourceHash {
 		t.Errorf("derived_from = %v, want [%s]", d.DerivedFrom, u.SourceHash)
@@ -80,18 +75,15 @@ func TestDerivedFromNamesTheRawInput(t *testing.T) {
 func TestTheOutputIsByteIdenticalAcrossRuns(t *testing.T) {
 	// Two databases with the same rows inserted in a different order. If the output differed,
 	// the hash would stop being a change signal and every tick would re-ship everything.
-	first := run(t, fullStore(t), unit(t, transcript))
-	second := run(t, fullStore(t), unit(t, transcript))
+	first := successfulObject(t, run(t, fullStore(t), unit(t, transcript)))
+	second := successfulObject(t, run(t, fullStore(t), unit(t, transcript)))
 
-	if len(first.Objects) != 1 || len(second.Objects) != 1 {
-		t.Fatalf("expected one object each: %d, %d", len(first.Objects), len(second.Objects))
-	}
-	assert.Equal(t, string(second.Objects[0].Payload), string(first.Objects[0].Payload), "two runs over identical inputs produced different bytes")
-	assert.Equalf(t, second.Objects[0].OutputHash, first.Objects[0].OutputHash, "output hashes differ: %s vs %s", first.Objects[0].OutputHash, second.Objects[0].OutputHash)
+	assert.Equal(t, string(second.Payload), string(first.Payload), "two runs over identical inputs produced different bytes")
+	assert.Equalf(t, second.OutputHash, first.OutputHash, "output hashes differ: %s vs %s", first.OutputHash, second.OutputHash)
 }
 
 func TestAChangedStoreChangesTheOutputHash(t *testing.T) {
-	before := run(t, fullStore(t), unit(t, transcript))
+	before := successfulObject(t, run(t, fullStore(t), unit(t, transcript)))
 
 	// A DB-side-only update: the transcript is byte-identical, so only the output hash can
 	// signal that there is something new to ship.
@@ -104,13 +96,10 @@ func TestAChangedStoreChangesTheOutputHash(t *testing.T) {
 				"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
 				"result":"total 24\nA LATE RESULT ARRIVED"}}`),
 	}
-	after := run(t, newStore(t, rows), unit(t, transcript))
+	after := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
 
-	if len(before.Objects) != 1 || len(after.Objects) != 1 {
-		t.Fatalf("expected one object each: %v / %v", before.Notes, after.Notes)
-	}
-	assert.NotEqual(t, after.Objects[0].OutputHash, before.Objects[0].OutputHash, "a DB-side-only change did not change the output hash, so it would never ship")
-	assert.Contains(t, string(after.Objects[0].Payload), "A LATE RESULT ARRIVED", "the late result is not in the derived object")
+	assert.NotEqual(t, after.OutputHash, before.OutputHash, "a DB-side-only change did not change the output hash, so it would never ship")
+	assert.Contains(t, string(after.Payload), "A LATE RESULT ARRIVED", "the late result is not in the derived object")
 }
 
 // No database is not an error.
@@ -148,9 +137,8 @@ func TestNoStoreRowReachesTheDerivedObjectWholesale(t *testing.T) {
 		bubbleRow("b3", `{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
 				"name":"run_terminal_cmd","rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`),
 	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	payload := string(res.Objects[0].Payload)
+	d := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
+	payload := string(d.Payload)
 	for _, marker := range []string{"UNUSED_MARKER", "ALSO_UNUSED", "must-not-ship"} {
 		assert.NotContainsf(t, payload, marker, "a store field the join does not use reached the derived object: %s", marker)
 	}

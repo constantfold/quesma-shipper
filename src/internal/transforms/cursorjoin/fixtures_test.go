@@ -114,9 +114,8 @@ func composerAt(createdAt int64, headers string) storeRow {
 
 func joined(t *testing.T, db, transcript string) []map[string]any {
 	t.Helper()
-	res := run(t, db, unit(t, transcript))
-	require.Lenf(t, res.Objects, 1, "mismatched %d, notes %v", res.Mismatched, res.Notes)
-	return decode(t, res.Objects[0].Payload)
+	d := successfulObject(t, run(t, db, unit(t, transcript)))
+	return decode(t, d.Payload)
 }
 
 // Completed calls use Cursor's standard bubble envelope.
@@ -146,4 +145,11 @@ func matchedBubbles(t *testing.T, line map[string]any, ids ...string) []map[stri
 		assert.Equal(t, ids[i], out[i]["bubbleId"], "block %d", i)
 	}
 	return out
+}
+
+func successfulObject(t *testing.T, res transforms.EnrichResult) transforms.Derived {
+	t.Helper()
+	require.Zerof(t, res.Mismatched, "mismatch notes: %v", res.Notes)
+	require.Lenf(t, res.Objects, 1, "derived object missing: %v", res.Notes)
+	return res.Objects[0]
 }

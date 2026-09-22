@@ -125,13 +125,7 @@ func (p *vendPort) send(ctx context.Context, obj engine.PreparedObject, issued c
 	if issued.AlreadyPresent {
 		return nil
 	}
-	prepared := upload.PreparedUpload{
-		ObjectID:   obj.ObjectID,
-		Key:        obj.Key,
-		Body:       obj.Body,
-		SourceHash: obj.SourceHash,
-		Metadata:   obj.Metadata,
-	}
+	prepared := upload.PreparedUpload(obj)
 	ticket := toUploadTicket(issued)
 	if err := upload.ValidateTicket(p.targets, prepared, ticket); err != nil {
 		return err

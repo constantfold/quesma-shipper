@@ -59,16 +59,7 @@ func goldenPair(t *testing.T, requestFixture, responseFixture string) (PreparedU
 		SourceHash: object.SourceHash,
 		Metadata:   object.Metadata,
 	}
-	return prepared, Ticket{
-		TicketID:            ticket.TicketID,
-		ObjectID:            ticket.ObjectID,
-		Method:              ticket.Method,
-		URL:                 ticket.URL,
-		ExpiresAt:           ticket.ExpiresAt,
-		RequiredHeaders:     ticket.RequiredHeaders,
-		ContentLength:       ticket.ContentLength,
-		ContentLengthSigned: ticket.ContentLengthSigned,
-	}
+	return prepared, Ticket(ticket)
 }
 
 func readFixture(t *testing.T, name string, into any) {

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // A directory path is a prefix of every file path under it, so substring evidence made a search
@@ -56,10 +55,7 @@ func TestAVendorRewrittenCommandStillAligns(t *testing.T) {
 		},
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the rewritten commands mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	lines := joined(t, db, transcript)
 	matchedBubbles(t, lines[1], "commit", "pr")
 }
 
@@ -83,10 +79,7 @@ func TestAnErroredCallRecordedWithoutArgumentsAligns(t *testing.T) {
 		},
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the errored call mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	lines := joined(t, db, transcript)
 	e := matchedBubbles(t, lines[1], "edit")[0]
 	assert.Truef(t, e["status"] == "error", "status = %v", e["status"])
 }
@@ -116,16 +109,14 @@ func TestTheTerminalParseTreeCannotSpeakForAnotherTool(t *testing.T) {
 		toolRow("read", "read_file_v2", `{"path":"render.yaml"}`, "services:\n  - type: web", ""),
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the parse tree stole a bubble: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	d := successfulObject(t, run(t, db, unit(t, transcript)))
+	lines := decode(t, d.Payload)
 	for i, want := range []string{"read", "shell"} {
 		matchedBubbles(t, lines[i+1], want)
 	}
 	// The theft's signature outcome: the shell call demoted to a repeat of nothing. Zero, or
 	// the misattribution shipped silently.
-	assert.Equalf(t, 0, res.Objects[0].Repeats, "repeats = %d, want 0: the shell call lost its own bubble", res.Objects[0].Repeats)
+	assert.Equalf(t, 0, d.Repeats, "repeats = %d, want 0: the shell call lost its own bubble", d.Repeats)
 }
 
 // One shared value among several is corroboration, not identity. The store's header order puts
@@ -148,10 +139,7 @@ func TestALoneSharedValueAmongSeveralIsNotIdentity(t *testing.T) {
 			"s3.go:88", ""),
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the out-of-order pair mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	lines := joined(t, db, transcript)
 	for i, want := range []string{"conflict", "purge"} {
 		matchedBubbles(t, lines[i+1], want)
 	}
@@ -176,10 +164,7 @@ func TestABareStringStoreWithAttributionStillAligns(t *testing.T) {
 			"https://github.com/org/repo/pull/1", ""),
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the rewritten bare-string commands mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	lines := joined(t, db, transcript)
 	for i, want := range []string{"commit", "pr"} {
 		matchedBubbles(t, lines[i+1], want)
 	}

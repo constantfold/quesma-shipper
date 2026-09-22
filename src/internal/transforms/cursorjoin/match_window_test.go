@@ -34,10 +34,8 @@ func TestAnOutOfOrderToolBubbleIsFoundBehindTheCursor(t *testing.T) {
 		},
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Spawning a typecheck subagent."}`),
 	}
-	res := run(t, newStore(t, rows), unit(t, body))
-	require.Equalf(t, 0, res.Mismatched, "the out-of-order tool bubble mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	assert.Contains(t, string(res.Objects[0].Payload), "task_777", "the tool block did not align to the bubble behind the cursor")
+	d := successfulObject(t, run(t, newStore(t, rows), unit(t, body)))
+	assert.Contains(t, string(d.Payload), "task_777", "the tool block did not align to the bubble behind the cursor")
 }
 
 // Neither coincidental evidence nor identical arguments may bypass the forward window.
@@ -70,9 +68,8 @@ func TestForwardWindowKeepsDistantCallsOut(t *testing.T) {
 				toolRow("far", "ripgrep_raw_search", tc.distantArgs, "the WRONG result", "2026-08-18T13:59:40.000Z"),
 				composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
 
-			res := run(t, newStore(t, rows), unit(t, transcript))
-			require.Lenf(t, res.Objects, 1, "objects = %d, mismatched %d, notes %v", len(res.Objects), res.Mismatched, res.Notes)
-			lines := decode(t, res.Objects[0].Payload)
+			d := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
+			lines := decode(t, d.Payload)
 			e := matchedBubbles(t, lines[1], "near")[0]
 			assert.Equal(t, "the right result", e["result"])
 		})

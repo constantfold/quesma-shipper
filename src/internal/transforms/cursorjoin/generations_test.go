@@ -38,13 +38,12 @@ func TestTheCurrentStoreGenerationEnriches(t *testing.T) {
 	}
 	res := run(t, newStore(t, rows), unit(t, transcript))
 
-	require.Equalf(t, 0, res.Mismatched, "the current store generation mismatched: %v", res.Notes)
 	// No decode-failure note either: every fixture row must decode.
 	for _, n := range res.Notes {
 		require.NotContains(t, n, "did not decode")
 	}
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	d := successfulObject(t, res)
+	lines := decode(t, d.Payload)
 
 	blocks := matchedBubbles(t, lines[1], "a1", "tool1")
 	assert.Equal(t, "composer-2.5", blocks[0]["modelName"])
@@ -55,7 +54,7 @@ func TestTheCurrentStoreGenerationEnriches(t *testing.T) {
 		t.Errorf("the tool result did not make it into the derived object: %v", tool["result"])
 	}
 	// The thinking bubble must not leak: [REDACTED] leaves nothing to attach it to.
-	assert.NotContains(t, string(res.Objects[0].Payload), "the user wants a listing", "a thinking bubble leaked into the derived object")
+	assert.NotContains(t, string(d.Payload), "the user wants a listing", "a thinking bubble leaked into the derived object")
 }
 
 // The current transcript generation: reasoning as a plain text block, terminal bubbles with no
@@ -92,12 +91,11 @@ func TestTheCurrentTranscriptGenerationEnriches(t *testing.T) {
 	}
 	res := run(t, newStore(t, rows), unit(t, current))
 
-	require.Equalf(t, 0, res.Mismatched, "the current transcript generation mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	payload := string(res.Objects[0].Payload)
+	d := successfulObject(t, res)
+	payload := string(d.Payload)
 
 	// The thinking text block matched the thinking bubble rather than mismatching.
-	lines := decode(t, res.Objects[0].Payload)
+	lines := decode(t, d.Payload)
 	blocks := matchedBubbles(t, lines[1], "think1", "tool1")
 	assert.Equal(t, "tool_dev123", blocks[1]["tool_call_id"])
 	assert.Contains(t, payload, "VITE ready", "the tool result did not reach the derived object")
@@ -116,11 +114,8 @@ func TestATypeDriftedTranscriptLineStillDecodesAndEnriches(t *testing.T) {
 {"role":2,"message":{"content":[{"type":"text","text":"Listing the workspace folder contents."},{"type":"tool_use","name":"Shell","input":{"command":"ls -la /work/api","description":"List files in workspace root"}}]}}
 {"type":"turn_ended","status":3}
 `
-	res := run(t, fullStore(t), unit(t, drifted))
-
-	require.Equalf(t, 0, res.Mismatched, "the drifted lines mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	payload := string(res.Objects[0].Payload)
+	d := successfulObject(t, run(t, fullStore(t), unit(t, drifted)))
+	payload := string(d.Payload)
 	assert.NotContains(t, payload, "native_invalid", "a type-drifted line was filed as invalid JSON, which it is not")
 	assert.Contains(t, payload, "call_abc123", "the drifted assistant line lost its enrichment")
 }
@@ -147,9 +142,9 @@ func TestAFlexFieldWithAnUnexpectedShapeDoesNotCostTheBubble(t *testing.T) {
 	for _, n := range res.Notes {
 		assert.NotContainsf(t, n, "did not decode", "an unexpected scalar shape cost a whole bubble row: %s", n)
 	}
-	require.Equalf(t, 0, res.Mismatched, "the bubble was lost and the loss surfaced as a mismatch: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	assert.Contains(t, string(res.Objects[0].Payload), "call_abc123", "the tool bubble did not survive its drifted fields")
+
+	d := successfulObject(t, res)
+	assert.Contains(t, string(d.Payload), "call_abc123", "the tool bubble did not survive its drifted fields")
 }
 
 // One store holds reasoning in two encodings at once. Declaring the field an object makes
@@ -184,11 +179,11 @@ func TestServerHydratedReasoningIsDecodedNotDropped(t *testing.T) {
 	for _, n := range res.Notes {
 		assert.NotContainsf(t, n, "did not decode", "a server-hydrated thought was rejected as undecodable: %s", n)
 	}
-	require.Truef(t, res.Mismatched <= 0, "mismatched %d: %v", res.Mismatched, res.Notes)
-	require.Lenf(t, res.Objects, 1, "objects = %d, notes %v", len(res.Objects), res.Notes)
+
+	d := successfulObject(t, res)
 
 	// Both reasoning bubbles carry their provenance, whichever writer produced them.
-	lines := decode(t, res.Objects[0].Payload)
+	lines := decode(t, d.Payload)
 	matchedBubbles(t, lines[1], "b2", "b3")
 }
 

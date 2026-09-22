@@ -34,10 +34,8 @@ func TestARepeatedCallTheStoreRecordedOnceIsNotAMismatch(t *testing.T) {
 		bubbleRow("a1", `{"bubbleId":"a1","type":2,"text":"Both live in etag.go."}`),
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the deduped repeat was reported as a mismatch: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	d := successfulObject(t, run(t, db, unit(t, transcript)))
+	lines := decode(t, d.Payload)
 
 	matchedBubbles(t, lines[1], "grep")
 	assert.NotContains(t, lines[2], "_enrich", "the repeat has no recorded bubble")
@@ -45,7 +43,7 @@ func TestARepeatedCallTheStoreRecordedOnceIsNotAMismatch(t *testing.T) {
 	matchedBubbles(t, lines[4], "a1")
 	// The argument-less bubble's result must not surface ANYWHERE: not on the re-run, and
 	// not on a later call the declined bubble could otherwise fall back to.
-	assert.NotContains(t, string(res.Objects[0].Payload), "NOT THE REPEAT'S RESULT", "the undecided argument-less bubble's result reached the derived object")
+	assert.NotContains(t, string(d.Payload), "NOT THE REPEAT'S RESULT", "the undecided argument-less bubble's result reached the derived object")
 }
 
 // A hole before a repeat is still a hole, but the repeat is not what proves it: it consumes
@@ -115,10 +113,8 @@ func TestAnUndecidableRepeatAttachesNothingAndDoesNotCascade(t *testing.T) {
 		toolRow("t3", "run_terminal_command_v2", `{}`, " M internal/config/resolve.go", ""),
 	})
 
-	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the undecidable re-run was reported as a mismatch: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
-	lines := decode(t, res.Objects[0].Payload)
+	d := successfulObject(t, run(t, db, unit(t, transcript)))
+	lines := decode(t, d.Payload)
 
 	// Under one reading t2 is the re-run's own bubble, under the other a different call's,
 	// and no local signal picks between them.
@@ -128,7 +124,7 @@ func TestAnUndecidableRepeatAttachesNothingAndDoesNotCascade(t *testing.T) {
 	e := matchedBubbles(t, lines[3], "t3")[0]
 	assert.Truef(t, e["result"] == " M internal/config/resolve.go", "git status result = %v", e["result"])
 	// The re-run's likely result must not surface on ANY block.
-	assert.NotContains(t, string(res.Objects[0].Payload), "PASS all tests passed", "the declined bubble's result reached the derived object on some other block")
+	assert.NotContains(t, string(d.Payload), "PASS all tests passed", "the declined bubble's result reached the derived object on some other block")
 }
 
 // Repeat detection is not bounded by the look-behind window: it consumes nothing, so the
@@ -168,8 +164,8 @@ func TestAStoreDedupedReRunFarBackIsStillARepeat(t *testing.T) {
 		composerAt(1755500000000, "["+strings.Join(headers, ",")+"]"))
 
 	res := run(t, newStore(t, rows), unit(t, strings.Join(blocks, "\n")+"\n"))
-	require.Equalf(t, 0, res.Mismatched, "the far-back dedup was reported as a mismatch: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
+
+	successfulObject(t, res)
 	assert.Contains(t, strings.Join(res.Infos, " "), "repeat")
 }
 
@@ -229,8 +225,8 @@ func TestATrailingRepeatDoesNotTurnInjectedTurnsIntoMismatches(t *testing.T) {
 	})
 
 	res := run(t, db, unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "a vendor-injected turn before a trailing repeat became a mismatch: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
+
+	successfulObject(t, res)
 	joined := strings.Join(res.Infos, " ")
 	assert.Contains(t, joined, "extend past the store")
 	assert.Contains(t, joined, "repeat")

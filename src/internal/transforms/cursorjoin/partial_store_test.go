@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// THE MISMATCH GATE: no derived entry, loud alarm, raw ships regardless.
+// A wholly unmatched transcript cannot pass as a tail: no derived entry, loud alarm, raw still ships.
 func TestAnUnalignedTranscriptProducesNoDerivedObjectAndAnAlarm(t *testing.T) {
 	// A store describing a different conversation: what a drifted join looks like.
 	rows := []storeRow{
@@ -53,11 +53,8 @@ func TestACompactedConversationStillEnriches(t *testing.T) {
 				"name":"run_terminal_cmd","status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}",
 				"result":"total 24"}}`),
 	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-
-	require.Equalf(t, 0, res.Mismatched, "a compacted conversation mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "a compacted conversation produced no derived object: %v", res.Notes)
-	assert.Contains(t, string(res.Objects[0].Payload), "call_abc123", "the surviving turns were not enriched")
+	d := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
+	assert.Contains(t, string(d.Payload), "call_abc123", "the surviving turns were not enriched")
 }
 
 // The draft skip rule: most composerData rows on a real machine are drafts.
@@ -90,26 +87,10 @@ func TestScaffoldingAndReasoningBubblesAreNotEvents(t *testing.T) {
 		bubbleRow("b3", `{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_abc123",
 				"name":"run_terminal_cmd","rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`),
 	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "scaffolding bubbles broke the alignment: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
+	d := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
 	// And the scaffolding must not appear as enrichment on a real block.
-	assert.NotContains(t, string(res.Objects[0].Payload), "tool-negotiation", "a scaffolding bubble leaked into the derived object")
-	assert.NotContains(t, string(res.Objects[0].Payload), "internal reasoning", "a thinking-only bubble leaked into the derived object")
-}
-
-// A transcript that matched NOTHING must never ride out on the tail rule.
-func TestAWhollyUnmatchedTranscriptIsAMismatchNotATail(t *testing.T) {
-	rows := []storeRow{
-		composerRow(`[
-				{"bubbleId":"b1","type":1},{"bubbleId":"b3","type":2}]`),
-		bubbleRow("b1", `{"bubbleId":"b1","type":1,"text":"something else entirely"}`),
-		bubbleRow("b3", `{"bubbleId":"b3","type":2,"toolFormerData":{"toolCallId":"call_zzz",
-				"name":"read_file","rawArgs":"{\"path\":\"/etc/hosts\"}","result":"unrelated"}}`),
-	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	assert.Equalf(t, 1, res.Mismatched, "mismatch count = %d, want 1: %v", res.Mismatched, res.Notes)
-	assert.Lenf(t, res.Objects, 0, "a wholly unmatched transcript still derived %d objects", len(res.Objects))
+	assert.NotContains(t, string(d.Payload), "tool-negotiation", "a scaffolding bubble leaked into the derived object")
+	assert.NotContains(t, string(d.Payload), "internal reasoning", "a thinking-only bubble leaked into the derived object")
 }
 
 // A row that still fails to decode is counted out loud: silence surfaces only as a mismatch
@@ -137,7 +118,7 @@ func TestUndecodableStoreRowsProduceANote(t *testing.T) {
 		t.Errorf("an undecodable row produced no note: %v", res.Notes)
 	}
 	// And the rest of the conversation still enriches: fail open applies row by row.
-	require.Lenf(t, res.Objects, 1, "an undecodable row cost the whole conversation: %v", res.Notes)
+	successfulObject(t, res)
 }
 
 func TestTheBubbleScanFallbackOrdersByCreatedAt(t *testing.T) {
@@ -151,26 +132,20 @@ func TestTheBubbleScanFallbackOrdersByCreatedAt(t *testing.T) {
 				"toolFormerData":{"toolCallId":"call_abc123","name":"run_terminal_cmd",
 					"rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}}`),
 	}
-	res := run(t, newStore(t, rows), unit(t, transcript))
-	require.Equalf(t, 0, res.Mismatched, "the fallback ordering mismatched: %v", res.Notes)
-	require.Lenf(t, res.Objects, 1, "no derived object: %v", res.Notes)
+	d := successfulObject(t, run(t, newStore(t, rows), unit(t, transcript)))
 	// Key order alone would have put aaa, mmm, zzz: createdAt is what makes this work.
-	assert.Contains(t, string(res.Objects[0].Payload), "call_abc123", "the tool bubble did not align under the fallback ordering")
+	assert.Contains(t, string(d.Payload), "call_abc123", "the tool bubble did not align under the fallback ordering")
 }
 
 // A truncated tail is expected, not a failure.
 func TestATruncatedTranscriptTailStillEnrichesWhatCameBefore(t *testing.T) {
 	// Writes are not atomic: complete lines enrich, the fragment passes through unenriched.
 	torn := transcript + `{"role":"assistant","message":{"content":[{"type":"te`
-	res := run(t, fullStore(t), unit(t, torn))
-
-	require.Lenf(t, res.Objects, 1, "a torn tail lost the whole conversation: %v", res.Notes)
-	payload := string(res.Objects[0].Payload)
+	d := successfulObject(t, run(t, fullStore(t), unit(t, torn)))
+	payload := string(d.Payload)
 	assert.Contains(t, payload, "call_abc123", "the complete lines were not enriched")
 	// Preserved as a string, not dropped: an invalid raw value would cost the conversation,
 	// and shortening the view would disagree with the transcript about where the file ended.
 	assert.Contains(t, payload, "native_invalid", "the torn fragment was dropped from the derived object")
-	for _, l := range decode(t, res.Objects[0].Payload) {
-		_ = l // decode fails the test if any derived line is not valid JSON
-	}
+	decode(t, d.Payload)
 }
