@@ -10,14 +10,12 @@ import (
 // Stores that account for less than the transcript, or more than the join reads.
 func TestPartialStores(t *testing.T) {
 	runJoinCases(t, []joinCase{{
-		// A store describing a different conversation cannot pass as a tail: a partial object is
-		// indistinguishable downstream from a complete one.
+		// A store describing a different conversation cannot pass as a tail.
 		name:     "an unaligned transcript is an alarm, not an object",
 		rows:     conversation(user("b1", "something else entirely"), lsBubble(`"toolFormerData":{"name":"read_file","rawArgs":"{\"path\":\"/etc/hosts\"}"}`)),
 		mismatch: true,
 	}, {
-		// THE COMPACTION FIXTURE. Headers still name bubbles whose rows are gone; counting them as
-		// mismatches would stop DB-side collection for the longest conversations.
+		// THE COMPACTION FIXTURE: headers still name bubbles whose rows are gone.
 		name: "a compacted conversation still enriches",
 		rows: append([]storeRow{{"composerData:" + conv, `{"summarizedComposers":[{"summary":"earlier turns were compacted away"}],
 			"fullConversationHeadersOnly":[{"bubbleId":"gone1"},{"bubbleId":"gone2"},{"bubbleId":"b1"},{"bubbleId":"b2"},{"bubbleId":"b3"}]}`}},
@@ -43,8 +41,7 @@ func TestPartialStores(t *testing.T) {
 			bubbleRow("mmm", `{"type":2,"createdAt":"2026-07-28T10:06:02Z",`+lsTool+`}`)),
 		want: map[int][]string{0: {"aaa"}, 1: {"zzz", "mmm"}},
 	}, {
-		// Writes are not atomic: complete lines enrich, and the torn fragment is kept as a string
-		// rather than dropped or cutting the view short of where the file ended.
+		// Writes are not atomic: complete lines enrich, and the torn fragment is kept as a string.
 		name:       "a truncated transcript tail still enriches what came before",
 		transcript: transcript + `{"role":"assistant","message":{"content":[{"type":"te`,
 		rows:       fullRows(),

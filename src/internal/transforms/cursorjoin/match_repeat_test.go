@@ -10,8 +10,8 @@ const (
 	purgeArgs = `{"pattern":"PurgePrefix|opts\\.Prefix","path":"/work/api/internal/backends/s3"}`
 )
 
-// A repeat is a transcript call the store recorded once. It attaches nothing and consumes nothing,
-// so it must neither hide a hole nor take a bubble that is some other call's.
+// A repeat is a call the store recorded once: it attaches and consumes nothing, so it must neither
+// hide a hole nor take another call's bubble.
 func TestRepeatedCalls(t *testing.T) {
 	var farBack []string
 	var farBackRows []storeRow
@@ -27,8 +27,7 @@ func TestRepeatedCalls(t *testing.T) {
 	const resolve = `{"path":"/work/api/internal/config/resolve.go"}`
 
 	runJoinCases(t, []joinCase{{
-		// The same evidence fits a store that recorded both runs, the second argument-less, so the
-		// re-run ships undecided and the argument-less bubble stays barred from later fallbacks.
+		// The re-run could be the argument-less bubble, so it ships undecided and that bubble stays barred.
 		name:       "a call the store recorded once is not a mismatch",
 		query:      "look twice",
 		transcript: jsonl(turn(use("Grep", etagArgs)), turn(use("Grep", etagArgs)), turn(use("Grep", purgeArgs)), turn(text("Both live in etag.go."))),
@@ -49,8 +48,7 @@ func TestRepeatedCalls(t *testing.T) {
 		bubbles:  []storeRow{toolRow("grep", "ripgrep_raw_search", etagArgs, "etag.go:9"), toolRow("purge", "ripgrep_raw_search", purgeArgs, "purge.go:14")},
 		mismatch: true,
 	}, {
-		// Only an identity-grade consumer makes a later agreeing call a repeat: here the first search
-		// reaches the second's bubble by position, and a repeat would ship it wearing the wrong result.
+		// Only an identity-grade consumer makes a later agreeing call a repeat, not a positional one.
 		name:       "a fallback consumer does not make the next call a repeat",
 		query:      "scan the backends",
 		transcript: jsonl(turn(use("Grep", `{"pattern":"PurgePrefix|opts","path":"/work/s3"}`)), turn(use("Grep", `{"pattern":"quoteETag|normaliseETag","path":"/work/s3"}`)), turn(text("Both live in etag.go."))),
@@ -69,16 +67,14 @@ func TestRepeatedCalls(t *testing.T) {
 		want:   map[int][]string{2: {}, 3: {"t3"}},
 		absent: []string{"PASS all tests passed"},
 	}, {
-		// Repeat detection is not bounded by the look-behind window: it consumes nothing, so the
-		// misplacement the window guards against cannot happen. 64 consumed calls sit in between.
+		// Repeat detection is not bounded by the look-behind window: 64 consumed calls sit in between.
 		name:       "a store-deduped re-run far back is still a repeat",
 		query:      "audit everything",
 		transcript: jsonl(append(append([]string{turn(use("Grep", etagArgs))}, farBack...), turn(use("Grep", etagArgs)), turn(text("All checks passed.")))...),
 		bubbles:    append(append([]storeRow{toolRow("grep", "ripgrep_raw_search", etagArgs, "etag.go:9")}, farBackRows...), said("a1", "All checks passed.")),
 		infos:      []string{"repeat"},
 	}, {
-		// A repeat verdict surveys the whole store: the re-run's own bubble exists past the forward
-		// window, behind store-only subagent bubbles, so the store did record the run.
+		// The re-run's own bubble sits past the forward window, so the store did record it.
 		name:       "a repeat whose own bubble is out of reach is a mismatch",
 		query:      "check the resolver twice",
 		transcript: jsonl(turn(use("Read", resolve)), turn(use("Read", resolve)), turn(text("The resolver is bounded."))),
@@ -86,8 +82,7 @@ func TestRepeatedCalls(t *testing.T) {
 			subagent...), toolRow("r2", "read_file_v2", resolve, "package config, again")),
 		mismatch: true,
 	}, {
-		// Injected notification turns get no bubble, so a trailing repeat must not stamp a watermark
-		// that turns an explained tail into a mismatch.
+		// Injected turns get no bubble; a trailing repeat must not turn that tail into a mismatch.
 		name:  "a trailing repeat does not turn injected turns into mismatches",
 		query: "find the etag helpers",
 		transcript: jsonl(turn(use("Grep", etagArgs)), `{"type":"turn_ended","status":"success"}`,

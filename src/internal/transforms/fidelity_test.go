@@ -7,8 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// These records contain no secrets; preserve every byte, including identifiers and prior sentinels,
-// and stay on the parsed path: a line quietly pushed to raw text loses exemptions and key names.
+// Secret-free records ship byte for byte and stay on the parsed path, where exemptions apply.
 func TestScrubPreservesCleanRecords(t *testing.T) {
 	s := newScrubber(t)
 	for _, tc := range []struct{ name, payload string }{
@@ -45,8 +44,7 @@ func TestScrubPreservesCleanRecords(t *testing.T) {
 	}
 }
 
-// When a record IS modified, key order and number literals must still survive: 1.23e+18
-// for a large integer is gratuitous damage to bytes the shipper preserves.
+// When a record IS modified, key order and number literals still survive.
 func TestModifiedRecordsPreserveKeyOrderAndNumbers(t *testing.T) {
 	s := newScrubber(t)
 
@@ -58,8 +56,7 @@ func TestModifiedRecordsPreserveKeyOrderAndNumbers(t *testing.T) {
 	assert.Containsf(t, out, "1234567890123456789", "a large integer lost precision:\n%s", out)
 }
 
-// The sentinel's width depends only on the rule id, so it cannot leak the secret's
-// length, and nothing in it derives from the value.
+// The sentinel depends only on the rule id, so it leaks neither the secret's length nor its bytes.
 func TestSentinelLeaksNeitherLengthNorValue(t *testing.T) {
 	s := newScrubber(t)
 
@@ -76,12 +73,10 @@ func TestSentinelLeaksNeitherLengthNorValue(t *testing.T) {
 	}
 }
 
-// Idempotence: a second pass must not redact the first pass's placeholders, which would
-// destroy the ledger's meaning.
+// A second pass must not redact the first pass's placeholders.
 func TestScrubIsIdempotent(t *testing.T) {
 	s := newScrubber(t)
-	// Deliberately long and mixed-case: the first pass turns "jane" into "__USER__", which
-	// ADDS entropy, and the second pass must not eat that.
+	// Long and mixed-case: turning "jane" into "__USER__" ADDS entropy.
 	payload := `{"type":"user","cwd":"/Users/jane/Work2026/SampleOrg/blink-UI","message":{"content":[{"type":"text","text":"ghp_abcdefghijklmnopqrstuvwxyz0123456789 in ~/.claude/projects/-Users-jane-Work2026-SampleOrg-blink-UI/f00.jsonl"}]}}` + "\n"
 
 	first := scrubJSONL(t, s, "claude-code", payload)

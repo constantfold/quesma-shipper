@@ -17,21 +17,19 @@ type keywordNode struct {
 	fail *keywordNode
 }
 
-// Gate identifies one registered keyword set, asked of Seen before its matcher runs.
+// Gate identifies one registered keyword set; AlwaysGate belongs to a matcher with none.
 type Gate int32
 
-// AlwaysGate belongs to a matcher with nothing to prefilter on: it runs on every value.
 const AlwaysGate Gate = -1
 
-// maxGates bounds Seen to a fixed-size value type, which keeps a scan allocation-free.
+// maxGates keeps Seen a fixed-size value type, so a scan is allocation-free.
 const maxGates = 256
 
-// Seen is one scan's answer: the gates whose keywords occur in the scanned value.
+// Seen holds the gates whose keywords occur in the scanned value.
 type Seen struct {
 	bits [maxGates / 64]uint64
 }
 
-// Has reports whether the gate's keyword set was present.
 func (s *Seen) Has(g Gate) bool {
 	if g < 0 {
 		return true
@@ -61,11 +59,9 @@ type gatedKeyword struct {
 	gate   Gate
 }
 
-// NewPrefilterBuilder starts an empty build.
 func NewPrefilterBuilder() *PrefilterBuilder { return &PrefilterBuilder{} }
 
-// AddKeywords registers a rule's keyword set and returns its gate; an empty set means the
-// rule declares no keywords and always runs.
+// AddKeywords registers a rule's keyword set; an empty set always runs.
 func (b *PrefilterBuilder) AddKeywords(keywords []string) (Gate, error) {
 	if len(keywords) == 0 {
 		return AlwaysGate, nil

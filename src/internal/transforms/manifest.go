@@ -55,8 +55,7 @@ type Manifest struct {
 	EnrichMismatches int           `json:"enrich_mismatches,omitempty"`
 	DBProvenance     *DBProvenance `json:"db_provenance,omitempty"`
 
-	// What an ok object could not enrich, so a partial derived object differs from a complete
-	// one. Only line decode errors are loss (the torn final line is excluded).
+	// What an ok derived object could not enrich; only line decode errors are loss.
 	EnrichRepeats          int `json:"enrich_repeats,omitempty"`
 	EnrichTail             int `json:"enrich_tail,omitempty"`
 	EnrichAmbiguous        int `json:"enrich_ambiguous,omitempty"`
@@ -77,8 +76,7 @@ type Encryption struct {
 	RecipientKeyIDs []string `json:"recipient_key_ids"`
 }
 
-// Client identifies the build that sealed the object as separate facts, so grouping by build is
-// a comparison and not a substring match. All optional but Version.
+// Client identifies the sealing build as separate facts, so grouping by build is a comparison.
 type Client struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit,omitempty"`
@@ -132,8 +130,7 @@ func DecodeManifest(raw []byte) (Manifest, error) {
 	return m, nil
 }
 
-// ObjectMetadata is the plaintext metadata attached to a PUT, so a consumer can dedupe with a
-// HEAD instead of a decrypt. The native path travels only inside the age ciphertext.
+// ObjectMetadata is the plaintext PUT metadata a consumer dedupes on with a HEAD; never the path.
 func (m Manifest) ObjectMetadata() map[string]string {
 	md := map[string]string{
 		"manifest-version": fmt.Sprint(m.ManifestVersion),

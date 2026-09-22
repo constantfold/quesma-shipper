@@ -11,25 +11,15 @@ import (
 // anchorScan finds corpus keywords, then verifies an anchored regex. Keywords must start every
 // match; rules with interior keywords declare sweep instead. TestAnchorMatchesSweep checks that.
 type anchorScan struct {
-	// verify is \A(?:pattern) run against value[p:]: the group keeps every group number, and \A
-	// makes the engine's anchored fast exit apply.
-	verify *regexp.Regexp
-
-	// lits are the entry literals: the rule's corpus keywords.
-	lits []string
-
-	// fold means the literals match under Go's (?i), Unicode simple folding, not an ASCII flip.
-	fold bool
-
-	// wordEdge means the pattern opened with \b, which verify cannot check at value[p:].
-	wordEdge bool
+	verify   *regexp.Regexp // \A(?:pattern), run against value[p:], keeps every group number
+	lits     []string       // the entry literals: the rule's corpus keywords
+	fold     bool           // the literals match under Go's (?i) Unicode simple folding
+	wordEdge bool           // the pattern opened with \b, which verify cannot check at value[p:]
 }
 
 const (
-	// maxAnchorLits bounds the litCursor's fixed scratch; the corpora carry at most five.
-	maxAnchorLits = 8
-	// A single-byte literal lands on prose constantly, and verifying costs more than it saves.
-	minAnchorLen = 2
+	maxAnchorLits = 8 // the litCursor's fixed scratch; the corpora carry at most five
+	minAnchorLen  = 2 // a single-byte literal lands on prose constantly
 
 	// litCursor positions out of band of any byte offset.
 	litUnscanned = -2
@@ -37,7 +27,6 @@ const (
 )
 
 // newAnchorScan returns nil when anchoring is unsound or unprofitable.
-// Rules with known cost cliffs declare sweep; see TestPEMHeaderFloodStaysLinear.
 func newAnchorScan(pattern string, keywords []string, sweep bool) (*anchorScan, error) {
 	if sweep || len(keywords) == 0 || len(keywords) > maxAnchorLits {
 		return nil, nil
@@ -49,9 +38,8 @@ func newAnchorScan(pattern string, keywords []string, sweep bool) (*anchorScan, 
 	}
 	wordEdge := strings.HasPrefix(rest, `\b`)
 	for _, k := range keywords {
-		// With \b in front, a non-word entry byte depends on the byte before it, which verify
-		// cannot see. With (?i), the search jumps between the two ASCII cases of the first byte,
-		// so a first character that also folds onto a non-ASCII rune would be searched short.
+		// With \b in front, a non-word entry byte depends on the byte before it, which verify cannot
+		// see. With (?i), the search visits only the two ASCII cases of the first byte.
 		if len(k) < minAnchorLen || !isASCII(k) || wordEdge && !isWordByte(k[0]) ||
 			fold && !foldOrbitASCII(rune(asciiLower(k[0]))) {
 			return nil, nil
@@ -75,8 +63,7 @@ func foldOrbitASCII(r rune) bool {
 	return true
 }
 
-// litCursor remembers, per entry literal, the next occurrence at or after the scan position, as
-// per-call scratch: nothing about a scan is stored on the Rule, which is shared.
+// litCursor is per-call scratch holding each entry literal's next occurrence: the Rule is shared.
 type litCursor struct {
 	at [maxAnchorLits]int
 }
@@ -104,7 +91,6 @@ func (c *litCursor) next(s *anchorScan, value string, pos int) int {
 	return best
 }
 
-// index finds the next occurrence of one entry literal at or after from <= len(value).
 func (s *anchorScan) index(value string, from int, lit string) int {
 	var at int
 	if s.fold {
@@ -118,8 +104,7 @@ func (s *anchorScan) index(value string, from int, lit string) int {
 	return from + at
 }
 
-// indexFold is strings.Index under Go's (?i) folding. The skip loop runs on the two ASCII
-// cases of the needle's first byte, which keeps it a pair of memchrs over ordinary text.
+// indexFold is strings.Index under Go's (?i) folding, skipping by a memchr pair on the first byte.
 func indexFold(s, lit string) int {
 	lo, hi := foldCases(lit[0])
 	for i := 0; i < len(s); {
@@ -136,7 +121,6 @@ func indexFold(s, lit string) int {
 	return -1
 }
 
-// foldCases returns the two ASCII spellings of a byte, equal when it is not a letter.
 func foldCases(c byte) (byte, byte) {
 	switch {
 	case 'a' <= c && c <= 'z':
@@ -162,7 +146,6 @@ func indexEitherByte(s string, a, b byte) int {
 	return ia
 }
 
-// hasFoldPrefix reports whether s starts with the ASCII lit under Go's (?i) folding.
 func hasFoldPrefix(s, lit string) bool {
 	end := 0
 	for range len(lit) {

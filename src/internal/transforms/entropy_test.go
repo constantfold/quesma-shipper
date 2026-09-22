@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The grid scan, the narrow histogram and the fused hex test are only allowed to be faster,
-// never different: each is replayed against the straightforward original, copied here.
+// The grid scan, narrow histogram and fused hex test are replayed against the originals, copied here.
 
 func refIsHexRun(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789abcdefABCDEF") == ""
@@ -63,8 +62,7 @@ func TestEntropyClassTableMatchesTheByteTests(t *testing.T) {
 	require.Equalf(t, entropySymbols, rank, "alphabet has %d symbols, entropySymbols is %d", rank, entropySymbols)
 }
 
-// The score must be bit-identical, not merely close: a last-ulp difference at the threshold is
-// a redaction that appears or disappears. Long, uneven candidates included.
+// Bit-identical, not merely close: a last-ulp difference at the threshold flips a redaction.
 func TestEntropyScoreIsBitIdenticalToTheWideHistogram(t *testing.T) {
 	rng := rand.New(rand.NewSource(37))
 	alphabet := candidateAlphabet()
@@ -166,8 +164,7 @@ func candidateAlphabet() []byte {
 	return alphabet
 }
 
-// refMatch is the byte-at-a-time run walk the grid scan replaced: every byte inspected, every
-// maximal in-class run of at least minRun emitted.
+// refMatch is the byte-at-a-time run walk the grid scan replaced.
 func refMatch(m *entropyMatcher, value string) []Span {
 	if len(value) < m.cfg.MinLength {
 		return nil
@@ -202,8 +199,7 @@ func refMatch(m *entropyMatcher, value string) []Span {
 
 func TestEntropyGridScanFindsTheSameRunsAsTheByteWalk(t *testing.T) {
 	rng := rand.New(rand.NewSource(31))
-	// Fragments chosen so runs land on and across the grid: separators of every length, runs just
-	// under and just over the floor, the scrubber's own output.
+	// Runs landing on and across the grid, around the floor, and the scrubber's own output.
 	frag := []string{
 		"a", "-", "/", ".", " ", ":", "_", "==",
 		"0123456789abcdef", "AKIA1234567890ABCDEF", "__USER__", "__REDACTED:card-pan__",

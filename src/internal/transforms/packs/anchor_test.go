@@ -17,8 +17,7 @@ import (
 // and a rule that quietly stopped being anchored shows up as "sweep".
 func TestAnchorLiterals(t *testing.T) {
 	want := map[string]string{
-		// gitleaks-core. slack-webhook and gcp-service-account-key declare "sweep":
-		// their keywords occur mid-match, so anchoring would miss every redaction.
+		// gitleaks-core. slack-webhook and gcp-service-account-key have mid-match keywords.
 		"aws-access-key-id":       `wb ["AKIA" "ASIA" "ABIA" "ACCA"]`,
 		"aws-secret-key":          `fold ["aws"]`,
 		"github-pat":              `wb ["ghp_" "gho_" "ghu_" "ghs_" "ghr_"]`,
@@ -36,11 +35,8 @@ func TestAnchorLiterals(t *testing.T) {
 		"twilio-key":              `wb ["SK"]`,
 		"azure-storage-key":       `["AccountKey="]`,
 		"gcp-service-account-key": "sweep",
-		// quesma-extra. secret-access-key is deliberately case-sensitive: a folded rule
-		// cannot anchor on a keyword starting with "s" (the long-s fold orbit is
-		// non-ASCII), so the wild spellings are enumerated as their own anchors.
-		// hashicorp-tf-api-token's keyword occurs mid-match and azure-ad-client-secret's
-		// two bytes in, so both declare "sweep".
+		// quesma-extra. secret-access-key enumerates its spellings: a folded "s" keyword cannot
+		// anchor (long s). hashicorp-tf-api-token and azure-ad-client-secret have mid-match keywords.
 		"secret-access-key":               `["SecretAccessKey" "secretAccessKey" "secret_access_key" "SECRET_ACCESS_KEY"]`,
 		"digitalocean-token":              `wb ["dop_v1_" "doo_v1_" "dor_v1_"]`,
 		"databricks-api-token":            `wb ["dapi"]`,
@@ -77,8 +73,7 @@ func TestAnchorLiterals(t *testing.T) {
 		"langsmith-api-key":               `wb ["lsv2_pt_" "lsv2_sk_"]`,
 		"pinecone-api-key":                `wb ["pcsk_"]`,
 		"azure-sas-token":                 `wb ["sig="]`,
-		// cloud-keys. private-key-block sweeps for cost, a failed candidate running to the
-		// value's end (see TestPEMHeaderFloodStaysLinear); url-userinfo-credentials for head-ness.
+		// cloud-keys. private-key-block sweeps for cost (TestPEMHeaderFloodStaysLinear).
 		"private-key-block":        "sweep",
 		"jwt":                      `wb ["eyJ"]`,
 		"authorization-bearer":     `fold ["authorization"]`,
@@ -119,8 +114,7 @@ func describeAnchor(r *Rule) string {
 	return b.String()
 }
 
-// The shapes the build must refuse: a refusal costs throughput, a wrong acceptance costs a
-// redaction.
+// A refusal costs throughput, a wrong acceptance a redaction.
 func TestAnchorRefusals(t *testing.T) {
 	cases := []struct {
 		pattern  string
@@ -159,8 +153,7 @@ func TestAnchorRefusals(t *testing.T) {
 	}
 }
 
-// The hand-written half of the differential test: a candidate the pattern rejects sitting in
-// front of, or inside, a real match. Getting the resume position wrong loses exactly these.
+// Rejected candidates in front of, or inside, a real match: a wrong resume position loses these.
 var anchorTraps = []string{
 	// A rejected candidate in front of a live one, sharing a prefix.
 	"xAKIA0123456789ABCDEF AKIA0123456789ABCDEF",
@@ -191,8 +184,8 @@ var anchorTraps = []string{
 	"a" + strings.Repeat(".", 50) + "://u:ppp@h://u:qqq@h",
 }
 
-// The differential fuzz: for every anchored rule, the literal scan and the plain sweep must return
-// the same spans. The per-rule alphabet is adversarial: the paths differ only on near-matches.
+// For every anchored rule, the literal scan and the plain sweep return the same spans, over an
+// alphabet of near-matches, where the two paths could differ.
 func TestAnchorMatchesSweep(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260817))
 	rounds := 20000
@@ -257,10 +250,8 @@ func buildFuzzValue(rng *rand.Rand, pool []string) string {
 	return b.String()
 }
 
-// The regression for the shape that made anchoring quadratic: every line a PEM header, none a
-// footer, so every candidate ran the body to the value's end. Both assertions are needed, the rule
-// unanchored and doubled input not blowing the time up. The bound is loose on purpose: a shape
-// test, not a throughput budget.
+// The shape that made anchoring quadratic: every line a PEM header, none a footer. The bound is
+// loose on purpose: a shape test, not a throughput budget.
 func TestPEMHeaderFloodStaysLinear(t *testing.T) {
 	pem := ruleByID(t, CloudKeys, "private-key-block")
 	if pem.anchor != nil {

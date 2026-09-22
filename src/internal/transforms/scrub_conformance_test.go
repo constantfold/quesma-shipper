@@ -17,9 +17,7 @@ var update = flag.Bool("update", false, "regenerate the conformance vectors (scr
 const scrubVectorPath = "../../conformance/v1/scrub/redaction.json"
 
 // scrubVectors are before/after pairs as data, so a second-language port is checked against the
-// same corpus. Every "after" must contain only sentinels and structural placeholders, never a
-// secret, which is what makes this file safe to commit; TestConformanceVectorsCarryNoSecrets
-// asserts it rather than assuming it.
+// same corpus. TestConformanceVectorsCarryNoSecrets keeps every "after" safe to commit.
 type scrubVectors struct {
 	VectorSet     string              `json:"vector_set"`
 	VectorVersion int                 `json:"vector_version"`

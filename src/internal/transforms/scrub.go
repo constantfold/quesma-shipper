@@ -29,15 +29,9 @@ type Result struct {
 	BytesTotal    int
 	RuleHits      map[string]int
 	ScanMode      string
-
-	// A torn tail is expected (it ships byte-exact and the next flush supersedes it), so these
-	// separate it from an error rather than reporting one.
-	LinesParsed     int
-	LinesRawScanned int
 }
 
-// Density is bytes redacted over bytes total, recorded per object so downstream can drop
-// shredded objects and a density jump names the rule that went haywire.
+// Density is recorded per object so downstream can drop shredded objects and spot a haywire rule.
 func (r Result) Density() float64 {
 	if r.BytesTotal == 0 {
 		return 0
@@ -75,26 +69,25 @@ func DefaultConfig() Config {
 type Scrubber struct {
 	patterns []gatedPattern
 
-	// The heuristic detector, nil when generic-entropy is not configured. It mistakes structure
-	// for secrets, so the engine consults exemptions BEFORE it.
+	// nil when generic-entropy is not configured; it mistakes structure for secrets, so exemptions apply first.
 	entropy *entropyMatcher
 
-	// The username the path-user rewriter replaces, or empty. Not a detector, so it runs
-	// everywhere including on exempt fields.
+	// A rewriter, not a detector, so it runs on exempt fields too; empty disables it.
 	pathUser string
 
 	keyNames  *keyNameMatcher
-	exempt    *ExemptionSet
 	prefilter *packs.Prefilter
 
-	// The slowest single Scrub served and its payload size. A pathological input can make a
-	// pattern backtrack for seconds without erroring, which nothing else reports.
+	// Source family ("*" for all) to the field paths the heuristics skip, matched exactly: dotted,
+	// with "[]" for array elements, as in content[].image.hex.
+	exempt map[string]map[string]bool
+
+	// A pathological input can make a pattern backtrack for seconds without erroring.
 	slowestNanos atomic.Int64
 	slowestBytes atomic.Int64
 }
 
-// Slowest reports the worst Scrub seen so far and the payload size behind it: a large file is
-// legitimately slow, so duration alone says little.
+// Slowest reports the worst Scrub so far with its payload size: a large file is legitimately slow.
 func (s *Scrubber) Slowest() (time.Duration, int64) {
 	return time.Duration(s.slowestNanos.Load()), s.slowestBytes.Load()
 }
@@ -114,8 +107,7 @@ func (s *Scrubber) noteCost(d time.Duration, size int) {
 	}
 }
 
-// gatedMatcher runs high-confidence patterns behind the shared keyword prefilter. It takes no
-// field path: structural exemptions must never suppress pattern matches.
+// gatedMatcher takes no field path: structural exemptions must never suppress pattern matches.
 type gatedMatcher interface {
 	MatchScannedIn(value string, scan *packs.ValueScan) []Span
 }
@@ -125,18 +117,22 @@ type gatedPattern struct {
 	gate packs.Gate
 }
 
-// New compiles a Scrubber. A pack named in config but absent from the corpus is an error:
-// running with fewer rules than configured must not be reachable by omission.
+// New compiles a Scrubber. A configured pack with no corpus is an error, never fewer rules.
 func New(cfg Config) (*Scrubber, error) {
-	// Rejected rather than clamped: the scanner would read a negative floor as "every run", the
-	// opposite of what lowering a threshold means.
+	// Rejected rather than clamped: the scanner would read a negative floor as "every run".
 	if cfg.Entropy.MinLength < 0 {
 		return nil, fmt.Errorf("scrub: entropy min_length %d is negative", cfg.Entropy.MinLength)
 	}
 	s := &Scrubber{
-		exempt:   NewExemptionSet(cfg.Exemptions),
+		exempt:   map[string]map[string]bool{},
 		keyNames: newKeyNameMatcher(cfg.SecretKeyNames),
 		pathUser: cfg.Username,
+	}
+	for family, paths := range cfg.Exemptions {
+		s.exempt[family] = map[string]bool{}
+		for _, p := range paths {
+			s.exempt[family][p] = true
+		}
 	}
 
 	prefilter := packs.NewPrefilterBuilder()
@@ -158,8 +154,7 @@ func New(cfg Config) (*Scrubber, error) {
 		}
 	}
 
-	// nil stems yield AlwaysGate, so a non-ASCII configured name is still redacted, just not
-	// prefiltered on bytes that cannot represent it.
+	// nil stems yield AlwaysGate, so a non-ASCII configured name is still redacted, just not prefiltered.
 	keyGate, err := prefilter.AddKeywords(s.keyNames.stems)
 	if err != nil {
 		return nil, fmt.Errorf("scrub: secret key names: %w", err)
@@ -169,9 +164,8 @@ func New(cfg Config) (*Scrubber, error) {
 	return s, nil
 }
 
-// Scrub redacts a payload. Errors returned here are engine errors and fail closed; a line that
-// does not parse is NOT an error but raw-text scanned and counted in LinesRawScanned, which is
-// what lets a torn tail still ship.
+// Scrub redacts a payload. Errors are engine errors and fail closed; a line that does not parse
+// is raw-text scanned instead, which is what lets a torn tail still ship.
 func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	started := time.Now()
 	defer func() { s.noteCost(time.Since(started), len(payload)) }()
@@ -185,11 +179,11 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	if !hint.JSONL {
 		res.Out = []byte(s.scrubRawText(string(payload), &res, &scan))
 		res.ScanMode = ScanModeRawText
-		res.LinesRawScanned = 1
 		return res, nil
 	}
 
 	var walker jsonWalker
+	parsedLines, rawLines := 0, 0
 	// Copy on first change: a file with no secret ships the input slice itself.
 	var out []byte
 	for rest := payload; len(rest) > 0; {
@@ -203,12 +197,12 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 			walker.reset(s, hint.Family, &scan, body)
 			if walker.walkLine() == nil {
 				parsed = true
-				res.LinesParsed++
+				parsedLines++
 				res.record(walker.redacted, walker.hits)
 				dirty = len(walker.edits) > 0
 			} else {
 				// Syntax errors, torn tails and over-deep records belong to the raw scanner.
-				res.LinesRawScanned++
+				rawLines++
 				scrubbed = s.scrubRawText(string(body), &res, &scan)
 				dirty = scrubbed != string(body)
 			}
@@ -234,9 +228,9 @@ func (s *Scrubber) Scrub(payload []byte, hint Hint) (Result, error) {
 	}
 
 	switch {
-	case res.LinesRawScanned > 0 && res.LinesParsed > 0:
+	case rawLines > 0 && parsedLines > 0:
 		res.ScanMode = ScanModeMixed
-	case res.LinesRawScanned > 0:
+	case rawLines > 0:
 		res.ScanMode = ScanModeRawText
 	}
 	res.Out = payload

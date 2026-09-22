@@ -6,8 +6,7 @@ import "strings"
 // the corpus pattern's leftmost-first semantics; pii_test.go replays both, so a corpus edit
 // cannot leave the scanner behind.
 
-// Character classes of the email pattern, plus \w for the two \b assertions, packed one byte per input
-// byte. ASCII-only: every word rune is one ASCII byte, so the byte test answers \b's question.
+// The email pattern's character classes plus \w for \b, which is ASCII-only, so a byte test answers it.
 const (
 	clsLocal  = 1 << 0 // [A-Za-z0-9._%+-], the local part
 	clsDomain = 1 << 1 // [A-Za-z0-9.-], the domain
@@ -33,14 +32,12 @@ var emailClass = func() (t [256]uint8) {
 	return t
 }()
 
-// scanEmail finds what the email pattern would find, in one pass anchored on the '@' signs. The local
-// run ends exactly at an '@', so leftmost is the first position in it where \b holds; the domain
-// split is the last '.' that works, and the TLD can only be the whole letter run. Ids come from
-// Rule.checked, so spans leave here without one.
+// scanEmail anchors on the '@' signs. The local run ends exactly at one, so leftmost is the first
+// position in it where \b holds; the domain split is the last '.' that works, and the TLD can only be
+// the whole letter run.
 func scanEmail(value string) []Span {
 	var out []Span
-	// from is where the next match may start, as FindAll resumes at the previous match's
-	// end; at is the '@' cursor, which also advances past a failed candidate.
+	// from is where FindAll would resume; at is the '@' cursor, which also passes failed candidates.
 	from, at := 0, 0
 	for {
 		rel := strings.IndexByte(value[at:], '@')
@@ -55,8 +52,7 @@ func scanEmail(value string) []Span {
 		for p > from && emailClass[value[p-1]]&clsLocal != 0 {
 			p--
 		}
-		// Leftmost start in [p, sign) at which \b holds. The byte before p is read even
-		// when from clipped the walk: Go's \b looks at the real text before it.
+		// Leftmost start in [p, sign) where \b holds, which reads the real byte before p.
 		start := -1
 		for i := p; i < sign; i++ {
 			prevWord := i > 0 && emailClass[value[i-1]]&clsWord != 0
@@ -69,8 +65,7 @@ func scanEmail(value string) []Span {
 			continue
 		}
 
-		// The domain run, then its last usable '.' walking left: the dot needs a domain
-		// byte before it, a two-letter TLD after it, and a non-word byte to close \b.
+		// The last usable '.' needs a domain byte before, a two-letter TLD after, and \b closing it.
 		lo := sign + 1
 		hi := lo
 		for hi < len(value) && emailClass[value[hi]]&clsDomain != 0 {

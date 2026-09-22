@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// github-pat is written from GitHub's published token format: a documented prefix, then at least
-// 36 letters and digits (30 random plus a 6-character checksum), with no fixed upper length because
-// GitHub states token lengths change. Longer tokens must therefore match; shorter must not.
+// github-pat follows GitHub's published format: a documented prefix, then at least 36 alphanumerics
+// and no fixed upper length, since GitHub states token lengths change.
 func TestGitHubPATFollowsDocumentedFormat(t *testing.T) {
 	alnum := func(n int) string {
 		return strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", n/62+1)[:n]

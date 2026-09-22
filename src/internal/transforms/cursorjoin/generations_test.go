@@ -2,13 +2,11 @@ package cursorjoin_test
 
 import "testing"
 
-// Vendor drift on either side. A struct that rejects a drifted field drops the whole row or line,
-// which then reports as a mismatch or ships unenriched.
+// Vendor drift on either side: a struct rejecting a drifted field would drop the whole row or line.
 func TestStoreAndTranscriptGenerations(t *testing.T) {
 	const loaderQuery = "why is the loader bounded"
 	runJoinCases(t, []joinCase{{
-		// Four drifts at once: numeric tool and capabilityType enums, capabilityType 15 on every tool
-		// bubble, a thinking object rather than isThought, and modelName under modelInfo.
+		// Numeric enums, capabilityType 15 on tool bubbles, a thinking object, modelInfo.modelName.
 		name: "the current store generation",
 		rows: conversation(
 			user("b1", "list the workspace"),
@@ -23,8 +21,7 @@ func TestStoreAndTranscriptGenerations(t *testing.T) {
 		// [REDACTED] reasoning leaves nothing to attach the thinking bubble to.
 		absent: []string{"the user wants a listing"},
 	}, {
-		// Reasoning as a plain text block, a terminal call with no recorded arguments, and injected
-		// follow-up turns that never get bubble rows: tail, carried native-only as an info.
+		// Reasoning as text, an argument-less terminal call, and injected turns with no rows (tail).
 		name: "the current transcript generation",
 		transcript: jsonl(
 			`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Aug 3, 2026, 9:00 AM (UTC+2)</timestamp>\n<user_query>\nstart the dev server\n</user_query>"}]}}`,
@@ -59,8 +56,7 @@ func TestStoreAndTranscriptGenerations(t *testing.T) {
 			"tool":{"kind":15},"status":"completed","rawArgs":"{\"command\":\"ls -la /work/api\"}","result":"ok"}`),
 		want: map[int][]string{1: {"b2", "b3"}},
 	}, {
-		// One store holds reasoning in two encodings: server-hydrated thinking is a string holding the
-		// object, locally streamed thinking is the object.
+		// Server-hydrated thinking is a string holding the object, locally streamed thinking the object.
 		name:       "server-hydrated reasoning is decoded, not dropped",
 		query:      loaderQuery,
 		transcript: turn(text("Checking where the loader's bounds are set."), text("The bound is the row cap.")),

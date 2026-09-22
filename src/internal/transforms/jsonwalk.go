@@ -11,8 +11,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/packs"
 )
 
-// maxDepth bounds recursion in the JSON walk; deeper lines fall back to the raw scanner. 256 is
-// 25 times deeper than the deepest observed transcript record.
+// maxDepth, 25 times the deepest observed record, sends deeper lines to the raw scanner.
 const maxDepth = 256
 
 var (
@@ -27,8 +26,8 @@ var decoderOptions = []jsontext.Options{
 	jsontext.AllowInvalidUTF8(true),
 }
 
-// jsonWalker validates, decodes, and records source edits in one token pass. The bytes.Buffer
-// lets jsontext borrow from the original line rather than copy it into its streaming buffer.
+// jsonWalker validates, decodes and records source edits in one token pass. The bytes.Buffer lets
+// jsontext borrow the original line rather than copy it.
 type jsonWalker struct {
 	s      *Scrubber
 	family string
@@ -104,7 +103,7 @@ func (w *jsonWalker) walkObject(depth int, path string) error {
 		}
 
 		field := joinFieldPath(path, key)
-		plan := w.s.planValue(key, "", FieldPath(field), w.family, w.scan)
+		plan := w.s.planValue(key, "", field, w.family, w.scan)
 		w.addPlan(raw, rawStart, key, plan)
 		if len(plan.spans) > 0 {
 			field = joinFieldPath(path, plan.apply(key))
@@ -138,7 +137,7 @@ func (w *jsonWalker) walkString(key, path string) error {
 		return err
 	}
 	w.addPlan(raw, rawStart, text,
-		w.s.planValue(text, key, FieldPath(path), w.family, w.scan))
+		w.s.planValue(text, key, path, w.family, w.scan))
 	return nil
 }
 

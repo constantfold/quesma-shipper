@@ -11,9 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The scanners claim to return exactly what their regex returned, so both paths are replayed
-// over input built to break the scanner, raw candidates compared as well as the checksummed
-// result, so a divergence the checksum happens to mask still fails.
+// Scanners replay against their regex, comparing raw candidates too, so a divergence the checksum
+// happens to mask still fails.
 
 // piiScannerRules returns the loaded rules that carry a hand scanner.
 func piiScannerRules(t *testing.T) []*Rule {
@@ -29,8 +28,7 @@ func piiScannerRules(t *testing.T) []*Rule {
 	return out
 }
 
-// scanCandidates is the rule's byte walk before guard and checksum: its slot in the shared
-// walk, or its own scanner.
+// scanCandidates is the rule's byte walk before guard and checksum.
 func scanCandidates(r *Rule, value string) []Span {
 	if r.fused != fusedNone {
 		var c ValueScan
@@ -59,8 +57,7 @@ func compareScannerAndRegex(t *testing.T, r *Rule, value string) {
 	}
 }
 
-// The cases the fuzz below would only reach by luck: candidates touching both ends of the
-// value, every separator position, runs one byte either side of every bound.
+// Cases the fuzz would reach only by luck: value ends, separator positions, runs either side of bounds.
 var piiEdgeValues = []string{
 	"", " ", "-", "0", "_", "abc", "\xff", "é", "\x80\x80\x80",
 	"12345678901", " 12345678901 ", "12345678901x", "x12345678901",
@@ -121,8 +118,7 @@ func TestPIIScannersAgreeWithTheirRegexOnFuzz(t *testing.T) {
 	}
 }
 
-// The email scanner, exhaustively over every string up to five of the pattern's structural
-// bytes, then over random '@'-dense values so real shapes appear at every offset.
+// Exhaustive over five structural bytes, then random '@'-dense values.
 func TestEmailScannerAgreesWithTheRegex(t *testing.T) {
 	email := ruleByID(t, PIICore, "email")
 	alphabet := []string{"@", ".", "-", "_", "%", "a", "c", "o", "m", "0", "!", "Z"}
@@ -152,8 +148,7 @@ func TestEmailScannerAgreesWithTheRegex(t *testing.T) {
 	}
 }
 
-// A rule reading its slot out of one reused scan gets what it would get alone, whichever rule
-// triggered the walk and whatever value the scan held before.
+// A slot of one reused scan answers as alone, whichever rule walked it and whatever it held before.
 func TestFusedScanAgreesWithStandaloneScanners(t *testing.T) {
 	var rules []*Rule
 	for _, r := range loadedRules(t, PIICore) {

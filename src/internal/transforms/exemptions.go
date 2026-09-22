@@ -9,21 +9,12 @@ func CompiledExemptions() map[string][]string {
 			// The record spine: redact any of these and the DAG dies.
 			"uuid", "parentUuid", "logicalParentUuid", "sessionId", "agentId",
 			"message.id", "requestId", "promptId", "interruptedMessageId",
-			// The session slug ("sleepy-mochi") is long and mixed enough to trip the
-			// backstop; path-user still rewrites a username inside it.
+			// The session slug ("sleepy-mochi") trips the backstop; path-user still rewrites it.
 			"slug",
-			// The spawn-tree and tool-call joins: the same id as the parent transcript,
-			// the subagent .meta.json, the tool_result blocks and the server-tool
-			// variant each spell it.
-			"message.content[].id",
-			"message.content[].tool_use_id",
-			"toolUseResult.tool_use_id",
-			"toolUseResult.results[].tool_use_id",
-			"toolUseId",
-			"sourceToolUseID",
-			"attachment.toolUseID",
-			// A filesystem path by construction, and the source of the per-repository
-			// dimension downstream (repo is its basename).
+			// The spawn-tree and tool-call joins, one id as each record kind spells it.
+			"message.content[].id", "message.content[].tool_use_id", "toolUseResult.tool_use_id",
+			"toolUseResult.results[].tool_use_id", "toolUseId", "sourceToolUseID", "attachment.toolUseID",
+			// A filesystem path, and the source of the per-repository dimension downstream.
 			"cwd",
 		},
 		"codex": {
@@ -32,14 +23,12 @@ func CompiledExemptions() map[string][]string {
 		},
 		"cursor": {
 			"composerId", "bubbleId", "checkpointId", "requestId",
-			// A hex-encoded image the backstop would destroy wholesale: a declared
-			// opaque payload, keyed on the nested path.
+			// A hex-encoded image, a declared opaque payload the backstop would destroy.
 			"content[].image.hex",
 		},
 		"project-map": {
-			// Filesystem paths, project_dir arriving with __USER__ already baked in,
-			// which ADDS entropy. Inert today (the inventory is raw-text scanned) so that
-			// adding a jsonl sniff later cannot silently expose them to the backstop.
+			// Paths carrying __USER__, which ADDS entropy. Inert while the inventory is raw-text
+			// scanned, so a later jsonl sniff cannot silently expose them to the backstop.
 			"cwd", "project_dir",
 		},
 		"*": {"timestamp", "version"},

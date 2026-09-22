@@ -13,15 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// BenchmarkScrubSynthetic is the portable harness a change can be iterated against;
-// BenchmarkScrubRealData measures the truth. Two shapes load different parts of the ladder:
-// transcript-1MiB is many short lines, so per-line cost dominates, while bigvalue-8MiB is one
-// line whose payload sits in a single string, so the per-value matchers do.
+// BenchmarkScrubSynthetic is the portable harness; BenchmarkScrubRealData measures the truth.
+// transcript-1MiB is many short lines, bigvalue-8MiB one line whose payload is a single string.
 func BenchmarkScrubSynthetic(b *testing.B) {
-	benchmarkSynthetic(b, syntheticTranscript, syntheticBigValue)
+	benchmarkSynthetic(b, syntheticTranscript(1<<20), syntheticBigValue(8<<20, 20260817, randCommandOutput))
 }
 
-func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
+func benchmarkSynthetic(b *testing.B, transcript, bigValue []byte) {
 	cfg := DefaultConfig()
 	cfg.Username = "devuser"
 	s, err := New(cfg)
@@ -31,8 +29,8 @@ func benchmarkSynthetic(b *testing.B, transcript, bigValue func(int) []byte) {
 		name    string
 		payload []byte
 	}{
-		{"transcript-1MiB", transcript(1 << 20)},
-		{"bigvalue-8MiB", bigValue(8 << 20)},
+		{"transcript-1MiB", transcript},
+		{"bigvalue-8MiB", bigValue},
 	}
 
 	for _, tc := range cases {
@@ -106,11 +104,7 @@ func syntheticTranscript(size int) []byte {
 
 // syntheticBigValue is one record whose tool result holds the whole payload: the shape a
 // spilled build log or a big file read takes.
-func syntheticBigValue(size int) []byte {
-	return syntheticBigValueWith(size, 20260817, randCommandOutput)
-}
-
-func syntheticBigValueWith(size int, seed int64, output func(*rand.Rand, int) string) []byte {
+func syntheticBigValue(size int, seed int64, output func(*rand.Rand, int) string) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	body := output(rng, size)
 	line, err := json.Marshal(map[string]any{
@@ -154,16 +148,14 @@ func syntheticToolResult(rng *rand.Rand, output func(*rand.Rand, int) string) ma
 	}
 }
 
-// BenchmarkScrubSyntheticAt is BenchmarkScrubSynthetic's corpus with '@' in it: the original has
-// none, so the email rule (the most expensive pattern on real data) never fires there. A second
-// benchmark rather than an edit to the first, whose numbers are the tracked series.
+// BenchmarkScrubSyntheticAt adds '@', which the tracked series lacks, so the email rule, the most
+// expensive pattern on real data, fires.
 func BenchmarkScrubSyntheticAt(b *testing.B) {
-	benchmarkSynthetic(b, syntheticTranscriptAt, syntheticBigValueAt)
+	benchmarkSynthetic(b, syntheticTranscriptAt(1<<20), syntheticBigValue(8<<20, 20260819, randCommandOutputAt))
 }
 
-// randCommandOutputAt carries the '@' shapes tool output actually has: scoped package specs,
-// decorators, doc tags, ssh targets, git author lines. Most are NOT emails, which is the point:
-// the rule's cost is paid on every '@' and recovered only on the few that complete a match.
+// randCommandOutputAt carries the '@' shapes tool output has, mostly NOT emails: the rule's cost is
+// paid on every '@' and recovered only on the few that complete a match.
 func randCommandOutputAt(rng *rand.Rand, n int) string {
 	var sb strings.Builder
 	sb.Grow(n + 128)
@@ -208,10 +200,6 @@ func syntheticTranscriptAt(size int) []byte {
 		}
 	}
 	return []byte(b.String())
-}
-
-func syntheticBigValueAt(size int) []byte {
-	return syntheticBigValueWith(size, 20260819, randCommandOutputAt)
 }
 
 const hexDigits = "0123456789abcdef"
@@ -276,19 +264,14 @@ func randCommandOutput(rng *rand.Rand, n int) string {
 	return sb.String()
 }
 
-// benchRealDataCap bounds how much of the tree one iteration scrubs: enough to dominate any
-// fixed cost, small enough to keep a run coffee-length.
+// benchRealDataCap bounds one iteration: enough to dominate fixed costs, short enough for coffee.
 const benchRealDataCap = 256 << 20
 
-// BenchmarkScrubRealData is the measurement that counts: a real transcript tree, whose value
-// lengths, secret density and prose no generator reproduces. It skips unless SCRUB_BENCH_DIR
-// names a directory of .jsonl files, so CI never depends on private data.
+// BenchmarkScrubRealData is the measurement that counts, over a real transcript tree no generator
+// reproduces. Run it serially, as a shared machine moves the number more than most changes do:
 //
 //	SCRUB_BENCH_DIR=$HOME/.claude/projects go test ./internal/transforms/ \
 //	    -bench BenchmarkScrubRealData -benchmem -run '^$' -benchtime 1x
-//
-// Run it serially: it is minutes long, and a benchmark sharing the machine moves the number
-// more than most changes do.
 func BenchmarkScrubRealData(b *testing.B) {
 	root := os.Getenv("SCRUB_BENCH_DIR")
 	if root == "" {

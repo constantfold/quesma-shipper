@@ -14,8 +14,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms/cursorjoin"
 )
 
-// THE JOIN. What the transcript cannot say, the derived object does, beside the native lines
-// byte for byte, with provenance, and as the same bytes on every run.
+// THE JOIN: what the transcript cannot say, beside the native lines, with provenance, deterministically.
 func TestTheJoinCarriesTheFieldsTheTranscriptLacks(t *testing.T) {
 	d := successfulObject(t, run(t, fullRows(), transcript))
 	require.Equal(t, transforms.StatusOK, d.Status)
@@ -60,8 +59,7 @@ func TestAChangedStoreChangesTheOutputHash(t *testing.T) {
 	assert.Contains(t, string(after.Payload), "A LATE RESULT ARRIVED")
 }
 
-// No database is not an error, and an unreadable one fails open with a count: either way it costs
-// this flush's DB-side fields only.
+// No database is not an error, and an unreadable one fails open with a count.
 func TestAMissingOrUnreadableDatabaseFailsOpen(t *testing.T) {
 	res := enrichAt(t, "", transcript)
 	assert.Equal(t, transforms.EnrichResult{EnricherID: "cursor-transcript-join", Version: 4, Skipped: 1,
@@ -75,14 +73,9 @@ func TestAMissingOrUnreadableDatabaseFailsOpen(t *testing.T) {
 	assert.NotEmpty(t, res.Notes, "an unreadable database produced no note")
 }
 
-// Both travel in every manifest, so a fixed join's output supersedes a broken one's. Only the global
-// store is declared; the workspace state.vscdb is deferred.
-func TestTheEnricherIsIdentifiedByIDAndVersion(t *testing.T) {
-	e := cursorjoin.New()
-	assert.Equal(t, "cursor-transcript-join", e.ID())
-	assert.Equal(t, 4, e.Version())
-	assert.Equal(t, "cursorDiskKV", e.Table())
-	for _, c := range e.DBCandidates() {
+// Only the global store is declared; the workspace state.vscdb is deferred.
+func TestOnlyTheGlobalStoreIsDeclared(t *testing.T) {
+	for _, c := range cursorjoin.New().DBCandidates() {
 		assert.Contains(t, c, "globalStorage")
 	}
 }

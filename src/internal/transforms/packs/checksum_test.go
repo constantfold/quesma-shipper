@@ -2,9 +2,8 @@ package packs
 
 import "testing"
 
-// The pii-core rules against the identifiers they exist for and the shapes that only look like
-// them. Every rejected card row is Luhn-valid and was redacted by the old card rule on a real
-// archive; the comment names the check that now rejects it.
+// Every rejected card row is Luhn-valid and was redacted by the old card rule on a real archive;
+// its comment names the check that now rejects it.
 func TestPIIRulesFindIdentifiersAndRejectLookalikes(t *testing.T) {
 	hit := func(in, want string) probe { return probe{in, want} }
 	miss := func(in string) probe { return probe{in: in} }

@@ -13,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The version travels in every derived object's manifest, so output from a join fixed later
-// supersedes output from this one. Bump it whenever the join's answer can change.
+// The version travels in every derived object's manifest; bump it whenever the join's answer can change.
 const (
 	id      = "cursor-transcript-join"
 	version = 4
@@ -42,8 +41,7 @@ func (*Enricher) NeedsUnits() bool { return true }
 // Prefixes rather than the whole table: state.vscdb also holds checkpoints, diffs and tokens.
 func (*Enricher) Keyspaces() []string { return []string{composerPrefix, bubblePrefix} }
 
-// Compiled in rather than configurable: a config path would let a config layer point this
-// enricher at an arbitrary SQLite file. The workspace store is absent.
+// Compiled in, never configured, so no config layer can point this enricher at an arbitrary SQLite file.
 const cursorStateDB = "Cursor/User/globalStorage/state.vscdb"
 
 func (*Enricher) DBCandidates() []string {
@@ -84,7 +82,7 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	}
 
 	if read.Truncated {
-		// A partial view, not a failed one: rows are ordered by key, so a suffix of the keyspace is missing.
+		// Rows are ordered by key, so a suffix of the keyspace is missing.
 		res.Notes = append(res.Notes, fmt.Sprintf("state.vscdb row cap reached at %d rows: DB-side fields are "+
 			"missing for whatever sorts after the last key read", len(read.Rows)))
 	}

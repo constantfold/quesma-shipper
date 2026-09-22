@@ -5,8 +5,7 @@ import "testing"
 // Tool-specific shapes of the stored arguments: what they must not match, and what they still must.
 func TestToolArgumentShapes(t *testing.T) {
 	runJoinCases(t, []joinCase{{
-		// A directory path is a prefix of every file under it, so substring evidence matched a search
-		// of a directory to a read of a file inside it.
+		// A directory path is a prefix of every file under it.
 		name:       "a directory argument does not match a file beneath it",
 		query:      "audit the config package",
 		transcript: turn(use("Grep", `{"pattern":"deny_additions","path":"/work/api/internal/config"}`), use("Read", `{"path":"/work/api/internal/config/resolve.go"}`)),
@@ -49,8 +48,7 @@ func TestToolArgumentShapes(t *testing.T) {
 			params: `{"noCodeblock":true,"cloudAgentEdit":false}`, result: "the model produced an invalid edit"}.row()},
 		want: map[int][]string{1: {"edit"}},
 	}, {
-		// The terminal params carry a parse tree of the command and the workspace root; a fragment of
-		// it equal to the read's single value let the read steal the terminal bubble.
+		// A fragment of the terminal parse tree equal to the read's only value must not steal the bubble.
 		name:  "the terminal parse tree cannot speak for another tool",
 		query: "survey the repo",
 		transcript: jsonl(turn(use("Read", `{"file_path":"render.yaml"}`)),

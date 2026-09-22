@@ -14,16 +14,14 @@ import (
 	"strings"
 )
 
-// evidence is what a tool bubble's recorded arguments say about a transcript tool_use. The
-// order is the candidate ranking: when no bubble's arguments agree in full, matchBlock takes
-// the highest grade in reach before falling back to position.
+// evidence grades a bubble's recorded arguments against a tool_use; the order is the candidate ranking.
 type evidence int
 
 const (
 	// The two sides recorded comparable values and none of them agree.
 	evidenceNegative evidence = iota
-	// Some values agree, none long enough to rule out coincidence. Ranks below an empty record: a
-	// bubble whose values half-belong to another call is probably that call's.
+	// Some values agree, none long enough to rule out coincidence. Below an empty record: a bubble
+	// whose values half-belong to another call is probably that call's.
 	evidenceWeak
 	// One side recorded nothing, as current stores do for most terminal commands; position only.
 	evidenceNeutral
@@ -33,9 +31,8 @@ const (
 	evidencePositive
 )
 
-// argsEvidence weighs a transcript tool_use against a store tool call's recorded arguments.
-// Alongside the grade it returns the strength — how many values agreed — because two bubbles can
-// both grade positive and the one agreeing on more of the call is the call.
+// argsEvidence also returns how many values agreed: of two positive bubbles, the one agreeing on
+// more of the call is the call.
 func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 	if len(input) == 0 {
 		return evidenceNeutral, 0
@@ -49,8 +46,7 @@ func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 		return evidenceNeutral, 0
 	}
 
-	// Whole value against whole value, not against the stored text: the sides name arguments
-	// differently (glob_pattern/globPattern), and substring evidence matches unrelated calls — a
+	// Whole values, not substrings of the stored text: the sides name arguments differently, and a
 	// glob of `**/*` sits inside `**/*.{md,go}`, a directory inside every path under it.
 	var storedAny any
 	parsed := json.Unmarshal([]byte(stored), &storedAny) == nil
@@ -122,16 +118,14 @@ func argsEvidence(input json.RawMessage, t *toolFormerData) (evidence, int) {
 	}
 }
 
-// The fragments Cursor splices into a command between the transcript's record and the store's,
-// observed live 2026-08-19. The literals are the vendor's, so their drift lands as a mismatch
-// alarm. The trailer carries its leading space so it strips wherever the flag sits.
+// What Cursor splices into a command between the transcript and the store, observed 2026-08-19.
+// The trailer carries its leading space so it strips wherever the flag sits.
 var cursorAttributions = []string{
 	` --trailer "Co-authored-by: Cursor <cursoragent@cursor.com>"`,
 	"\n\nMade with [Cursor](https://cursor.com)",
 }
 
-// stripCursorAttribution removes the splices in both the plain and the JSON-escaped form: inside
-// a stored blob holding JSON as a string, the plain literal never occurs.
+// stripCursorAttribution also removes the JSON-escaped form, the one inside a stored JSON string.
 func stripCursorAttribution(s string) string {
 	for _, a := range cursorAttributions {
 		s = strings.ReplaceAll(s, a, "")
@@ -149,16 +143,14 @@ const (
 	longArgLen = 32
 )
 
-// argValue is one comparable argument value in canonical string form; weak marks the ones that
-// can contradict identity but never confirm it.
+// argValue is one argument in canonical string form; a weak one can contradict identity, never confirm it.
 type argValue struct {
 	v    string
 	weak bool
 }
 
-// collectArgValues walks either side's decoded arguments, at any depth, in a deterministic order.
-// Numbers are weak like short strings — offsets recur across unrelated calls — and booleans are no
-// evidence at all: a flag the store never records demoted the true bubble on most terminal calls.
+// collectArgValues walks decoded arguments at any depth in a deterministic order. Numbers are weak,
+// since offsets recur across calls; booleans are no evidence, as the store often omits flags.
 func collectArgValues(v any, skip map[string]bool, out []argValue) []argValue {
 	switch t := v.(type) {
 	case string:
@@ -200,8 +192,7 @@ var genericArgKeys = map[string]bool{
 	"explanation":       true,
 }
 
-// namesCompatible reports whether a display name and a store internal name plausibly denote the
-// same tool. Only for the positional fallbacks: a mapping this coarse never overrides arguments.
+// namesCompatible is for the positional fallbacks only: a mapping this coarse never overrides arguments.
 func namesCompatible(display string, t *toolFormerData) bool {
 	d, in := normaliseToolName(display), normaliseToolName(cmp.Or(t.Name, string(t.Tool)))
 	if d == "" || in == "" || d == in || strings.Contains(in, d) || strings.Contains(d, in) {

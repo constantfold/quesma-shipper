@@ -9,11 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The seeded corpus DefaultEntropyConfig promises. Three populations, three contracts: benign
-// path-shaped content draws ZERO entropy hits, since a path the backstop eats is a repository
-// name lost downstream; git SHAs get a small budget rather than zero, because uniform 40-hex
-// averages ~3.73 bits/char against the 3.8 threshold and the tail crosses it; planted secrets
-// are caught at 100% recall. A fixed seed makes a retune a deterministic diff, not a flake.
+// The seeded corpus DefaultEntropyConfig promises: benign paths draw ZERO entropy hits (an eaten path
+// is a repository name lost downstream), git SHAs a small budget (uniform 40-hex averages ~3.73
+// bits/char against 3.8), and planted secrets 100% recall. The fixed seed makes a retune a diff.
 func TestSeededCorpusCalibration(t *testing.T) {
 	s := newScrubber(t)
 	rng := &xorshift{state: 0x9E3779B97F4A7C15}
@@ -30,9 +28,8 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	}
 
 	// --- population 2: git SHAs, budgeted ------------------------------------
-	// With this seed exactly 7 of 50 fire (14%), a property of the hex threshold alone: a SHA has
-	// no slash, so the alphabet cannot touch it. Recorded so a retune announces itself as a count
-	// change rather than a surprise in fleet density.
+	// With this seed exactly 7 of 50 fire, a property of the hex threshold alone, so a retune
+	// announces itself as a count change rather than a surprise in fleet density.
 	const shaLines = 50
 	const shaFireWithThisSeed = 7
 	fired := 0
@@ -57,8 +54,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 		{"aws access key id", "run with AKIAIOSFODNN7EXAMPLE as the principal", "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"},
 		{"github pat", "push using ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"},
 		{"anthropic key", "export it: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"},
-		// The slash-carrying base64 shape the backstop no longer covers bare: labeled, it must always
-		// be caught. Attribution is not asserted, since key-name and aws-secret-key both claim it.
+		// The slash-carrying shape the backstop misses bare must be caught labeled, by either claimant.
 		{"labeled slash-bearing base64", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ""},
 		{"shapeless value behind a telling name", "MY_SERVICE_TOKEN=plain-looking-value-1234", "plain-looking-value-1234", "key-name"},
 		{"bare slash-free base64url blob", "stash " + randomHighEntropyToken(rng, 40) + " somewhere", "", "generic-entropy"},
@@ -81,8 +77,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	}
 
 	// --- the alarm ------------------------------------------------------------
-	// Whole-corpus density is the fleet signal the manifests carry; the ceiling exists to catch a
-	// rule that starts eating content.
+	// Whole-corpus density is the fleet signal; the ceiling catches a rule that starts eating content.
 	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), Hint{Family: "claude-code", JSONL: true})
 	require.NoError(t, err)
 	if d := res.Density(); d >= 0.05 {
@@ -91,9 +86,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 }
 
 // generateBenignLines builds path-heavy records in the shapes that fired while "/" was in the
-// entropy alphabet: __REDACTED:generic-entropy__ once shipped as the repository name of 144 of
-// 818 sessions. Carriers rotate between cwd (exempt), free text and tool output (unexempt), so
-// the alphabet is exercised and not just the exemptions.
+// entropy alphabet, rotating between an exempt carrier (cwd) and unexempt ones.
 func generateBenignLines(rng *xorshift, n int) []string {
 	segs := []string{
 		"Work2026", "SampleOrg", "blink-UI", "webFrontend", "GolandProjects",
@@ -173,8 +166,7 @@ func randomUUID(rng *xorshift) string {
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
-// randomHighEntropyToken rejects drafts until a test-local Shannon measure clears the engine's
-// threshold with margin, so the recall assertion is fair rather than seed-lucky.
+// randomHighEntropyToken clears the threshold with margin, so the recall assertion is not seed-lucky.
 func randomHighEntropyToken(rng *xorshift, n int) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	for {

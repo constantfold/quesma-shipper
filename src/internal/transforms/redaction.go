@@ -42,9 +42,9 @@ func (p valuePlan) apply(value string) string {
 
 // planValue applies the full ladder to one decoded JSON string without building the rewritten
 // value. An exempt field stands down the heuristics and nothing else.
-func (s *Scrubber) planValue(value, key string, field FieldPath, family string, scan *packs.ValueScan) valuePlan {
+func (s *Scrubber) planValue(value, key, field, family string, scan *packs.ValueScan) valuePlan {
 	entropy := s.entropy
-	if s.exempt.Exempt(family, field) {
+	if s.exempt["*"][field] || s.exempt[family][field] {
 		entropy = nil
 	}
 	return s.planValueWith(value, entropy, key, scan)
@@ -53,11 +53,7 @@ func (s *Scrubber) planValue(value, key string, field FieldPath, family string, 
 func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key string, scan *packs.ValueScan) valuePlan {
 	// A key that names a secret takes the whole value, whatever shape the value has.
 	if key != "" && s.keyNames.MatchesKeyName(key) && value != "" {
-		return valuePlan{
-			spans:    []replacementSpan{{Start: 0, End: len(value), Replacement: Sentinel("key-name")}},
-			redacted: len(value),
-			hits:     map[string]int{"key-name": 1},
-		}
+		return wholeValuePlan(value, "key-name")
 	}
 
 	// A keyword set that did not fire means the matcher behind it cannot match.
@@ -79,11 +75,7 @@ func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key stri
 	// value goes: a patched re-encoding would rewrite bytes the shipper preserves.
 	if len(patternSpans) == 0 && len(heuristicSpans) == 0 && len(value) >= base64MinLength {
 		if id, hit := s.base64Hit(value, scan); hit {
-			return valuePlan{
-				spans:    []replacementSpan{{Start: 0, End: len(value), Replacement: Sentinel(id)}},
-				redacted: len(value),
-				hits:     map[string]int{id: 1},
-			}
+			return wholeValuePlan(value, id)
 		}
 	}
 
@@ -111,6 +103,14 @@ func (s *Scrubber) planValueWith(value string, entropy *entropyMatcher, key stri
 		}
 	}
 	return plan
+}
+
+func wholeValuePlan(value, ruleID string) valuePlan {
+	return valuePlan{
+		spans:    []replacementSpan{{Start: 0, End: len(value), Replacement: Sentinel(ruleID)}},
+		redacted: len(value),
+		hits:     map[string]int{ruleID: 1},
+	}
 }
 
 // pathUserReplacementSpans finds username occurrences in the detector-rewritten value without
@@ -203,4 +203,105 @@ func base64Shaped(s string) bool {
 		}
 	}
 	return true
+}
+
+// Span is a rule-attributed byte range shared with the pattern matchers.
+type Span = packs.Span
+
+// Sentinel identifies the rule, never the secret: even a secret's hash can reveal it.
+func Sentinel(ruleID string) string {
+	return sentinelPrefix + ":" + ruleID + "__"
+}
+
+// sentinelPrefix is the part of every sentinel inside the entropy candidate alphabet, so the
+// entropy matcher skips candidates carrying it, or a re-scrub eats the previous pass's ledger.
+const sentinelPrefix = "__REDACTED"
+
+// prioritizedSpan resolves overlaps by confidence: 0 is a pattern rule, 1 a heuristic.
+type prioritizedSpan struct {
+	Span
+	priority int
+}
+
+// resolveSpans merges overlaps into one placeholder attributed to the highest-confidence rule.
+func resolveSpans(value string, patternSpans, heuristicSpans []Span) ([]Span, int, map[string]int) {
+	if len(patternSpans) == 0 && len(heuristicSpans) == 0 {
+		return nil, 0, nil
+	}
+
+	spans := make([]prioritizedSpan, 0, len(patternSpans)+len(heuristicSpans))
+	for _, s := range patternSpans {
+		spans = append(spans, prioritizedSpan{Span: s, priority: 0})
+	}
+	for _, s := range heuristicSpans {
+		spans = append(spans, prioritizedSpan{Span: s, priority: 1})
+	}
+
+	slices.SortFunc(spans, func(a, b prioritizedSpan) int {
+		if a.Start != b.Start {
+			return cmp.Compare(a.Start, b.Start)
+		}
+		return cmp.Or(
+			cmp.Compare(a.priority, b.priority),
+			cmp.Compare(b.End, a.End),
+			cmp.Compare(a.RuleID, b.RuleID),
+		)
+	})
+
+	// Keeping both would nest placeholders or split one secret across two.
+	spans = dropOverlappedHeuristics(spans)
+
+	resolved := make([]Span, 0, len(spans))
+	hits := map[string]int{}
+	redacted := 0
+	cursor := 0
+
+	for _, s := range spans {
+		if s.Start < cursor || s.Start < 0 || s.End > len(value) || s.Start >= s.End {
+			continue
+		}
+		resolved = append(resolved, s.Span)
+		hits[s.RuleID]++
+		redacted += s.End - s.Start
+		cursor = s.End
+	}
+	return resolved, redacted, hits
+}
+
+// dropOverlappedHeuristics removes heuristic spans intersecting a pattern span and widens that
+// span over any reach past it, so one secret yields one confidently attributed placeholder.
+func dropOverlappedHeuristics(spans []prioritizedSpan) []prioritizedSpan {
+	var patterns []prioritizedSpan
+	for _, s := range spans {
+		if s.priority == 0 {
+			patterns = append(patterns, s)
+		}
+	}
+
+	out := make([]prioritizedSpan, 0, len(spans))
+	for _, s := range spans {
+		if s.priority == 0 {
+			out = append(out, s)
+			continue
+		}
+		overlapped := false
+		for i, p := range patterns {
+			if s.Start < p.End && p.Start < s.End {
+				if s.End > patterns[i].End {
+					patterns[i].End = s.End
+					for j := range out {
+						if out[j].priority == 0 && out[j].Start == p.Start && out[j].RuleID == p.RuleID {
+							out[j].End = s.End
+						}
+					}
+				}
+				overlapped = true
+				break
+			}
+		}
+		if !overlapped {
+			out = append(out, s)
+		}
+	}
+	return out
 }
