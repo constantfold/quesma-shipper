@@ -46,15 +46,16 @@ func appForExecutable(exe string) (string, bool) {
 }
 
 func bundleIdentifierOf(app string) string {
-	plist := filepath.Join(app, "Contents", "Info.plist")
-	if _, err := os.Stat(plist); err != nil {
-		return ""
-	}
-	out, err := exec.Command("/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+	id, _ := plistValue(filepath.Join(app, "Contents", "Info.plist"), "CFBundleIdentifier")
+	return id
+}
+
+func plistValue(plist, key string) (string, error) {
+	out, err := exec.Command("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist).CombinedOutput()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 // applyAppPackage swaps the bundle in whole: the staged one is validated before anything moves.
@@ -106,11 +107,11 @@ func validateAppBundle(app, version string) error {
 		releaseVersionField:  version,
 	}
 	for key, want := range checks {
-		out, err := exec.Command("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist).CombinedOutput()
+		got, err := plistValue(plist, key)
 		if err != nil {
-			return fmt.Errorf("reading %s from update: %w: %s", key, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("reading %s from update: %w", key, err)
 		}
-		if got := strings.TrimSpace(string(out)); got != want {
+		if got != want {
 			return fmt.Errorf("update %s is %q, want %q", key, got, want)
 		}
 	}

@@ -1,5 +1,5 @@
-// Shared service lifecycle for per-user agents. Platform packages own the actual supervisor;
-// common owns the input contract and the last-run state used to detect a silent agent.
+// Shared service lifecycle for per-user agents: platform packages own the actual supervisor,
+// common owns the input contract and the reported status.
 package common
 
 import (
@@ -19,10 +19,8 @@ const (
 	KindLaunchd     Kind = "launchd"
 	KindSystemd     Kind = "systemd-user"
 	KindWindowsTask Kind = "windows-task"
-
 	// KindCron is the non-systemd Linux fallback: the client prints a crontab line, never edits one.
 	KindCron Kind = "cron"
-
 	// KindUnsupported means no supervision here; `quesma-shipper run` still works in the foreground.
 	KindUnsupported Kind = "unsupported"
 )
@@ -31,20 +29,15 @@ const (
 type Spec struct {
 	// Executable is the absolute path to the binary; a relative path or a moving symlink breaks.
 	Executable string
-
 	// Args is the verb the agent runs: `run`, so the flock and the schedule live in one process.
 	Args []string
-
 	// Home and StateDir go into the agent's environment; launchd hands an agent almost none.
 	Home     string
 	StateDir string
-
 	// LogDir is where stdout/stderr go; discarded output makes "it never runs" undiagnosable.
 	LogDir string
-
 	// Tick matters only to the cron fallback, which IS the ticker; zero means 15 minutes.
 	Tick time.Duration
-
 	// StopTimeout must outlast the drain deadline: a drain killed after SIGTERM looks clean.
 	StopTimeout time.Duration
 }
@@ -74,22 +67,16 @@ func ExitTimeout(spec Spec) time.Duration {
 // Status is what `status` and `doctor` report.
 type Status struct {
 	Kind Kind
-
 	// Installed means the unit or plist file exists on disk.
 	Installed bool
-
 	// Loaded means the supervisor picked it up; written-but-never-loaded is the common failure.
 	Loaded bool
-
 	// Path is the unit or plist file.
 	Path string
-
 	// Program is set by supervisors whose entries are not represented by a readable file.
 	Program string
-
 	// LastRun is when the loop last completed a flush; zero on a loaded agent is the alarm.
 	LastRun time.Time
-
 	// Detail explains the state in a sentence, including whatever the supervisor said.
 	Detail string
 }
