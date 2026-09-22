@@ -93,7 +93,7 @@ would compile, so the table is the reference for what direction is intended.
 | `src/cmd/quesma-shipper` | `src/app`, `src/internal/cli`, `src/internal/platform` |
 | `src/e2e` | — |
 | `src/internal/cli` | `src/app`, `src/internal/config`, `src/internal/controlplane`, `src/internal/engine`, `src/internal/formats`, `src/internal/identity`, `src/internal/legal`, `src/internal/platform`, `src/internal/platform/auditlog`, `src/internal/platform/crashjournal`, `src/internal/sources`, `src/packaging` |
-| `src/internal/config` | `src/internal/platform`, `src/internal/sources`, `src/internal/transforms`, `src/internal/transforms/packs` |
+| `src/internal/config` | `src/internal/platform`, `src/internal/sources`, `src/internal/transforms`, `src/internal/transforms/packs`, `src/internal/upload` |
 | `src/internal/controlplane` | `src/internal/config`, `src/internal/formats`, `src/internal/platform` |
 | `src/internal/engine` | `src/internal/formats`, `src/internal/identity`, `src/internal/platform`, `src/internal/platform/auditlog`, `src/internal/sources`, `src/internal/transforms` |
 | `src/internal/formats` | — |
