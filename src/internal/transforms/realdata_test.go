@@ -1,17 +1,13 @@
-package transforms_test
+package transforms
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 // TestRealDataRescrub replays the scrubber over a decrypted archive mirror (SCRUB_REALDATA_DIR,
@@ -26,40 +22,26 @@ func TestRealDataRescrub(t *testing.T) {
 
 	// Username stays empty on purpose: the mirror's content already carries __USER__, and naming one
 	// here would make byte-diffs mean two things.
-	s, err := transforms.New(transforms.DefaultConfig())
+	s, err := New(DefaultConfig())
 	require.NoError(t, err)
 
-	var (
-		objects, skipped, changed, engineErrs int
-		recordedHits                          = map[string]int{}
-		rescrubHits                           = map[string]int{}
-		filesWithNewHits                      int
-		samples                               []string
-	)
-	const maxSamples = 20
-
+	var objects, skipped, changed, engineErrs, filesWithNewHits int
+	recordedHits, rescrubHits := map[string]int{}, map[string]int{}
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".manifest.json") {
 			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".manifest.json") {
-			return nil
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		var m struct {
-			SourceFamily string                       `json:"source_family"`
-			Redaction    *transforms.RedactionSummary `json:"redaction"`
-		}
-		if err := json.Unmarshal(raw, &m); err != nil || m.Redaction == nil {
-			skipped++
-			return nil
+			SourceFamily string            `json:"source_family"`
+			Redaction    *RedactionSummary `json:"redaction"`
 		}
 		payloadPath := strings.TrimSuffix(path, ".manifest.json")
-		payload, err := os.ReadFile(payloadPath)
-		if err != nil {
+		payload, readErr := os.ReadFile(payloadPath)
+		if json.Unmarshal(raw, &m) != nil || m.Redaction == nil || readErr != nil {
 			skipped++
 			return nil
 		}
@@ -68,11 +50,7 @@ func TestRealDataRescrub(t *testing.T) {
 		for rule, n := range m.Redaction.RuleHits {
 			recordedHits[rule] += n
 		}
-
-		res, err := s.Scrub(payload, transforms.Hint{
-			Family: m.SourceFamily,
-			JSONL:  m.Redaction.ScanMode != transforms.ScanModeRawText,
-		})
+		res, err := s.Scrub(payload, Hint{Family: m.SourceFamily, JSONL: m.Redaction.ScanMode != ScanModeRawText})
 		if err != nil {
 			engineErrs++
 			return nil
@@ -85,9 +63,8 @@ func TestRealDataRescrub(t *testing.T) {
 			for rule, n := range res.RuleHits {
 				rescrubHits[rule] += n
 			}
-			if len(samples) < maxSamples {
-				samples = append(samples, fmt.Sprintf("%s %v\n  %s",
-					payloadPath, res.RuleHits, firstDiffLine(string(payload), string(res.Out))))
+			if filesWithNewHits <= 20 {
+				t.Logf("sample: %s %v\n  %s", payloadPath, res.RuleHits, firstDiffLine(string(payload), string(res.Out)))
 			}
 		}
 		return nil
@@ -95,50 +72,21 @@ func TestRealDataRescrub(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Logf("objects rescrubbed: %d (skipped %d, engine errors %d)", objects, skipped, engineErrs)
-	t.Logf("recorded hits in manifests (historical): %s", formatHits(recordedHits))
-	t.Logf("hits on rescrub (should be ~0): %s", formatHits(rescrubHits))
+	t.Logf("recorded hits in manifests (historical): %v", recordedHits)
+	t.Logf("hits on rescrub (should be ~0): %v", rescrubHits)
 	t.Logf("objects changed by rescrub: %d of %d; objects with new hits: %d", changed, objects, filesWithNewHits)
-	for _, sample := range samples {
-		t.Logf("sample: %s", sample)
-	}
 }
 
 func firstDiffLine(before, after string) string {
 	b, a := strings.Split(before, "\n"), strings.Split(after, "\n")
 	for i := range b {
 		if i >= len(a) || b[i] != a[i] {
-			return truncate(b[i], 160) + "\n  -> " + truncate(safeIndex(a, i), 160)
+			got := ""
+			if i < len(a) {
+				got = a[i]
+			}
+			return b[i][:min(len(b[i]), 160)] + "\n  -> " + got[:min(len(got), 160)]
 		}
 	}
 	return "(no line diff)"
-}
-
-func safeIndex(lines []string, i int) string {
-	if i < len(lines) {
-		return lines[i]
-	}
-	return ""
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
-func formatHits(hits map[string]int) string {
-	if len(hits) == 0 {
-		return "(none)"
-	}
-	keys := make([]string, 0, len(hits))
-	for k := range hits {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return hits[keys[i]] > hits[keys[j]] })
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%d", k, hits[k]))
-	}
-	return strings.Join(parts, " ")
 }

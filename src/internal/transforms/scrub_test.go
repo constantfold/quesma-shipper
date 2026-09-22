@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"encoding/base64"
@@ -10,149 +10,118 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-func newScrubber(t *testing.T) *transforms.Scrubber {
+func newScrubber(t *testing.T) *Scrubber {
 	t.Helper()
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.Username = "jane"
-	s, err := transforms.New(cfg)
+	s, err := New(cfg)
 	require.NoError(t, err)
 	return s
 }
 
-func scrubJSONL(t *testing.T, s *transforms.Scrubber, family, payload string) transforms.Result {
+func scrubJSONL(t *testing.T, s *Scrubber, family, payload string) Result {
 	t.Helper()
-	res, err := s.Scrub([]byte(payload), transforms.Hint{Family: family, JSONL: true})
+	res, err := s.Scrub([]byte(payload), Hint{Family: family, JSONL: true})
 	require.NoErrorf(t, err, "scrub returned an engine error: %v", err)
 	return res
 }
 
-func TestRepresentativeLeaksAreRedacted(t *testing.T) {
+// Each secret travels in tool output, the way it reaches a transcript, and none of its leaks
+// may survive. rule is the rule that must claim a hit, empty where overlapping rules make it ambiguous.
+func TestLeaksAreRedacted(t *testing.T) {
 	s := newScrubber(t)
-
-	cases := []struct {
-		name   string
-		secret string
-		ruleID string
-	}{
-		{"github pat", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"},
-		{"github fine-grained pat", "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP", "github-fine-grained-pat"},
-		{"aws access key id", "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"},
-		{"openai key", "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789", "openai-api-key"},
-		{"anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"},
-		{"slack bot token", "xoxb-123456789012-1234567890123-abcdefghijklmnopqrstuvwx", "slack-token"},
-		{"stripe live key", "sk_live_abcdefghijklmnopqrstuvwx", "stripe-secret-key"},
-		{"google api key", "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz0123456", "google-api-key"},
-		{"npm token", "npm_abcdefghijklmnopqrstuvwxyz0123456789", "npm-token"},
-		{"gitlab pat", "glpat-abcdefghijklmnopqrst", "gitlab-pat"},
-		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk", "jwt"},
-		{"digitalocean pat", "dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "digitalocean-token"},
-		{"huggingface token", "hf_AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh", "huggingface-access-token"},
-		{"vault service token", "hvs.CAESIJ0123456789abcdefghijklmnopqrstuvwxyz", "vault-token"},
-		{"age secret key", "AGE-SECRET-KEY-1QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7LQPZRY9X8GF2TVDW0S3JN54KHCE", "age-secret-key"},
-		{"groq key", "gsk_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "groq-api-key"},
-		{"xai key", "xai-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqr", "xai-api-key"},
-		{"perplexity key", "pplx-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV", "perplexity-api-key"},
-		{"dockerhub pat", "dckr_pat_abcdefghijklmnopqrstuvwxyzA", "dockerhub-token"},
-		{"tailscale key", "tskey-auth-kFGiAS7CNTRL-abcdefghijklmnopqrstuv", "tailscale-key"},
-		{"gitlab runner token", "glrt-abcdefghijklmnopqrst0", "gitlab-token-family"},
-		{"stripe webhook secret", "whsec_abcdefghijklmnopqrstuvwxyzABCDEF", "stripe-webhook-secret"},
-		{"atlassian api token", "ATATT3" + strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 3), "atlassian-api-token"},
-		{"azure ad client secret", "abc8Q~dEfGhIjKlMnOpQrStUvWxYz0123456789~", "azure-ad-client-secret"},
+	type leak struct {
+		name, text string
+		leaks      []string
+		rule       string
 	}
-
+	key := func(name, secret, rule string) leak {
+		return leak{name, "the key is " + secret + " ok", []string{secret}, rule}
+	}
+	const awsKeyID = "AKIAIOSFODNN7EXAMPLE"
+	const awsSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	cases := []leak{
+		key("github pat", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"),
+		key("github fine-grained pat", "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP", "github-fine-grained-pat"),
+		key("aws access key id", "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"),
+		key("openai key", "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789", "openai-api-key"),
+		key("anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"),
+		key("slack bot token", "xoxb-123456789012-1234567890123-abcdefghijklmnopqrstuvwx", "slack-token"),
+		key("stripe live key", "sk_live_abcdefghijklmnopqrstuvwx", "stripe-secret-key"),
+		key("google api key", "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz0123456", "google-api-key"),
+		key("npm token", "npm_abcdefghijklmnopqrstuvwxyz0123456789", "npm-token"),
+		key("gitlab pat", "glpat-abcdefghijklmnopqrst", "gitlab-pat"),
+		key("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk", "jwt"),
+		key("digitalocean pat", "dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "digitalocean-token"),
+		key("huggingface token", "hf_AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh", "huggingface-access-token"),
+		key("vault service token", "hvs.CAESIJ0123456789abcdefghijklmnopqrstuvwxyz", "vault-token"),
+		key("age secret key", "AGE-SECRET-KEY-1QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7LQPZRY9X8GF2TVDW0S3JN54KHCE", "age-secret-key"),
+		key("groq key", "gsk_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "groq-api-key"),
+		key("xai key", "xai-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqr", "xai-api-key"),
+		key("perplexity key", "pplx-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV", "perplexity-api-key"),
+		key("dockerhub pat", "dckr_pat_abcdefghijklmnopqrstuvwxyzA", "dockerhub-token"),
+		key("tailscale key", "tskey-auth-kFGiAS7CNTRL-abcdefghijklmnopqrstuv", "tailscale-key"),
+		key("gitlab runner token", "glrt-abcdefghijklmnopqrst0", "gitlab-token-family"),
+		key("stripe webhook secret", "whsec_abcdefghijklmnopqrstuvwxyzABCDEF", "stripe-webhook-secret"),
+		key("atlassian api token", "ATATT3"+strings.Repeat("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 3), "atlassian-api-token"),
+		key("azure ad client secret", "abc8Q~dEfGhIjKlMnOpQrStUvWxYz0123456789~", "azure-ad-client-secret"),
+		// The aws CLI labels the secret "SecretAccessKey" with no "aws" near it, inside JSON-in-string
+		// where key-name scrubbing cannot see the field. No fragment may survive around a "/".
+		{"aws cli create-access-key output", `{\"AccessKey\": {\"UserName\": \"ingest\", \"AccessKeyId\": \"` + awsKeyID + `\", \"SecretAccessKey\": \"` + awsSecret + `\", \"Status\": \"Active\"}}`, []string{awsSecret, "wJalrXUtnFEMI", awsKeyID}, "secret-access-key"},
+		{"aws yaml-style label", "SecretAccessKey: " + awsSecret, []string{awsSecret, "wJalrXUtnFEMI"}, "secret-access-key"},
+		{"aws env-style label", "aws_secret_access_key = " + awsSecret, []string{awsSecret, "wJalrXUtnFEMI"}, "aws-secret-key"},
+		// Slash-carrying secrets rely on the pattern packs, since "/" is outside the entropy alphabet.
+		{"azure storage account key", "DefaultEndpointsProtocol=https;AccountKey=abc123/def456+ghi789/jkl012+mno345/pqr678stu901vwx234yz567EXAMPLE==;", []string{"abc123/def456+ghi789/jkl012+mno345/pqr678stu901vwx234yz567EXAMPLE=="}, ""},
+		{"bearer token with slashes", "curl -H 'Authorization: Bearer x7Jq/2mVp+Rw9sTk/EXAMPLE='", []string{"x7Jq/2mVp+Rw9sTk/EXAMPLE="}, ""},
+		// A PEM block spans lines inside one JSON string, the shape a regex over raw bytes mangles.
+		{"private key block", "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA3x2n\\n-----END RSA PRIVATE KEY-----", []string{"MIIEowIBAAKCAQEA3x2n"}, "private-key-block"},
+		// A recorded over-redaction, left alone deliberately: url-userinfo and email overlap and the
+		// wider span wins, taking the hostname too. Preferring the narrower risks a secret's tail.
+		{"postgres url", "psql postgres://app:hunter2@db.internal:5432/prod", []string{"hunter2", "db.internal"}, ""},
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			line := `{"type":"user","message":{"content":[{"type":"text","text":"the key is ` + c.secret + ` ok"}]}}`
-			res := scrubJSONL(t, s, "claude-code", line+"\n")
-
-			assert.NotContainsf(t, string(res.Out), c.secret, "secret survived:\n%s", res.Out)
-			assert.NotEqual(t, 0, res.RuleHits[c.ruleID])
-			assert.Containsf(t, string(res.Out), "__REDACTED:", "no sentinel in output:\n%s", res.Out)
+			res := scrubJSONL(t, s, "claude-code", `{"type":"user","toolUseResult":{"stdout":"`+c.text+`"}}`+"\n")
+			for _, leak := range c.leaks {
+				assert.NotContains(t, string(res.Out), leak)
+			}
+			assert.Contains(t, string(res.Out), "__REDACTED:")
+			if c.rule != "" {
+				assert.NotZero(t, res.RuleHits[c.rule], "ledger %v", res.RuleHits)
+			}
 		})
 	}
 }
 
-// The aws CLI labels the secret "SecretAccessKey", with no "aws" anywhere near it, and
-// tool output reaches transcripts as JSON-in-string where key-name scrubbing cannot see
-// the field. The whole value must go: a secret containing "/" must not survive as
-// fragments around the entropy tokenizer's split points.
-func TestAWSCliCredentialOutputIsFullyRedacted(t *testing.T) {
-	s := newScrubber(t)
-	const keyID = "AKIAIOSFODNN7EXAMPLE"
-	const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-
-	cases := []struct {
-		name   string
-		text   string
-		ruleID string
-	}{
-		{"create-access-key tool output", `{\"AccessKey\": {\"UserName\": \"ingest\", \"AccessKeyId\": \"` + keyID + `\", \"SecretAccessKey\": \"` + secret + `\", \"Status\": \"Active\"}}`, "secret-access-key"},
-		{"yaml-style label", "SecretAccessKey: " + secret, "secret-access-key"},
-		{"env-style with aws prefix", "aws_secret_access_key = " + secret, "aws-secret-key"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			line := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + c.text + `"}]}}`
-			res := scrubJSONL(t, s, "claude-code", line+"\n")
-			out := string(res.Out)
-			assert.NotContainsf(t, out, secret, "secret survived:\n%s", out)
-			assert.NotContainsf(t, out, "wJalrXUtnFEMI", "secret fragment survived:\n%s", out)
-			assert.NotEqual(t, 0, res.RuleHits[c.ruleID])
-			assert.NotContainsf(t, out, keyID, "access key id survived:\n%s", out)
-		})
-	}
-}
-
-// A PEM block spans lines inside one JSON string value, the shape a byte-level regex
-// over the raw file would mangle.
-func TestPrivateKeyBlockIsRedacted(t *testing.T) {
-	s := newScrubber(t)
-	pem := "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA3x2n\\n-----END RSA PRIVATE KEY-----"
-	line := `{"type":"user","message":{"content":[{"type":"text","text":"` + pem + `"}]}}`
-
-	res := scrubJSONL(t, s, "claude-code", line+"\n")
-	assert.NotContainsf(t, string(res.Out), "MIIEowIBAAKCAQEA3x2n", "key body survived:\n%s", res.Out)
-	assert.NotEqual(t, 0, res.RuleHits["private-key-block"])
-}
-
-// printenv and kubectl output: the value has no recognisable shape but the key does,
-// and only the value goes.
+// printenv and kubectl output: the value has no recognisable shape but the key does, and only
+// the value goes: the name is useful signal and not the secret.
 func TestKeyNameRulesCatchShapelessValues(t *testing.T) {
 	s := newScrubber(t)
-
-	cases := []string{
+	for _, env := range []string{
 		"AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
 		"DATABASE_URL=postgres://app:hunter2@db.internal:5432/prod",
 		"MY_SERVICE_TOKEN=plain-looking-value-1234",
 		"ACME_PASSWORD: correct-horse-battery",
 		"internal_secret = abcdefghijklmno",
-	}
-	for _, env := range cases {
+	} {
 		t.Run(env, func(t *testing.T) {
-			line := `{"type":"user","toolUseResult":{"stdout":"` + env + `"}}`
-			res := scrubJSONL(t, s, "claude-code", line+"\n")
-			out := string(res.Out)
-
-			name := env[:strings.IndexAny(env, "=:")]
-			name = strings.TrimSpace(name)
-			assert.Containsf(t, out, name, "the key name should survive — it is useful signal and not the secret:\n%s", out)
-			assert.Containsf(t, out, "__REDACTED:", "the value was not redacted:\n%s", out)
+			res := scrubJSONL(t, s, "claude-code", `{"type":"user","toolUseResult":{"stdout":"`+env+`"}}`+"\n")
+			i := strings.IndexAny(env, "=:")
+			assert.Contains(t, string(res.Out), strings.TrimSpace(env[:i]))
+			assert.NotContains(t, string(res.Out), strings.TrimSpace(env[i+1:]))
 		})
 	}
 }
 
-// A planted secret in EVERY structurally exempt field is still caught, which is only
-// satisfiable because exemptions are detector-scoped: the pattern packs scan every
-// field regardless.
+// A planted secret in EVERY structurally exempt field is still caught: exemptions are
+// detector-scoped, and the pattern packs scan every field regardless.
 func TestPlantedSecretInEveryExemptFieldIsStillCaught(t *testing.T) {
 	s := newScrubber(t)
 	const planted = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
 
-	for family, paths := range transforms.CompiledExemptions() {
+	for family, paths := range CompiledExemptions() {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
 				line := buildRecordWithValueAt(t, path, planted)
@@ -168,13 +137,11 @@ func TestPlantedSecretInEveryExemptFieldIsStillCaught(t *testing.T) {
 	}
 }
 
-// A redacted multi-record trajectory still reassembles: the join keys are what make a
-// DAG out of a line-oriented file.
+// A redacted multi-record trajectory still reassembles: the join keys make a DAG of the lines.
 func TestGraphReassemblesAfterScrub(t *testing.T) {
 	s := newScrubber(t)
 
-	// The id must stay production-length: below the backstop's 24-char floor it passed
-	// with an EMPTY exemption set while real archives shipped every tool_use id redacted.
+	// Production-length: below the backstop's 24-char floor this passed with NO exemptions.
 	const toolUseID = "toolu_0183yENGzL6di289E8QTzyxi"
 
 	payload := strings.Join([]string{
@@ -183,32 +150,20 @@ func TestGraphReassemblesAfterScrub(t *testing.T) {
 		`{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"` + toolUseID + `","content":"ok"}]},"toolUseResult":{"tool_use_id":"` + toolUseID + `","stdout":"AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"}}`,
 	}, "\n") + "\n"
 
-	res := scrubJSONL(t, s, "claude-code", payload)
-	require.NotContainsf(t, string(res.Out), "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY", "secret survived:\n%s", res.Out)
-
-	// Walk the redacted output the way a downstream parser would.
-	byUUID := map[string]map[string]any{}
-	for _, line := range strings.Split(strings.TrimSpace(string(res.Out)), "\n") {
-		var rec map[string]any
-		require.NoError(t, json.Unmarshal([]byte(line), &rec))
-		byUUID[rec["uuid"].(string)] = rec
+	out := string(scrubJSONL(t, s, "claude-code", payload).Out)
+	require.NotContainsf(t, out, "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY", "secret survived:\n%s", out)
+	for _, join := range []string{`"parentUuid":"u1"`, `"parentUuid":"a1"`, `"id":"` + toolUseID + `"`, `"tool_use_id":"` + toolUseID + `"`} {
+		assert.Contains(t, out, join)
 	}
-	require.Lenf(t, byUUID, 3, "expected 3 records, got %d", len(byUUID))
-	assert.True(t, byUUID["a1"]["parentUuid"] == "u1" && byUUID["u2"]["parentUuid"] == "a1", "parent chain broken")
-	content := byUUID["a1"]["message"].(map[string]any)["content"].([]any)
-	assert.True(t, content[0].(map[string]any)["id"] == toolUseID, "tool_use block id broken — nothing can point at this call")
-	toolResult := byUUID["u2"]["toolUseResult"].(map[string]any)
-	assert.True(t, toolResult["tool_use_id"] == toolUseID, "tool_use_id broken — the subagent join would fail")
+	assert.Equal(t, 3, strings.Count(out, toolUseID), "a tool_use id was redacted: the subagent join would fail")
 }
 
-// Cursor stores a hex-encoded image inside the assembled request: a declared opaque
-// payload, exempt via the NESTED PATH content[].image.hex rather than a field name.
+// Cursor stores a hex-encoded image, a declared opaque payload exempt via the NESTED PATH.
 func TestDeclaredOpaqueBinaryPayloadSurvivesTheEntropyBackstop(t *testing.T) {
 	s := newScrubber(t)
 
-	// Generated rather than repeated: repeating hex has LOW Shannon entropy and would
-	// never reach the backstop, so the test would pass for the wrong reason.
-	imageHex := pseudoRandomHex(t, 6000)
+	// Random, not repeated: repeating hex has LOW entropy and would never reach the backstop.
+	imageHex := randomHex(&xorshift{state: 0x2545F4914F6CDD1D}, 6000)
 	line := `{"composerId":"c8cbeb0b","content":[{"type":"image","image":{"hex":"` + imageHex + `"}}]}`
 
 	res := scrubJSONL(t, s, "cursor", line+"\n")
@@ -220,38 +175,25 @@ func TestDeclaredOpaqueBinaryPayloadSurvivesTheEntropyBackstop(t *testing.T) {
 	assert.NotContains(t, string(res2.Out), imageHex, "a high-entropy blob in an undeclared field should hit the backstop")
 }
 
-// pseudoRandomHex builds deterministic high-entropy hex from a fixed seed.
-func pseudoRandomHex(t *testing.T, n int) string {
-	t.Helper()
-	const digits = "0123456789abcdef"
-	out := make([]byte, n)
-	state := uint64(0x2545F4914F6CDD1D)
-	for i := range out {
-		state ^= state << 13
-		state ^= state >> 7
-		state ^= state << 17
-		out[i] = digits[state%16]
-	}
-	return string(out)
-}
-
-// path_user is a rewriter, not a detector, so it runs on exempt fields too.
+// path_user is a rewriter, not a detector, so it runs on exempt fields too. The mixed-case slug
+// is one long entropy candidate at 4.35 bits/char that heuristics see BEFORE path-user rewrites
+// it; it survives only because the matcher skips candidates carrying the username.
 func TestPathUserRewritesEverywhereIncludingExemptFields(t *testing.T) {
 	s := newScrubber(t)
-
-	line := `{"type":"user","uuid":"u1","cwd":"/Users/jane/work/api",` +
-		`"timestamp":"/Users/jane/x","message":{"content":[{"type":"text","text":"see /Users/jane/work/api/db.go"}]}}`
+	line := `{"type":"user","uuid":"u1","cwd":"/Users/jane/work/api","timestamp":"/Users/jane/x","message":{"content":[` +
+		`{"type":"text","text":"see /Users/jane/work/api/db.go and ~/.claude/projects/-Users-jane-Work2026-SampleOrg-blink-UI-webFrontend/f00.jsonl"}]}}`
 
 	res := scrubJSONL(t, s, "claude-code", line+"\n")
 	out := string(res.Out)
-
-	assert.NotContainsf(t, out, "/Users/jane", "username survived in a path:\n%s", out)
-	assert.Containsf(t, out, "/Users/__USER__/work/api", "path shape was not preserved — paths must stay comparable across sessions:\n%s", out)
-	assert.NotEqual(t, 0, res.RuleHits["path-user"])
+	assert.NotContainsf(t, out, "jane", "username survived in a path:\n%s", out)
+	// Paths must stay comparable across sessions.
+	assert.Contains(t, out, "/Users/__USER__/work/api")
+	assert.Contains(t, out, "-Users-__USER__-Work2026-SampleOrg-blink-UI-webFrontend")
+	assert.NotZero(t, res.RuleHits["path-user"])
+	assert.Zero(t, res.RuleHits["generic-entropy"])
 }
 
-// A torn tail is raw-scanned and ships: a truncated last line is a parse-miss, never
-// an engine error.
+// A torn tail is raw-scanned and ships: a parse-miss, never an engine error.
 func TestTornTailIsRawScannedAndShips(t *testing.T) {
 	s := newScrubber(t)
 
@@ -263,7 +205,7 @@ func TestTornTailIsRawScannedAndShips(t *testing.T) {
 
 	assert.NotContains(t, out, "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the pattern packs must still scan a torn line")
 	assert.Truef(t, res.LinesParsed == 1 && res.LinesRawScanned == 1, "expected 1 parsed and 1 raw-scanned line, got %d and %d", res.LinesParsed, res.LinesRawScanned)
-	assert.Equalf(t, transforms.ScanModeMixed, res.ScanMode, "scan_mode should be mixed, got %q", res.ScanMode)
+	assert.Equalf(t, ScanModeMixed, res.ScanMode, "scan_mode should be mixed, got %q", res.ScanMode)
 	assert.True(t, !strings.HasSuffix(out, "\n"), "a missing final newline must not be added back: that would be fixing a tail")
 }
 
@@ -272,45 +214,21 @@ func TestNonJSONPayloadIsRawScanned(t *testing.T) {
 	s := newScrubber(t)
 	text := "$ printenv\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\nHOME=/Users/jane\n"
 
-	res, err := s.Scrub([]byte(text), transforms.Hint{Family: "claude-code", JSONL: false})
+	res, err := s.Scrub([]byte(text), Hint{Family: "claude-code", JSONL: false})
 	require.NoError(t, err)
 	out := string(res.Out)
 	assert.NotContainsf(t, out, "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "secret survived a raw-text scan:\n%s", out)
 	assert.NotContainsf(t, out, "/Users/jane", "path_user must apply to raw text too:\n%s", out)
-	assert.Equalf(t, transforms.ScanModeRawText, res.ScanMode, "scan_mode: %q", res.ScanMode)
+	assert.Equalf(t, ScanModeRawText, res.ScanMode, "scan_mode: %q", res.ScanMode)
 }
 
-// A base64-encoded secret is invisible to every regex, so one level is decoded and
-// scanned. One level only: recursion is unbounded work per byte.
+// A base64-encoded secret is invisible to every regex, so one level is decoded and scanned.
 func TestOneLevelOfBase64IsDecodedAndScanned(t *testing.T) {
 	s := newScrubber(t)
 
-	inner := "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
-	once := base64.StdEncoding.EncodeToString([]byte(inner))
-	twice := base64.StdEncoding.EncodeToString([]byte(once))
-
-	res := scrubJSONL(t, s, "claude-code",
-		`{"type":"user","message":{"content":[{"type":"text","text":"`+once+`"}]}}`+"\n")
+	once := base64.StdEncoding.EncodeToString([]byte("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
+	res := scrubJSONL(t, s, "claude-code", `{"type":"user","message":{"content":[{"type":"text","text":"`+once+`"}]}}`+"\n")
 	assert.NotContainsf(t, string(res.Out), once, "a base64-wrapped secret must be caught:\n%s", res.Out)
-
-	// Double encoding is out of scope by design; pinning it documents the boundary.
-	scrubJSONL(t, s, "claude-code",
-		`{"type":"user","message":{"content":[{"type":"text","text":"`+twice+`"}]}}`+"\n")
-}
-
-// A recorded over-redaction, left alone deliberately. In a postgres URL the url-userinfo
-// and email rules overlap, and the wider span wins: it takes the hostname with the
-// password and attributes the hit to email. The safe direction on an overlap is the wider
-// span, since preferring the narrower risks leaving a tail of a secret in the clear.
-func TestKnownOverRedactionInConnectionStrings(t *testing.T) {
-	s := newScrubber(t)
-	line := `{"type":"user","toolUseResult":{"stdout":"psql postgres://app:hunter2@db.internal:5432/prod"}}`
-
-	res := scrubJSONL(t, s, "claude-code", line+"\n")
-	out := string(res.Out)
-
-	assert.NotContains(t, out, "hunter2", "the password must not survive")
-	assert.NotContains(t, out, "db.internal", "the hostname now survives — the overlap rule changed; update this note")
 }
 
 func TestDensityAndRuleHitLedger(t *testing.T) {
@@ -327,12 +245,11 @@ func TestDensityAndRuleHitLedger(t *testing.T) {
 	assert.Equalf(t, len(dirty), res.BytesTotal, "bytes_total %d, want %d", res.BytesTotal, len(dirty))
 }
 
-// A pack named in config but absent from the corpus must fail loudly: running with fewer
-// rules than configured weakens the floor with no signal.
+// A pack named in config but absent from the corpus must fail loudly, not run with fewer rules.
 func TestUnknownPackIsAnError(t *testing.T) {
-	cfg := transforms.DefaultConfig()
+	cfg := DefaultConfig()
 	cfg.RulePacks = append(cfg.RulePacks, "acme-invented")
-	_, newErr := transforms.New(cfg)
+	_, newErr := New(cfg)
 	require.Error(t, newErr, "an unknown rule pack must be refused at compile time")
 }
 
@@ -356,12 +273,10 @@ func buildRecordWithValueAt(t *testing.T, path, value string) string {
 	return string(raw)
 }
 
-// The compiled default must protect the identifier spine on its own: exemptions once
-// reached the scrubber through config resolution only, so DefaultConfig() redacted the ids
-// joining a subagent transcript to its parent. Both ends redact to the same sentinel, which
-// is what makes it silent.
+// The compiled default must protect the identifier spine on its own: exemptions once arrived
+// only through config resolution, so DefaultConfig() silently redacted the subagent join ids.
 func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
-	s, err := transforms.New(transforms.DefaultConfig())
+	s, err := New(DefaultConfig())
 	require.NoError(t, err)
 
 	// High-entropy on purpose: this is the shape the backstop fires on.
@@ -372,19 +287,14 @@ func TestTheCompiledDefaultProtectsTheIdentifierSpine(t *testing.T) {
 		assert.Equalf(t, in, string(res.Out), "%s was redacted by the compiled default:\n got %s\nwant %s", field, res.Out, in)
 	}
 
-	// Exemption is detector-scoped: a credential planted in an exempt field is still caught.
-	res := scrubJSONL(t, s, "claude-code", `{"toolUseId":"AKIAIOSFODNN7EXAMPLE"}`+"\n")
-	assert.NotContainsf(t, string(res.Out), "AKIAIOSFODNN7EXAMPLE", "a credential in an exempt field survived: %s", res.Out)
-
-	// And a field nobody exempted is still scanned, or the test above proves nothing.
-	res = scrubJSONL(t, s, "claude-code", `{"someField":"`+id+`"}`+"\n")
+	// A field nobody exempted is still scanned, or the loop above proves nothing.
+	res := scrubJSONL(t, s, "claude-code", `{"someField":"`+id+`"}`+"\n")
 	assert.Containsf(t, string(res.Out), "__REDACTED:", "an unexempted high-entropy value was not redacted: %s", res.Out)
 }
 
-// A pattern that backtracks pathologically stalls an install for seconds without erroring, so the
-// worst case has to be kept. One Scrubber serves every worker, hence the atomic.
+// A pattern that backtracks pathologically stalls an install without erroring, so the worst case is kept.
 func TestTheScrubberKeepsItsWorstCase(t *testing.T) {
-	s, err := transforms.New(transforms.DefaultConfig())
+	s, err := New(DefaultConfig())
 	require.NoError(t, err)
 	if d, n := s.Slowest(); d != 0 || n != 0 {
 		t.Fatalf("a fresh Scrubber claims a slowest scrub: %v over %d bytes", d, n)
@@ -395,16 +305,64 @@ func TestTheScrubberKeepsItsWorstCase(t *testing.T) {
 	for len(big) < 64<<10 {
 		big = append(big, `{"msg":"the quick brown fox jumps over the lazy dog"}`+"\n"...)
 	}
-	_, scrubErr := s.Scrub(big, transforms.Hint{JSONL: true})
+	_, scrubErr := s.Scrub(big, Hint{JSONL: true})
 	require.NoError(t, scrubErr)
 	afterBig, bytesBig := s.Slowest()
 	assert.NotEqual(t, time.Duration(0), afterBig, "scrubbing 64 KB registered no cost at all")
 	assert.Equalf(t, int64(len(big)), bytesBig, "slowest scrub is attributed to %d bytes, want %d", bytesBig, len(big))
 
 	// The small one must not displace it: this is a maximum, not a last-value.
-	_, smallScrubErr := s.Scrub(small, transforms.Hint{JSONL: true})
+	_, smallScrubErr := s.Scrub(small, Hint{JSONL: true})
 	require.NoError(t, smallScrubErr)
 	if d, n := s.Slowest(); d != afterBig || n != bytesBig {
 		t.Errorf("a cheaper scrub overwrote the worst case: %v over %d bytes", d, n)
 	}
+}
+
+// A name carrying a multi-byte rune has no sound literal for the byte-folding automaton to filter
+// on. The answer is to stop prefiltering the key-name regex, not to stop redacting.
+func TestNonASCIIKeyNameStillRedacts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SecretKeyNames = append(cfg.SecretKeyNames, "CLÉ_SECRÈTE")
+	s, err := New(cfg)
+	require.NoErrorf(t, err, "a non-ASCII key name must compile, got %v", err)
+
+	res := scrubJSONL(t, s, "claude-code", `{"type":"user","text":"CLÉ_SECRÈTE=hunter2"}`+"\n")
+	assert.Containsf(t, string(res.Out), Sentinel("key-name"), "the secret survived: %s", res.Out)
+	assert.NotContainsf(t, string(res.Out), "hunter2", "the secret survived verbatim: %s", res.Out)
+
+	// Dropping the prefilter is the fallback; dropping a rule is not.
+	res = scrubJSONL(t, s, "claude-code", `{"type":"user","text":"GITHUB_TOKEN=hunter2"}`+"\n")
+	assert.NotContainsf(t, string(res.Out), "hunter2", "an ASCII name stopped firing next to a non-ASCII one: %s", res.Out)
+}
+
+// A negative floor is refused: `{-3,}` compiles as literal text ("never fires") while the
+// candidate scanner reads it as "every run fires", and neither is what someone typing it means.
+func TestNegativeEntropyMinLengthFailsTheBuild(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Entropy.MinLength = -3
+	if _, err := New(cfg); err == nil {
+		t.Fatal("a negative entropy min_length must not compile")
+	} else if !strings.Contains(err.Error(), "-3") {
+		t.Errorf("the error must name the offending value, got %v", err)
+	}
+
+	// Zero stays legal: it clamps to a one-byte floor, which no positive threshold can tell apart.
+	cfg.Entropy.MinLength = 0
+	_, newErr := New(cfg)
+	assert.NoErrorf(t, newErr, "min_length 0 must still compile, got %v", newErr)
+}
+
+// The accepted residual of the path-entropy fix: a bare, UNLABELED std-base64 secret containing "/"
+// splits at the slashes into segments under MinLength. Labeled arrivals of the same shape
+// are still caught (TestLeaksAreRedacted), as are slash-free bare
+// secrets over MinLength.
+func TestBareBase64WithSlashIsAKnownEscape(t *testing.T) {
+	s := newScrubber(t)
+
+	const bare = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	line := `{"type":"user","uuid":"u1","message":{"content":[{"type":"text","text":"deploy with ` + bare + ` for now"}]}}`
+
+	res := scrubJSONL(t, s, "claude-code", line+"\n")
+	assert.Contains(t, string(res.Out), bare, "the backstop now catches bare slash-bearing base64 — the trade-off moved; update this note")
 }

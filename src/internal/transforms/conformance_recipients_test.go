@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"slices"
@@ -7,14 +7,12 @@ import (
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 const recipientsVectorPath = "../../conformance/v1/seal/recipients.json"
 
 // recipientsVector is the multi-recipient contract. age is nondeterministic by design, so there
-// are no pinned bytes and every field is asserted behaviorally against the real Seal/Open.
+// are no fixed bytes and every field is asserted behaviorally against the real Seal/Open.
 type recipientsVector struct {
 	VectorSet                 string `json:"vector_set"`
 	VectorVersion             int    `json:"vector_version"`
@@ -34,12 +32,12 @@ func TestConformanceRecipients(t *testing.T) {
 	recipients := []age.Recipient{install.Recipient(), org.Recipient(), escrow.Recipient()}
 	payload := []byte("{\"type\":\"user\"}\n")
 
-	obj, _, err := transforms.Seal(manifest(), payload, recipients)
+	obj, _, err := Seal(manifest(), payload, recipients)
 	require.NoError(t, err)
 
 	// key_id_order: the manifest records the set in seal argument order, so an auditor sees exactly
 	// what the seal was told.
-	m, _, err := transforms.Open(obj, install)
+	m, _, err := Open(obj, install)
 	require.NoError(t, err)
 	if v.Scheme != "age" || m.Encryption == nil || m.Encryption.Scheme != v.Scheme {
 		t.Fatalf("scheme: vector says %q, manifest says %+v", v.Scheme, m.Encryption)
@@ -51,7 +49,7 @@ func TestConformanceRecipients(t *testing.T) {
 	// which is what makes the ETL keyring work without any install's key.
 	require.True(t, v.AnySingleIdentitySuffices, "the vector must claim any-single-identity: age's envelope construction guarantees it")
 	for name, id := range map[string]*age.X25519Identity{"org": org, "escrow": escrow} {
-		if _, got, err := transforms.Open(obj, id); err != nil {
+		if _, got, err := Open(obj, id); err != nil {
 			t.Errorf("the %s identity alone must open the object: %v", name, err)
 		} else if string(got) != string(payload) {
 			t.Errorf("the %s identity read a different payload", name)
@@ -59,11 +57,11 @@ func TestConformanceRecipients(t *testing.T) {
 	}
 
 	// And an identity outside the set must not.
-	_, _, openErr := transforms.Open(obj, identity(t))
+	_, _, openErr := Open(obj, identity(t))
 	assert.Error(t, openErr, "an identity that is not a recipient opened the object")
 
 	// min_recipients: encryption is not optional, so zero recipients is a refusal.
 	require.Equalf(t, 1, v.MinRecipients, "min_recipients drifted: %d", v.MinRecipients)
-	_, _, sealErr := transforms.Seal(manifest(), payload, nil)
+	_, _, sealErr := Seal(manifest(), payload, nil)
 	assert.Error(t, sealErr, "sealing to no recipients must be refused")
 }

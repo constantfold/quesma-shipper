@@ -1,4 +1,4 @@
-package transforms_test
+package transforms
 
 import (
 	"archive/tar"
@@ -14,13 +14,11 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 const vectorPath = "../../conformance/v1/seal/container.json"
 
-// containerVectors pins the tar layer, which is deterministic and holds the contract that
+// containerVectors fixes the tar layer, which is deterministic and holds the contract that
 // matters: entry order, entry names, normalised headers. zstd output moves with the encoder
 // version and age is nondeterministic by design, so whole-object bytes are covered by round-trip
 // and opacity tests instead.
@@ -59,8 +57,8 @@ func TestConformanceContainerLayout(t *testing.T) {
 	var v containerVectors
 	readVectors(t, vectorPath, &v)
 
-	assert.Equalf(t, transforms.ZstdLevel, v.ZstdLevel, "zstd level drifted: vector says %d, code says %d", v.ZstdLevel, transforms.ZstdLevel)
-	require.Equal(t, []string{transforms.ManifestEntry, transforms.PayloadEntry}, v.EntryOrder)
+	assert.Equalf(t, ZstdLevel, v.ZstdLevel, "zstd level drifted: vector says %d, code says %d", v.ZstdLevel, ZstdLevel)
+	require.Equal(t, []string{ManifestEntry, PayloadEntry}, v.EntryOrder)
 
 	for _, c := range v.Vectors {
 		t.Run(c.Name, func(t *testing.T) {
@@ -72,15 +70,15 @@ func TestConformanceContainerLayout(t *testing.T) {
 	}
 }
 
-// tarBytesFor recovers the tar layer from a real sealed object, so the vector pins what Seal
+// tarBytesFor recovers the tar layer from a real sealed object, so the vector checks what Seal
 // writes rather than a reimplementation.
 func tarBytesFor(t *testing.T, manifestJSON, payload []byte) []byte {
 	t.Helper()
 
-	var m transforms.Manifest
+	var m Manifest
 	require.NoError(t, json.Unmarshal(manifestJSON, &m))
 	id := identity(t)
-	obj, _, err := transforms.Seal(m, payload, []age.Recipient{id.Recipient()})
+	obj, _, err := Seal(m, payload, []age.Recipient{id.Recipient()})
 	require.NoError(t, err)
 
 	dec, err := age.Decrypt(bytes.NewReader(obj), id)
@@ -112,7 +110,7 @@ func normalizeTar(t *testing.T, tarred []byte) []byte {
 		require.NoError(t, err)
 		body, err := io.ReadAll(tr)
 		require.NoError(t, err)
-		if hdr.Name == transforms.ManifestEntry {
+		if hdr.Name == ManifestEntry {
 			var m map[string]any
 			require.NoError(t, json.Unmarshal(body, &m))
 			delete(m, "encryption")
@@ -132,13 +130,13 @@ func generateContainerVectors(t *testing.T) []byte {
 	t.Helper()
 	var out containerVectors
 	readVectors(t, vectorPath, &out)
-	out.EntryOrder = []string{transforms.ManifestEntry, transforms.PayloadEntry}
-	out.ZstdLevel = transforms.ZstdLevel
+	out.EntryOrder = []string{ManifestEntry, PayloadEntry}
+	out.ZstdLevel = ZstdLevel
 	for i := range out.Vectors {
 		c := &out.Vectors[i]
 		payload, err := hex.DecodeString(c.PayloadHex)
 		require.NoError(t, err)
-		var m transforms.Manifest
+		var m Manifest
 		require.NoError(t, json.Unmarshal([]byte(c.ManifestJSON), &m))
 		m.ShippedHash, m.PayloadSize = sha256Hex(payload), int64(len(payload))
 		encoded, err := json.Marshal(m)

@@ -1,15 +1,12 @@
-package transforms_test
+package transforms
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
 // The seeded corpus DefaultEntropyConfig promises. Three populations, three contracts: benign
@@ -61,7 +58,7 @@ func TestSeededCorpusCalibration(t *testing.T) {
 		{"github pat", "push using ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-pat"},
 		{"anthropic key", "export it: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "anthropic-api-key"},
 		// The slash-carrying base64 shape the backstop no longer covers bare: labeled, it must always
-		// be caught. Attribution is not pinned, since key-name and aws-secret-key both claim it.
+		// be caught. Attribution is not asserted, since key-name and aws-secret-key both claim it.
 		{"labeled slash-bearing base64", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ""},
 		{"shapeless value behind a telling name", "MY_SERVICE_TOKEN=plain-looking-value-1234", "plain-looking-value-1234", "key-name"},
 		{"bare slash-free base64url blob", "stash " + randomHighEntropyToken(rng, 40) + " somewhere", "", "generic-entropy"},
@@ -86,16 +83,17 @@ func TestSeededCorpusCalibration(t *testing.T) {
 	// --- the alarm ------------------------------------------------------------
 	// Whole-corpus density is the fleet signal the manifests carry; the ceiling exists to catch a
 	// rule that starts eating content.
-	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), transforms.Hint{Family: "claude-code", JSONL: true})
+	res, err := s.Scrub([]byte(strings.Join(corpus, "\n")+"\n"), Hint{Family: "claude-code", JSONL: true})
 	require.NoError(t, err)
 	if d := res.Density(); d >= 0.05 {
 		t.Errorf("whole-corpus redaction density %.4f crossed the 0.05 alarm — a rule is eating content", d)
 	}
 }
 
-// generateBenignLines builds path-heavy records across the shapes that fired before '/' left the entropy alphabet.
-// Carrier fields rotate between cwd (exempt), free text and tool output (both unexempt), so the
-// alphabet is exercised and not just the exemptions.
+// generateBenignLines builds path-heavy records in the shapes that fired while "/" was in the
+// entropy alphabet: __REDACTED:generic-entropy__ once shipped as the repository name of 144 of
+// 818 sessions. Carriers rotate between cwd (exempt), free text and tool output (unexempt), so
+// the alphabet is exercised and not just the exemptions.
 func generateBenignLines(rng *xorshift, n int) []string {
 	segs := []string{
 		"Work2026", "SampleOrg", "blink-UI", "webFrontend", "GolandProjects",
@@ -114,13 +112,7 @@ func generateBenignLines(rng *xorshift, n int) []string {
 		}
 		return strings.Join(parts, "/")
 	}
-	slug := func(depth int) string {
-		parts := make([]string, depth)
-		for i := range parts {
-			parts[i] = segs[rng.intn(len(segs))]
-		}
-		return "-Users-jane-" + strings.Join(parts, "-")
-	}
+	slug := func(depth int) string { return "-Users-jane-" + strings.ReplaceAll(path(depth), "/", "-") }
 
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -190,25 +182,8 @@ func randomHighEntropyToken(rng *xorshift, n int) string {
 		for i := range out {
 			out[i] = alphabet[rng.intn(len(alphabet))]
 		}
-		if localShannonBits(string(out)) >= 4.3 {
+		if refShannonBits(string(out)) >= 4.3 {
 			return string(out)
 		}
 	}
-}
-
-func localShannonBits(s string) float64 {
-	var counts [256]int
-	for i := 0; i < len(s); i++ {
-		counts[s[i]]++
-	}
-	total := float64(len(s))
-	bits := 0.0
-	for _, c := range counts {
-		if c == 0 {
-			continue
-		}
-		p := float64(c) / total
-		bits -= p * math.Log2(p)
-	}
-	return bits
 }
