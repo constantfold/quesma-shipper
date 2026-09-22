@@ -15,22 +15,6 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/packaging"
 )
 
-func (r *Runtime) options(dryRun bool) engine.Options {
-	return engine.Options{
-		Plan:       planFor(r.eff),
-		Identity:   r.unit,
-		Upload:     r.upload,
-		Log:        r.log,
-		Enrichers:  Enrichers(),
-		Env:        r.env,
-		Recipients: r.recipients,
-		DryRun:     dryRun,
-		Client:     clientBlock(),
-		Progress:   r.OnProgress,
-		RunID:      r.runID,
-	}
-}
-
 // Enrichers is shared with doctor so "in this build" cannot drift from what the engine runs.
 func Enrichers() transforms.Registry {
 	return transforms.NewRegistry(cursorjoin.New())
@@ -72,28 +56,14 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 		return formats.Report{}, r.uploadErr
 	}
 
-	o := r.options(dryRun)
-	o.Unbounded = unbounded
-	o.Heartbeat = r.WriteHeartbeat
-	rep, err := engine.Run(ctx, store, o)
-
-	// Stamped even when nothing shipped: the marker answers "is the agent running at all".
-	if !dryRun {
-		if markErr := packaging.RecordRun(r.eff.StateDir, time.Now()); markErr != nil && err == nil {
-			fmt.Fprintf(os.Stderr, "warning: could not stamp the last-run marker: %v\n", markErr)
-		}
-	}
-	return rep, err
-}
-
-// planFor hands the engine values, never the resolver, so a new config key does not touch it.
-func planFor(eff *config.Effective) engine.Plan {
+	// The engine gets values, never the resolver, so a new config key does not touch it.
+	eff := r.eff
 	interval, _ := config.TickInterval(eff.Schedule)
-	return engine.Plan{
-		Interval:       interval,
+	rep, err := engine.Run(ctx, store, engine.Options{
 		OrganizationID: eff.OrganizationID,
 		StateDir:       eff.StateDir,
 		MaxFilesPerRun: eff.MaxFilesPerRun,
+		Interval:       interval,
 		Sources:        eff.Sources,
 		RulePacks:      eff.RulePacks,
 		SecretKeyNames: eff.SecretKeyNames,
@@ -102,5 +72,25 @@ func planFor(eff *config.Effective) engine.Plan {
 		Ignore:         eff.Catalog.RepoFilter(),
 		ConfigVersion:  eff.ConfigVersion,
 		ConfigExpired:  eff.ConfigExpired,
+		Identity:       r.unit,
+		Upload:         r.upload,
+		Log:            r.log,
+		Enrichers:      Enrichers(),
+		Env:            r.env,
+		Recipients:     r.recipients,
+		DryRun:         dryRun,
+		Unbounded:      unbounded,
+		Client:         clientBlock(),
+		Progress:       r.OnProgress,
+		RunID:          r.runID,
+		Heartbeat:      r.WriteHeartbeat,
+	})
+
+	// Stamped even when nothing shipped: the marker answers "is the agent running at all".
+	if !dryRun {
+		if markErr := packaging.RecordRun(r.eff.StateDir, time.Now()); markErr != nil && err == nil {
+			fmt.Fprintf(os.Stderr, "warning: could not stamp the last-run marker: %v\n", markErr)
+		}
 	}
+	return rep, err
 }

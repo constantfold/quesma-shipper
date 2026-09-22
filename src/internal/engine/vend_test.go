@@ -183,7 +183,7 @@ func TestAStoppedDerivedGroupStopsTheSource(t *testing.T) {
 			second := &countingEnricher{id: "zz-never-runs"}
 			o := enrichOpts(t, f, db, true)
 			o.Enrichers = transforms.NewRegistry(&fixtureEnricher{Enricher: cursorjoin.New(), db: db}, second)
-			o.Plan.Sources[0].Enrichers[second.id] = true
+			o.Sources[0].Enrichers[second.id] = true
 
 			rep, err := engine.Run(context.Background(), f.store, o)
 			require.ErrorIs(t, err, stop)

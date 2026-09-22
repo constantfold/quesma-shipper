@@ -46,7 +46,7 @@ func (o Options) enrichSource(
 	out.EnricherID, out.EnricherVersion = e.ID(), e.Version()
 	// The first declared database candidate that exists; empty means absent, which is not an error.
 	dbPath := o.Env.FirstExistingFile(e.DBCandidates())
-	res := e.Enrich(transforms.Input{Units: staged, DBPath: dbPath, ScratchDir: filepath.Join(o.Plan.StateDir, "scratch")})
+	res := e.Enrich(transforms.Input{Units: staged, DBPath: dbPath, ScratchDir: filepath.Join(o.StateDir, "scratch")})
 
 	out.EnrichSkipped += res.Skipped
 	out.EnrichMismatch += res.Mismatched

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"os/user"
 	"strings"
@@ -15,9 +16,27 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// Options configures one run.
+// Options configures one run: the policy app resolved from configuration, which keeps the core
+// free of the config package, and the ports and hooks the run uses.
 type Options struct {
-	Plan     Plan
+	// OrganizationID is the organization= key segment; empty means the standalone placeholder.
+	OrganizationID string
+	StateDir       string
+	MaxFilesPerRun int
+	Interval       time.Duration
+	Sources        []sources.Resolved
+	RulePacks      []string
+	SecretKeyNames []string
+	StructuralEx   map[string][]string
+
+	// Deny is required: a nil deny list would read as "nothing is denied". Nil Ignore ignores nothing.
+	Deny          *sources.List
+	Ignore        *sources.RepoFilter
+	ConfigVersion int
+
+	// ConfigExpired stamps every manifest. Expiry does not stop collection; it makes staleness visible.
+	ConfigExpired bool
+
 	Identity *identity.Unit
 	Log      *auditlog.Log
 
@@ -68,48 +87,18 @@ type (
 	Report        = formats.Report
 )
 
-// Plan is the configuration the loop actually reads, keeping the core free of the config package.
-type Plan struct {
-	// OrganizationID is the organization= key segment; empty means the standalone placeholder.
-	OrganizationID string
-
-	StateDir       string
-	MaxFilesPerRun int
-	Interval       time.Duration
-
-	Sources []sources.Resolved
-
-	RulePacks      []string
-	SecretKeyNames []string
-	StructuralEx   map[string][]string
-
-	// Deny is required: a nil deny list would read as "nothing is denied". Nil Ignore ignores nothing.
-	Deny   *sources.List
-	Ignore *sources.RepoFilter
-
-	ConfigVersion int
-
-	// ConfigExpired stamps every manifest. Expiry does not stop collection; it makes staleness visible.
-	ConfigExpired bool
-}
-
 func (o Options) scrubber() (*transforms.Scrubber, error) {
 	cfg := transforms.DefaultConfig()
-	cfg.RulePacks = o.Plan.RulePacks
+	cfg.RulePacks = o.RulePacks
 	// Additive: configuration can only lengthen the compiled default list, never replace it.
-	cfg.SecretKeyNames = append(cfg.SecretKeyNames, o.Plan.SecretKeyNames...)
-	cfg.Exemptions = o.Plan.StructuralEx
+	cfg.SecretKeyNames = append(cfg.SecretKeyNames, o.SecretKeyNames...)
+	cfg.Exemptions = o.StructuralEx
 	cfg.Username = o.user
 	return transforms.New(cfg)
 }
 
-// orgOf is the organization= key segment; the fallback keeps key depth constant.
-func orgOf(p Plan) string {
-	if p.OrganizationID == "" {
-		return "default"
-	}
-	return p.OrganizationID
-}
+// org is the organization= key segment; the fallback keeps key depth constant.
+func (o Options) org() string { return cmp.Or(o.OrganizationID, "default") }
 
 // UsernameFromStateDir derives the OS user name for the path placeholder, from the state directory
 // where possible so redaction and the object key agree. Exported so doctor previews the same value.

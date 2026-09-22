@@ -147,7 +147,7 @@ func recipientsFor(eff *config.Effective, unit *identity.Unit) ([]age.Recipient,
 func (r *Runtime) Effective() *config.Effective { return r.eff }
 
 // RefreshAbsentRoots re-picks roots that did not resolve at startup and reports the source ids that
-// now do; options() rebuilds the plan every flush, so the next tick collects them.
+// now do; every flush rebuilds the engine options, so the next tick collects them.
 func (r *Runtime) RefreshAbsentRoots() []string { return config.RefreshAbsentRoots(r.eff, r.env) }
 
 func (r *Runtime) Remote() controlplane.Remote { return r.remote }

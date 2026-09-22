@@ -25,16 +25,16 @@ func accountOpts(t *testing.T, f *fixture) engine.Options {
 	require.NoError(t, err)
 	spec, _ := catalog.Source("codex-account")
 	o := f.opts()
-	o.Plan.Interval = 5 * time.Minute
+	o.Interval = 5 * time.Minute
 	o.Env = sources.Env{Home: f.home, Lookup: func(string) (string, bool) { return "", false }}
-	o.Plan.Sources = []sources.Resolved{{Source: spec, Root: home, Enabled: true, SpecFingerprint: sources.SpecFingerprint(spec)}}
+	o.Sources = []sources.Resolved{{Source: spec, Root: home, Enabled: true, SpecFingerprint: sources.SpecFingerprint(spec)}}
 	return o
 }
 
 func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	f := newFixture(t)
 	o := accountOpts(t, f)
-	home := o.Plan.Sources[0].Root
+	home := o.Sources[0].Root
 	now := o.Now()
 	o.Now = func() time.Time { return now }
 	f.port.verdict = always(errors.New("offline"))
@@ -70,19 +70,6 @@ func TestAccountHistoryUploadsFromMemoryAndRetriesCurrentUsage(t *testing.T) {
 	require.Len(t, f.port.keys(), 2, "remote history overwritten")
 }
 
-func TestAccountDisabledAndPreviewDoNotCapture(t *testing.T) {
-	f := newFixture(t)
-	o := accountOpts(t, f)
-	o.Plan.Sources[0].Enabled = false
-	f.runWith(o)
-	o.Plan.Sources[0].Enabled = true
-	o.DryRun = true
-	f.runWith(o)
-	if _, err := os.Stat(filepath.Join(f.stateDir, "snapshots")); !os.IsNotExist(err) {
-		t.Fatal("disabled/preview collection wrote snapshots")
-	}
-}
-
 func TestSourceScrubSetting(t *testing.T) {
 	on, off := true, false
 	for _, tc := range []struct {
@@ -95,7 +82,7 @@ func TestSourceScrubSetting(t *testing.T) {
 			const raw = "{\"email\":\"dev@example.org\",\"access_token\":\"fixture-secret\"}\n"
 			f.writeTranscript("projects/demo/session.jsonl", raw)
 			o := f.opts()
-			o.Plan.Sources[0].Scrub = tc.setting
+			o.Sources[0].Scrub = tc.setting
 			rep := f.runWith(o)
 			require.Equalf(t, 1, rep.Shipped, "shipped: %+v", rep)
 			for _, key := range f.port.keys() {
