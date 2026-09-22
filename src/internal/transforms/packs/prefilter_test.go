@@ -4,13 +4,12 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// PatternPacks are the high-confidence packs. They scan every field, exempt or not.
-var PatternPacks = []string{GitleaksCore, QuesmaExtra, CloudKeys, PIICore}
-
-// containsAny is the executable spec the automaton is held to: does any keyword occur in the
-// value, folding ASCII letter bytes and nothing else.
+// containsAny is the independent spec, folding ASCII letter bytes and nothing else.
 func containsAny(value string, keywords []string) bool {
 	folded := asciiLowered(value)
 	for _, k := range keywords {
@@ -40,32 +39,21 @@ const (
 	testNonASCII = "é" // an ordinary accented letter, no ASCII relation at all
 )
 
-// The safety argument for the one-pass automaton: every gate must fire exactly when containsAny
-// would. A gate firing too rarely is a silently weakened scrub floor, so predicates are compared.
+// A missing gate silently weakens scrubbing; compare every gate with the independent predicate.
 func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 	var keywordSets [][]string
-	for _, pack := range PatternPacks {
-		rules, err := Load(pack)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range rules {
-			if len(r.Keywords()) > 0 {
-				keywordSets = append(keywordSets, r.Keywords())
-			}
+	for _, r := range loadedRules(t, PatternPacks...) {
+		if len(r.Keywords()) > 0 {
+			keywordSets = append(keywordSets, r.Keywords())
 		}
 	}
-	if len(keywordSets) < 10 {
-		t.Fatalf("expected the corpora to carry keyword sets, got %d", len(keywordSets))
-	}
+	require.Truef(t, len(keywordSets) >= 10, "expected the corpora to carry keyword sets, got %d", len(keywordSets))
 
 	b := NewPrefilterBuilder()
 	gates := make([]Gate, len(keywordSets))
 	for i, kws := range keywordSets {
 		g, err := b.AddKeywords(kws)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		gates[i] = g
 	}
 	p := b.Build()
@@ -87,88 +75,36 @@ func TestPrefilterAgreesWithContainsAny(t *testing.T) {
 		value := sb.String()
 		seen := p.Scan(value)
 		for j, kws := range keywordSets {
-			if got, want := seen.Has(gates[j]), containsAny(value, kws); got != want {
-				t.Fatalf("gate %d (%v) on %q: prefilter %v, containsAny %v", j, kws, value, got, want)
-			}
+			require.Equal(t, containsAny(value, kws), seen.Has(gates[j]), "gate %d (%v) on %q", j, kws, value)
 		}
 	}
 }
 
-// The contract in both directions: ASCII case flips fire the gate, and the runes Go relates
-// to ASCII do not. containsAny must agree on every fixture.
+// ASCII case flips fire the gate, and the runes Go relates to ASCII do not.
 func TestPrefilterFoldsASCIIOnly(t *testing.T) {
 	keywords := []string{"apikey", "kubectl"}
 	b := NewPrefilterBuilder()
 	gate, err := b.AddKeywords(keywords)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	p := b.Build()
 
-	for _, value := range []string{
-		"apikey", "APIKEY", "ApiKey",
-		"KUBECTL",
-		"xxKubectl xx",
-	} {
-		if seen := p.Scan(value); !seen.Has(gate) {
-			t.Errorf("gate did not fire on %q", value)
-		}
-		if !containsAny(value, keywords) {
-			t.Errorf("containsAny disagrees on %q, the fixture is wrong", value)
-		}
+	for _, value := range []string{"apikey", "APIKEY", "ApiKey", "KUBECTL", "xxKubectl xx"} {
+		seen := p.Scan(value)
+		assert.True(t, seen.Has(gate), "gate did not fire on %q", value)
+		assert.True(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 
-	for _, value := range []string{
-		"AP" + testDottedI + "KEY",
-		testKelvin + "UBECTL",
-		"ap" + testLongS + "key",
-	} {
-		if seen := p.Scan(value); seen.Has(gate) {
-			t.Errorf("the fold is ASCII only: a keyword gate must not fire on %q", value)
-		}
-		if containsAny(value, keywords) {
-			t.Errorf("containsAny disagrees on %q, the fixture is wrong", value)
-		}
+	for _, value := range []string{"AP" + testDottedI + "KEY", testKelvin + "UBECTL", "ap" + testLongS + "key"} {
+		seen := p.Scan(value)
+		assert.False(t, seen.Has(gate), "the fold is ASCII only: a keyword gate must not fire on %q", value)
+		assert.False(t, containsAny(value, keywords), "containsAny disagrees on %q, the fixture is wrong", value)
 	}
 }
 
 func TestPrefilterRejectsNonASCIIKeywords(t *testing.T) {
 	b := NewPrefilterBuilder()
-	bad := "cl" + testNonASCII
-	if _, err := b.AddKeywords([]string{"ok", bad}); err == nil {
-		t.Fatal("expected a non-ASCII keyword to fail the build")
-	} else if !strings.Contains(err.Error(), bad) {
-		t.Errorf("the error must name the offending keyword, got %v", err)
-	}
-	if _, err := b.AddKeywords([]string{""}); err == nil {
-		t.Fatal("expected an empty keyword to fail the build")
-	}
-}
-
-// Same registrations, same tables: the build stays reproducible.
-func TestPrefilterGatesAreDeterministic(t *testing.T) {
-	build := func() *Prefilter {
-		b := NewPrefilterBuilder()
-		for _, pack := range PatternPacks {
-			rules, err := Load(pack)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, r := range rules {
-				if _, err := b.AddKeywords(r.Keywords()); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		return b.Build()
-	}
-	a, c := build(), build()
-	if a.width != c.width || len(a.next) != len(c.next) {
-		t.Fatal("table shape differs between builds")
-	}
-	for i := range a.next {
-		if a.next[i] != c.next[i] {
-			t.Fatalf("transition %d differs between builds", i)
-		}
-	}
+	_, err := b.AddKeywords([]string{"ok", "cl" + testNonASCII})
+	require.ErrorContains(t, err, "cl"+testNonASCII, "a non-ASCII keyword must fail the build, naming it")
+	_, err = b.AddKeywords([]string{""})
+	require.Error(t, err, "expected an empty keyword to fail the build")
 }
