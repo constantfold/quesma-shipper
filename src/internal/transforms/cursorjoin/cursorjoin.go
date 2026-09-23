@@ -1,8 +1,6 @@
-// Package cursorjoin is the cursor-transcript-join enricher: Cursor's transcript JSONL records
-// intent with no outcomes, the global state.vscdb holds exactly those missing fields, and no
-// store rows ship, so this derived object is their only carrier. Every failure path degrades to
-// raw JSONL plus a loud alarm, never to a partial object, which would look complete downstream.
-// The alignment rules are undocumented vendor behaviour and drift, hence the mismatch alarm.
+// Package cursorjoin joins Cursor's transcript JSONL, intent without outcomes, with the outcomes in
+// state.vscdb, whose rows never ship. A failure yields raw JSONL plus a loud alarm, never a partial
+// object that would look complete; the alignment rules are undocumented vendor behaviour and drift.
 package cursorjoin
 
 import (
@@ -15,8 +13,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/transforms"
 )
 
-// The version travels in every derived object's manifest, so output from a join fixed later
-// supersedes output from this one. Bump it whenever the join's answer can change.
+// The version in each manifest lets a later fix supersede; bump it whenever the answer can change.
 const (
 	id      = "cursor-transcript-join"
 	version = 4
@@ -48,9 +45,8 @@ func (*Enricher) Keyspaces() []string {
 	return []string{composerPrefix, bubblePrefix}
 }
 
-// DBCandidates is where Cursor's global state.vscdb lives, per platform. Compiled in rather than
-// configurable: a config path would let a config layer point this enricher at an arbitrary SQLite
-// file, past a scope ceiling the compiled catalog never approved. The workspace store is absent.
+// Compiled in, not configurable: config could point the enricher at any SQLite file, past the scope
+// the compiled catalog approved. The workspace store is absent.
 const cursorStateDB = "Cursor/User/globalStorage/state.vscdb"
 
 func (*Enricher) DBCandidates() []string {
@@ -96,8 +92,7 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	}
 
 	if read.Truncated {
-		// A partial view, not a failed one. Rows are ordered by key, so what is missing is a
-		// suffix of the keyspace, and the units past the cap are counted as mismatches below.
+		// Partial, not failed: rows are key-ordered, so the missing keyspace suffix counts as mismatches.
 		res.Notes = append(res.Notes, fmt.Sprintf(
 			"state.vscdb row cap reached at %d rows: DB-side fields are missing for whatever "+
 				"sorts after the last key read", len(read.Rows)))
@@ -118,16 +113,14 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 		}
 		d, note := e.joinOne(u, conv, store, read)
 		if note != "" {
-			// Routed by outcome: a note on a shipped object would otherwise be reported as
-			// lost data.
+			// Routed by outcome: a note on a shipped object would otherwise read as lost data.
 			if d.Status == transforms.StatusOK {
 				res.Infos = append(res.Infos, note)
 			} else {
 				res.Notes = append(res.Notes, note)
 			}
 		}
-		// The transcript-side twin of the store decode note above, and like it an alarm: those
-		// blocks never reached the join, so their enrichment is lost even when the object ships.
+		// An alarm like the store decode note: those blocks' enrichment is lost even if the object ships.
 		if d.LineDecodeErrors > 0 {
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: %d mid-file transcript lines did not decode (the line shape is vendor "+
@@ -150,8 +143,7 @@ func (e *Enricher) Enrich(in transforms.Input) transforms.EnrichResult {
 	return res
 }
 
-// conversationID is the join key: the transcript's basename, which is the same UUID as
-// composerData:<composerUUID>.
+// conversationID is the transcript basename, the same UUID as composerData:<composerUUID>.
 func conversationID(nativePath string) string {
 	base := filepath.Base(nativePath)
 	if !strings.HasSuffix(base, ".jsonl") {
@@ -160,7 +152,6 @@ func conversationID(nativePath string) string {
 	return strings.TrimSuffix(base, ".jsonl")
 }
 
-// joinOne derives a single conversation.
 func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read sqliteread.Result) (transforms.Derived, string) {
 	d := transforms.Derived{
 		NativePath:   u.NativePath + ".enriched.jsonl",
@@ -173,8 +164,7 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	c := ix.composers[conv]
 	bubbles := ix.bubbles[conv]
 
-	// A conversation with no headers, no inline array and no bubble rows is a draft, not a
-	// mismatch. Most composerData rows on a real machine are drafts.
+	// No headers, inline array or bubble rows: a draft, not a mismatch (most composerData rows are).
 	inline := 0
 	headers := 0
 	if c != nil {
@@ -226,8 +216,7 @@ func (e *Enricher) joinOne(u transforms.RawUnit, conv string, ix *indexed, read 
 	d.Tail = a.tail
 	d.Ambiguous = a.ambiguous
 
-	// Informational, not alarms: the store accounting for less than the transcript in ways that
-	// are observed vendor behaviour, not rule drift.
+	// Informational, not alarms: observed vendor behaviour, not rule drift.
 	var infos []string
 	if a.tail > 0 {
 		infos = append(infos, fmt.Sprintf("%d transcript events extend past the store's "+
