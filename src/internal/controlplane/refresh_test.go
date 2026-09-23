@@ -2,12 +2,14 @@ package controlplane_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuesmaOrg/quesma-shipper/internal/config"
 	"github.com/QuesmaOrg/quesma-shipper/internal/controlplane"
 )
 
@@ -73,6 +75,40 @@ func TestRefreshCachesWhatItFetchedAndReusesItWhenTheServerIsGone(t *testing.T) 
 	}
 	if second.Expired {
 		t.Error("a cached config inside its expiry was reported expired")
+	}
+}
+
+// A served document the client refuses must not replace the last one that resolved: the cache
+// is the fallback, and a refused push would otherwise leave nothing valid to fall back to.
+func TestARefusedServedConfigKeepsTheLastValidOneCached(t *testing.T) {
+	p := newPlane(t)
+	p.config = "org: acme\nmax_files_per_run: 8\n"
+	srv := p.start()
+	dir := t.TempDir()
+	e := p.enrolled(t, srv.URL, installID)
+	opts := controlplane.RefreshOptions{
+		Enrollment: e, StateDir: dir, Now: time.Now(),
+		Accept: func(d *config.Document) error {
+			if d.MaxFilesPerRun != nil && *d.MaxFilesPerRun == 99 {
+				return errors.New("refused")
+			}
+			return nil
+		},
+	}
+	controlplane.Refresh(context.Background(), opts)
+
+	p.config = "org: acme\nmax_files_per_run: 99\n"
+	remote := controlplane.Refresh(context.Background(), opts)
+	if remote.Origin != controlplane.OriginCached || remote.Err == nil {
+		t.Fatalf("origin = %q, err = %v; want the cached config and the refusal", remote.Origin, remote.Err)
+	}
+	if got := *remote.Doc.MaxFilesPerRun; got != 8 {
+		t.Errorf("max_files_per_run = %d, want the last valid 8", got)
+	}
+
+	opts.Offline = true
+	if got := *controlplane.Refresh(context.Background(), opts).Doc.MaxFilesPerRun; got != 8 {
+		t.Errorf("the refused document replaced the cache: max_files_per_run = %d", got)
 	}
 }
 

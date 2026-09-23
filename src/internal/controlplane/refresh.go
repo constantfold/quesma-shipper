@@ -50,6 +50,10 @@ type RefreshOptions struct {
 	// Offline skips the network and resolves from the cache: what the read-only verbs use, since
 	// `config show` must explain the config in force without a round-trip that changes it.
 	Offline bool
+
+	// Accept vets a fetched document before it replaces the cache, so a refused one never
+	// overwrites the last one that resolved. Nil accepts everything that parses.
+	Accept func(*config.Document) error
 }
 
 // Refresh produces the remote layer for one run: a fetch that parses wins and is cached, and ANY
@@ -127,6 +131,12 @@ func fetch(ctx context.Context, o RefreshOptions) (Remote, error) {
 	f, err := c.FetchConfig(ctx, req)
 	if err != nil {
 		return Remote{}, err
+	}
+
+	if o.Accept != nil {
+		if err := o.Accept(f.Doc); err != nil {
+			return Remote{}, fmt.Errorf("backend: the served config was refused, keeping the cached one: %w", err)
+		}
 	}
 
 	if err := SaveCache(o.StateDir, Cached{

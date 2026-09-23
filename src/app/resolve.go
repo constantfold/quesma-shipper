@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/QuesmaOrg/quesma-shipper/internal/config"
@@ -59,6 +60,15 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		StateDir:   paths.StateDir,
 		Now:        time.Now(),
 		Offline:    offline,
+		Accept: func(doc *config.Document) error {
+			_, err := config.Resolve(config.Input{
+				Catalog:  compiled,
+				Layers:   append(slices.Clone(layers), config.LayeredDocument{Layer: config.LayerRemote, Doc: doc}),
+				Env:      env,
+				StateDir: paths.StateDir,
+			})
+			return err
+		},
 	})
 
 	if remote.Doc != nil {
