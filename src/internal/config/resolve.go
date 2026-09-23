@@ -555,8 +555,11 @@ func pickRoot(eff *Effective, src *ResolvedSource, env sources.Env) (string, []s
 			reasons = append(reasons, err.Error())
 			continue
 		}
-		if err := eff.Deny.CheckIncludes(expanded, src.Include); err != nil {
-			return "", reasons, eff.reject("sources."+src.ID+".include", "%v", err)
+		// Only a configured include is a fault: a denied file under the catalog's own globs is skipped by the walk.
+		if eff.Provenance["sources."+src.ID+".include"].Layer != LayerBundledCatalog {
+			if err := eff.Deny.CheckIncludes(expanded, src.Include); err != nil {
+				return "", reasons, eff.reject("sources."+src.ID+".include", "%v", err)
+			}
 		}
 
 		return expanded, reasons, nil

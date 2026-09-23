@@ -302,6 +302,16 @@ sources:
 	}
 }
 
+// The catalog's own globs meeting a denied file is data, not a config fault: the walk skips the file.
+func TestADeniedFileUnderACatalogGlobDoesNotRejectTheConfig(t *testing.T) {
+	home := fakeHome(t)
+	mustWrite(t, filepath.Join(home, ".claude", "projects", "-Users-jane-work-api", "memory", ".env"), "X=1\n")
+
+	if _, err := config.Resolve(baseInput(t, home)); err != nil {
+		t.Fatalf("a .env under a catalog glob must not reject the config: %v", err)
+	}
+}
+
 func TestDenyListMatchesCredentialShapes(t *testing.T) {
 	home := t.TempDir()
 	d := sources.New(home)
