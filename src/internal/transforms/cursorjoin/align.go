@@ -1,6 +1,4 @@
-// align.go walks the transcript and the ordered bubbles together and renders the derived
-// object: the alignment cursor, the tail and repeat exceptions, and the byte-preserving output
-// encoding.
+// align.go walks the transcript and the ordered bubbles together and renders the derived JSONL.
 
 package cursorjoin
 
@@ -11,9 +9,8 @@ import (
 	"strings"
 )
 
-// line is one JSONL record, decoded only as far as the join needs. Scalars are flexString for
-// the same reason as on the store side: a drifted field shape would reject the whole line, which
-// then ships as native_invalid with its bubbles skipped and mismatches at zero — silent loss.
+// line is one JSONL record, decoded only as far as the join needs. Scalars are flexString: a drifted
+// field would reject the line, which ships as native_invalid with mismatches at zero — silent loss.
 type line struct {
 	Role    flexString `json:"role"`
 	Message *message   `json:"message"`
@@ -30,35 +27,27 @@ type block struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// outLine is one line of the derived JSONL. Native holds the original line's bytes verbatim, so
-// no part of the native record depends on this code. Enrich is an array index-aligned to the
-// native content blocks, never a map: a map's key order is lexicographic, so block 10 would sort
-// before block 2 and the output bytes would stop being a stable function of the input.
+// outLine is one derived line. Native holds the original bytes verbatim. Enrich is index-aligned to
+// the native blocks, never a map: lexicographic key order would sort block 10 before block 2.
 type outLine struct {
 	Native json.RawMessage `json:"native,omitempty"`
 
-	// A line that is not valid JSON, carried as a string rather than dropped: a torn tail is
-	// expected, and an invalid raw value would make the whole derived document unmarshalable.
-	// Not byte-exact for a mid-rune tear, whose dangling bytes become U+FFFD — the byte-exact
-	// record is the raw transcript, which ships anyway.
+	// An invalid line kept as a string: a torn tail is expected, and an invalid raw value would make the
+	// whole document unmarshalable. A mid-rune tear becomes U+FFFD; the raw transcript ships byte-exact.
 	NativeInvalid string `json:"native_invalid,omitempty"`
 
 	Enrich []*blockEnrich `json:"_enrich,omitempty"`
 }
 
-// blockEnrich is what the store knew and the transcript did not.
+// blockEnrich is what the store knew and the transcript did not, such as the call id and full output.
 type blockEnrich struct {
-	BubbleID string `json:"bubbleId,omitempty"`
-
-	// The correlation key the transcript is missing entirely.
+	BubbleID   string `json:"bubbleId,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 
 	// ToolName is the INTERNAL name, which can differ from the transcript's display name.
 	ToolName string `json:"tool_name,omitempty"`
 	Status   string `json:"status,omitempty"`
-
-	// The full tool output, which the transcript has none of.
-	Result string `json:"result,omitempty"`
+	Result   string `json:"result,omitempty"`
 
 	CreatedAt      string `json:"createdAt,omitempty"`
 	RequestID      string `json:"requestId,omitempty"`
@@ -67,19 +56,15 @@ type blockEnrich struct {
 	ModelName      string `json:"modelName,omitempty"`
 }
 
-// alignAndRender walks the transcript and the ordered bubbles together, one pass over each,
-// advancing the bubble cursor only on a match. The transcript is the authority on what happened,
-// so an event it contains that the store cannot account for is a mismatch, while a store bubble
-// the transcript does not mention is simply skipped. Three exceptions ship native-only and are
-// counted apart: tail (the store ends before the transcript, as with injected turns), repeats
-// (one bubble for a call the agent ran twice) and ambiguous (see matchAmbiguous).
+// The transcript is the authority: an event the store cannot account for is a mismatch, an
+// unmentioned bubble is skipped. Tail (store ends early, as with injected turns), repeats and
+// ambiguous events ship native-only.
 func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	var out bytes.Buffer
 	cursor := 0
 
-	// Unmatched blocks are classified once the pass completes, by where the last CONSUMING
-	// match landed. Repeats and ambiguous events move no watermark, and a hole before one is
-	// still caught by any real match after it.
+	// Unmatched blocks become tail or mismatch after the pass, by the last CONSUMING match. Repeats and
+	// ambiguous events move no watermark; a hole before one is still caught by a later real match.
 	seq := 0
 	lastMatchedSeq := -1
 	var unmatched []int
@@ -88,8 +73,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 
 	state := make([]bubbleState, len(events))
 
-	// Decode failures are positioned, not just counted: only the final line's can be the
-	// expected torn tail, and a mid-file one loses its blocks' enrichment with mismatches at zero.
+	// Positioned, not just counted: only the final line can be the expected torn tail.
 	lineNo := 0
 	invalidLines := 0
 	lastInvalidLine := -1
@@ -112,8 +96,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 			continue
 		}
 
-		// turn_ended is a terminator, not an event. It has no bubble and must not consume
-		// the cursor.
+		// turn_ended is a terminator, not an event: it has no bubble and must not consume the cursor.
 		if l.Role == "" || l.Message == nil || len(l.Message.Content) == 0 {
 			if err := writeLine(&out, outLine{Native: append(json.RawMessage{}, trimmed...)}); err != nil {
 				return alignment{}, err
@@ -135,8 +118,7 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 				unmatched = append(unmatched, seq)
 				continue
 			case matchRepeat:
-				// Explained, but nothing to attach: the consumed bubble's result
-				// belongs to the run that consumed it.
+				// Nothing to attach: the consumed bubble's result belongs to its consumer.
 				repeats++
 				continue
 			case matchAmbiguous:
@@ -181,70 +163,53 @@ func alignAndRender(content []byte, events []*bubble) (alignment, error) {
 	return a, nil
 }
 
-// bubbleState is what the pass has concluded about one bubble. used is per bubble because a
-// match may land behind the cursor: within one turn the store's header order and the transcript's
-// block order can disagree. ev and n record the evidence the consumption was made on, which is
-// what repeat detection compares a later claimant against. declined bars a bubble an ambiguous
-// verdict refused to decide about from every later fallback.
+// used is per bubble as a match may land behind the cursor; ev and n are the consuming evidence a
+// later claimant is compared against; declined bars an undecided bubble from every later fallback.
 type bubbleState struct {
 	used, declined bool
 	ev             evidence
 	n              int
 }
 
-// alignment is one conversation's alignment outcome: the rendered lines, the events nothing
-// accounts for, and the explained shortfalls that ship native-only.
 type alignment struct {
 	out        []byte
 	mismatches int
 	tail       int
 	repeats    int
+	ambiguous  int
 
-	// Tool blocks the evidence could not decide; nothing is attached to them.
-	ambiguous int
-
-	// Transcript lines that did not decode, excluding the final line's vendor-confirmed torn
-	// tail. Surfaced by the caller the way indexed.decodeErrors is.
+	// Undecodable transcript lines except a final torn tail; reported like indexed.decodeErrors.
 	lineDecodeErrors int
 }
 
-// How far from the cursor matchBlock will look for a bubble to CONSUME. Evidence decides between
-// nearby bubbles; unbounded, one coincidental match drags the cursor past every real bubble
-// behind it, each of those then a mismatch. Repeat detection is exempt: it consumes nothing, and
-// a deduped re-run's original can sit a whole subagent back.
+// The CONSUME window: unbounded, one coincidental match drags the cursor past every real bubble behind
+// it. Repeat detection is exempt: it consumes nothing, and a deduped original can sit a subagent back.
 const (
 	lookAhead  = 16
 	lookBehind = 64
 )
 
-// matchOutcome is what matchBlock concluded about one content block.
 type matchOutcome int
 
 const (
 	// No bubble accounts for the block; the caller classifies it as mismatch or tail.
 	matchNone matchOutcome = iota
-	// The returned index is the block's bubble.
 	matchFound
-	// The block relates to a bubble an earlier event consumed exactly as that consumer did:
-	// the store recorded one bubble for a call the agent ran more than once.
+	// One bubble for a call run twice: the block relates to a consumed bubble as its consumer did.
 	matchRepeat
-	// The evidence tells two stories at once — a deduped re-run, or a second run the store
-	// recorded argument-less — and attaching under either reading is wrong under the other.
-	// Nothing is attached, and the returned index is the undecided bubble.
+	// The evidence reads as a deduped re-run and as an argument-less second run, and attaching is wrong
+	// under one of them. Nothing is attached; the returned index is the undecided bubble.
 	matchAmbiguous
 )
 
-// matchBlock finds the bubble for one content block: forward from the cursor first, then a
-// bounded look-behind over bubbles the forward scans skipped. It also returns the evidence the
-// match was made on, which the caller records per bubble for repeat detection.
+// matchBlock also returns the match's evidence, which the caller records for repeat detection.
 func matchBlock(blk block, role string, events []*bubble, cursor int, state []bubbleState) (int, matchOutcome, evidence, int) {
 	wantType := 2
 	if role == "user" {
 		wantType = 1
 	}
 
-	// weigh is one candidate's evidence, shared by both scan directions. The second value is
-	// argsEvidence's strength; text evidence has no gradation, so its positives carry 1.
+	// The second value is argsEvidence's strength; text has no gradation, so its positives carry 1.
 	weigh := func(b *bubble) (evidence, int) {
 		if b.Type != 0 && b.Type != wantType {
 			return evidenceNegative, 0
@@ -254,17 +219,14 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 			if b.ToolFormerData == nil {
 				return evidenceNegative, 0
 			}
-			// Arguments, not names: the transcript's display name and the store's
-			// internal name differ, so the arguments are what tells two calls of the
-			// same tool apart.
+			// Arguments, not names: the names differ, and arguments tell same-tool calls apart.
 			return argsEvidence(blk.Input, b.ToolFormerData)
 
 		case "text":
 			if b.ToolFormerData != nil {
 				return evidenceNegative, 0
 			}
-			// A reasoning bubble aligns only on real overlap: the lenient empty-side
-			// rule below would let an empty text block consume it.
+			// Reasoning needs real overlap, else an empty text block would consume it.
 			if rt := b.reasoningText(); rt != "" {
 				if strictOverlap(string(blk.Text), rt) {
 					return evidencePositive, 1
@@ -286,17 +248,14 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 		}
 	}
 
-	// A positive is not returned on sight: two bubbles can both agree in full, and the one
-	// agreeing on MORE of the call is the call — strength ranks positives, position tie-breaks.
-	// Lesser grades are collected here and ranked only after both scans, because a partial
-	// identifies the call only when it is discriminative: see the ranking below. Name
-	// compatibility gates only the grades where position is the whole claim.
+	// Of two full agreements the one agreeing on MORE is the call; position breaks ties. Lesser
+	// grades wait for both scans, as a partial identifies only when unique; names count only where
+	// position is the whole claim.
 	bestPos, bestPosN := -1, 0
 	partials := 0
 	fwdPartial, fwdNeutral, fwdWeak := -1, -1, -1
 	for i := cursor; i < len(events) && i < cursor+lookAhead; i++ {
-		// Nothing at or past the cursor is consumed — consuming a bubble always
-		// advances the cursor past it — so this scan needs no used check.
+		// Consuming always advances the cursor past the bubble, so no used check.
 		if state[i].declined {
 			continue
 		}
@@ -325,21 +284,16 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 		return bestPos, matchFound, evidencePositive, bestPosN
 	}
 
-	// Look-behind, over what the forward scans stepped over: within one turn the store's header
-	// order and the transcript's block order can disagree, so a call's own bubble can end up
-	// behind the cursor. A bubble whose arguments agree in full is the same call wherever the
-	// header order put it; on any lesser grade a forward candidate wins, since a bubble behind
-	// the cursor has been passed over once already.
+	// Look-behind: header and block order can disagree in a turn. Full agreement is the call wherever
+	// it sits; on lesser grades a forward candidate wins, as one behind was already passed over.
 	repeat := false
 	repeatEv, repeatN := evidenceNegative, 0
 	bhdPartial, bhdNeutral, bhdWeak := -1, -1, -1
 	for i := cursor - 1; i >= 0; i-- {
 		if state[i].used {
-			// A consumed bubble still testifies, but only to a block relating to it
-			// exactly as its consumer did: a claimant agreeing better is the bubble's
-			// real owner arriving after a positional fallback took it, and one agreeing
-			// worse is a different call sharing values with it. Unbounded, unlike the
-			// windows — nothing is consumed here.
+			// A consumed bubble testifies only to a block relating to it exactly as its consumer
+			// did: a better claimant is the real owner after a positional fallback took it, a
+			// worse one a different call. Unbounded: nothing is consumed here.
 			if blk.Type == "tool_use" && state[i].ev >= evidencePartial {
 				if ev, n := weigh(events[i]); ev == state[i].ev && n == state[i].n {
 					repeat = true
@@ -355,8 +309,7 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 		}
 		ev, n := weigh(events[i])
 		if blk.Type != "tool_use" && ev != evidencePositive {
-			// No positional look-behind for prose: text that did not overlap is a far
-			// weaker claim than an argument-less tool call at a known position.
+			// No positional look-behind for prose: far weaker than an argument-less call.
 			continue
 		}
 		switch ev {
@@ -383,11 +336,9 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 		return bestPos, matchFound, evidencePositive, bestPosN
 	}
 
-	// A lone partial wins outright, either window: it is the only bubble carrying that value.
-	// Plural partials cannot discriminate — every sibling grep in a turn agrees through the
-	// shared workspace path — so they join the positional pool with the neutrals, where forward
-	// beats look-behind and first-in-window decides. Weak candidates come last: their values
-	// half-belong to some other call.
+	// A lone partial wins: only it carries that value. Plural ones (sibling greps share the
+	// workspace path) pool with the neutrals, forward first; weak comes last, its values
+	// half-belonging to another call.
 	best := -1
 	if partials == 1 {
 		best = fwdPartial
@@ -413,12 +364,10 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 	}
 
 	if repeat {
-		// Three shapes contradict the dedup reading. An unconsumed bubble agreeing in full
-		// anywhere in the store proves the run WAS recorded, just outside the windows, so the
-		// loud outcome stands. A candidate explaining the block at least as well as the
-		// consumed bubble leaves the dedup reading nothing to offer — edit_file_v2 records
-		// only the path, so a turn of edits to one file is all mutual repeats otherwise. And a
-		// candidate recording nothing at all may be the second run itself, undecidably.
+		// Dedup is refuted by an unconsumed full agreement anywhere (the run WAS recorded), loses
+		// to a candidate as good as the consumed bubble (edit_file_v2 records only the path: edits
+		// to one file would all repeat), and is undecidable against one recording nothing, which
+		// may be the second run itself.
 		for i := range events {
 			if state[i].used || state[i].declined {
 				continue
@@ -436,8 +385,7 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 				return best, matchFound, ev, n
 			}
 		}
-		// The repeat outranks what remains: preferring a worse-agreeing candidate would
-		// attach a different call's result and consume the bubble that call needs.
+		// A worse candidate would attach another call's result and take the bubble it needs.
 		return -1, matchRepeat, evidenceNegative, 0
 	}
 	if best >= 0 {
@@ -447,13 +395,11 @@ func matchBlock(blk block, role string, events []*bubble, cursor int, state []bu
 	return -1, matchNone, evidenceNegative, 0
 }
 
-// strictOverlap reports whether two texts genuinely share their prose. Stricter than
-// textOverlap on purpose: an empty side is a non-match here, never a free pass.
+// strictOverlap is textOverlap where an empty side is a non-match, never a free pass.
 func strictOverlap(transcript, stored string) bool { return overlap(transcript, stored, false) }
 
-// textOverlap reports whether a transcript text block and a bubble carry the same prose. The
-// transcript wraps user text in tags the store does not, so a normalised core is compared.
-// An empty side cannot contradict: position in the ordered list stands.
+// textOverlap ignores the transcript's wrapper tags, which the store lacks. An empty side cannot
+// contradict: position in the ordered list stands.
 func textOverlap(transcript, stored string) bool { return overlap(transcript, stored, true) }
 
 func overlap(transcript, stored string, emptyMatches bool) bool {
@@ -471,7 +417,6 @@ func overlap(transcript, stored string, emptyMatches bool) bool {
 }
 
 func normaliseText(s string) string {
-	// Strip the transcript's wrapper tags, which the store side does not have.
 	for _, tag := range []string{"timestamp", "user_query"} {
 		s = stripTag(s, tag)
 	}
@@ -527,8 +472,7 @@ func fromBubble(b *bubble) *blockEnrich {
 	return e
 }
 
-// writeLine emits one output record. No HTML escaping: the output hash is the change signal, and
-// json.Encoder's default < > & escaping would make it depend on the transcript's punctuation.
+// No HTML escaping: the output hash is the change signal and must not depend on < > & in the input.
 func writeLine(w *bytes.Buffer, l outLine) error {
 	body, err := marshalCompact(l)
 	if err != nil {
@@ -546,6 +490,5 @@ func marshalCompact(v any) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	// Encode appends a newline; writeLine adds its own, so trim this one.
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }

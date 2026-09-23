@@ -1,6 +1,5 @@
-// store.go is the store side of the join: the vendor row shapes in the two generations a live
-// state.vscdb holds, and the indexing and ordering that turn rows into a conversation's event
-// list. Every struct decodes only what the join reads: no rows ship.
+// store.go decodes both row generations a live state.vscdb holds and orders them into a
+// conversation's events. Structs decode only what the join reads: no rows ship.
 
 package cursorjoin
 
@@ -13,8 +12,7 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources/sqliteread"
 )
 
-// composerData is the per-conversation record. Only the fields the join needs are decoded:
-// rows reach megabytes, and decoding whole would pull attachment hex into memory for nothing.
+// composerData is decoded only as far as the join needs: rows reach megabytes of attachment hex.
 type composerData struct {
 	// The newer generation's authoritative bubble order, which the inline array does not carry.
 	FullConversationHeadersOnly []header `json:"fullConversationHeadersOnly"`
@@ -35,13 +33,11 @@ type bubble struct {
 	CreatedAt string `json:"createdAt"`
 	RequestID string `json:"requestId"`
 
-	// Scaffolding markers, skipped as non-events. Current stores stamp capabilityType 15 on
-	// every tool bubble, so the flag alone no longer implies scaffolding; see isScaffolding.
+	// Scaffolding markers; current stores set capabilityType 15 on all tool bubbles, see isScaffolding.
 	IsCapabilityIteration bool       `json:"isCapabilityIteration"`
 	CapabilityType        flexString `json:"capabilityType"`
 
-	// Older stores mark reasoning with isThought, current ones write a thinking object; current
-	// transcripts write it as a plain text block, so it is alignable. See matchBlock.
+	// Reasoning is isThought (older) or a thinking object (current); transcripts write it as text, so it aligns.
 	IsThought bool          `json:"isThought"`
 	Thinking  *thinkingData `json:"thinking"`
 
@@ -114,14 +110,12 @@ type toolFormerData struct {
 	Result     string     `json:"result"`
 }
 
-// indexed is the store side, arranged for the join.
 type indexed struct {
 	composers map[string]*composerData
 	bubbles   map[string]map[string]*bubble // conversation -> bubbleId -> bubble
 	order     map[string][]string           // conversation -> bubble ids in key order
 
-	// Surfaced as a note, never swallowed: silence here turns struct drift into a mismatch
-	// alarm that points away from its cause.
+	// Surfaced as a note: silently, struct drift becomes a mismatch alarm pointing away from its cause.
 	decodeErrors int
 }
 
@@ -166,14 +160,12 @@ func indexRows(rows []sqliteread.Row) *indexed {
 	return ix
 }
 
-// orderBubbles produces the authoritative bubble order: fullConversationHeadersOnly, the only
-// place it is recorded, then a key scan for the errored turns whose header list is empty.
+// fullConversationHeadersOnly is the only recorded order; a key scan covers errored turns without it.
 func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string) []*bubble {
 	if c != nil && len(c.FullConversationHeadersOnly) > 0 {
 		out := make([]*bubble, 0, len(c.FullConversationHeadersOnly))
 		for _, h := range c.FullConversationHeadersOnly {
-			// A header naming an absent row is normal after compaction; skipping the gap
-			// rather than counting it is what keeps a compacted conversation shipping.
+			// An absent row is normal after compaction; skipping it keeps the conversation shipping.
 			if b, ok := bubbles[h.BubbleID]; ok {
 				out = append(out, b)
 			}
@@ -192,8 +184,7 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string
 		return out
 	}
 
-	// Key scan. createdAt is a real timestamp, unlike anything in the transcript, so it is the
-	// ordering of last resort; ties fall back to the sorted key order, so this is deterministic.
+	// Key scan by createdAt, the only real timestamp; ties keep sorted key order, so it is deterministic.
 	out := make([]*bubble, 0, len(bubbles))
 	seen := map[string]bool{}
 	for _, id := range keyOrder {
@@ -208,8 +199,7 @@ func orderBubbles(c *composerData, bubbles map[string]*bubble, keyOrder []string
 
 // isScaffolding reports whether a bubble has no transcript counterpart by design.
 func isScaffolding(b *bubble) bool {
-	// A tool call or a reasoning bubble is an event whatever else it is flagged with; one the
-	// transcript does not mention simply goes unconsumed, which alignment tolerates.
+	// Tool and reasoning bubbles are events whatever their flags; alignment tolerates unmentioned ones.
 	if b.ToolFormerData != nil {
 		return false
 	}
