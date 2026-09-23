@@ -34,79 +34,69 @@ type Runtime struct {
 	eff  *config.Effective
 	unit *identity.Unit
 
-	// upload is the one write path; uploadErr is held rather than returned so `preview` still
-	// runs on an install that cannot authorize anything.
+	// uploadErr is held rather than returned so `preview` still runs on an install that cannot authorize.
 	upload    engine.UploadPort
 	uploadErr error
 
-	// telemetry outlives a failed upload port: an install that cannot upload is exactly the one
-	// whose failures someone should hear about.
+	// telemetry outlives a failed upload port: an install that cannot upload most needs its failures heard.
 	telemetry telemetrySubmitter
 
-	// telemetryOff latches when the control plane says this organization has no collector. Run
-	// scoped, not written back into the resolved configuration, which carries provenance.
+	// telemetryOff latches for this run when the control plane reports no collector; config keeps provenance.
 	telemetryOff bool
 
-	// hostname has to be in the event: the control plane forwards the body verbatim as the bytes it
-	// signs, so nothing downstream can add one.
+	// hostname goes in the event: the control plane signs and forwards the body verbatim.
 	hostname string
 
 	log   *auditlog.Log
 	build Build
 
-	// recipients is built once so every sealed object is encrypted to the same set.
+	// recipients is built once so every sealed object has the same readers.
 	recipients []age.Recipient
 
-	// remote is the refresh outcome, kept so a verb can report a fallback.
 	remote controlplane.Remote
 
-	// env expands an enricher's declared database candidates, with the same rules catalog roots use.
+	// env expands enricher database candidates with the same rules catalog roots use.
 	env sources.Env
 
-	// OnProgress is the per-file hook a verb registers before flushing; rendering is CLI-owned.
-	// Nil (the default) is silent.
+	// OnProgress is the per-file hook a verb registers before flushing; nil is silent.
 	OnProgress formats.Progress
 
-	// OnLocked runs once a flush holds the store lock. The lock is non-blocking, so a verb resets a
-	// per-run artifact from here, not at startup, where it would reset another's.
+	// OnLocked runs once a flush holds the non-blocking store lock; a per-run artifact reset at startup
+	// would reset another run's.
 	OnLocked func()
 
 	// runID and lastCrash come from the CLI's crash journal; audit entries and heartbeats carry them.
 	runID     string
 	lastCrash *formats.LastCrash
 
-	// rec caches the failure record while the state dir refuses writes (disk full), so the next
-	// heartbeat still carries the judgement; a successful write drops it.
+	// rec caches the failure record while the state dir refuses writes (disk full), so heartbeats still carry it.
 	recMu sync.Mutex
 	rec   *formats.FailureRecord
 
-	// lastRep is the last completed tick's report, reused by the stall heartbeat so a stalled
-	// install does not blank its own per-source health. Judge writes it, the next tick's watchdog
-	// reads it; the two never overlap (the watchdog is joined before judging).
+	// lastRep lets the stall heartbeat keep per-source health; the watchdog is joined before Judge writes it.
 	lastRep formats.Report
 
-	// OnCrashShipped fires once, when a heartbeat CARRYING the crash report reached the sink; the
-	// heartbeat fails open, so nothing weaker proves delivery.
+	// OnCrashShipped fires once a heartbeat carrying the crash reached the sink; heartbeats fail open,
+	// so nothing weaker proves delivery.
 	OnCrashShipped func()
 	crashOnce      sync.Once
 
-	// hbMu serializes heartbeat PUTs: the remote object is overwritten in place, and a stall
-	// heartbeat still in flight must land BEFORE the engine's own, not over it.
+	// hbMu serializes heartbeat PUTs: the object is overwritten in place, and an in-flight stall
+	// heartbeat must land before the engine's own.
 	hbMu sync.Mutex
 }
 
-// The run id lands on every audit entry and heartbeat; the previous run's death rides one out.
+// SetRunInfo stamps audit entries and heartbeats with the run id; one heartbeat carries the previous run's crash.
 func (r *Runtime) SetRunInfo(runID string, lastCrash *formats.LastCrash) {
 	r.runID, r.lastCrash = runID, lastCrash
 	r.log.SetRunID(runID)
 }
 
 func New(build Build) (*Runtime, error) {
-	// Cancellable, so Ctrl-C during the startup config fetch stops it.
+	// Ctrl-C stops the startup config fetch; a failed refresh does not stop the run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The collecting verbs refresh the remote layer first; a failed refresh does not stop the run.
 	eff, paths, remote, err := ResolveOnline(ctx)
 	if err != nil {
 		return nil, err
@@ -114,8 +104,7 @@ func New(build Build) (*Runtime, error) {
 	return NewFrom(build, eff, paths, remote)
 }
 
-// NewFrom builds the runtime from an ALREADY resolved config, so a verb that has resolved once
-// (doctor) does not pay for a second config fetch.
+// NewFrom builds the runtime from an already resolved config, so doctor does not fetch it twice.
 func NewFrom(
 	build Build,
 	eff *config.Effective,
@@ -137,10 +126,7 @@ func NewFrom(
 		return nil, err
 	}
 
-	// Held rather than returned so `preview` keeps working on an install that has no control
-	// plane. The port stays interface-typed and is assigned only on success: a failed *vendPort
-	// would box a typed nil and panic on first use instead of reporting uploadErr. The client is
-	// built first and kept even when the port is not.
+	// Assigned only on success: a failed *vendPort would box a typed nil and panic instead of reporting uploadErr.
 	var up engine.UploadPort
 	var telemetry telemetrySubmitter
 	client, upErr := newControlPlaneClient(paths.StateDir)
@@ -162,8 +148,7 @@ func NewFrom(
 		remote: remote, env: env, recipients: recipients}, nil
 }
 
-// recipientsFor composes the encryption set from the identity unit and the resolved config:
-// refusing beats sealing to fewer readers than the operator configured.
+// recipientsFor refuses rather than seal to fewer readers than the operator configured.
 func recipientsFor(eff *config.Effective, unit *identity.Unit) ([]age.Recipient, error) {
 	var out []age.Recipient
 	if eff.IncludeInstallRecipient {
@@ -199,20 +184,17 @@ func (r *Runtime) options(dryRun bool) engine.Options {
 	}
 }
 
-// Enrichers is the compiled enricher registry, shared with doctor so "in this build" cannot
-// drift from what the engine runs. Config can disable an entry; no layer can add one.
+// Enrichers is the compiled registry, shared with doctor so it cannot drift from the engine; config can only disable.
 func Enrichers() *transforms.Registry {
 	return transforms.NewRegistry(cursorjoin.New())
 }
 
-// Flush opens the store, runs once, and closes. Every path goes through here, so all of them
-// share one flock and cannot interleave.
+// Flush is how every path runs, so all share one store flock and cannot interleave.
 func (r *Runtime) Flush(ctx context.Context, dryRun bool) (formats.Report, error) {
 	return r.flushWith(ctx, dryRun, false)
 }
 
-// Drain flushes everything pending on an ephemeral host, bounded by the deadline rather than by
-// max_files_per_run: the per-run bound is the wrong limit, and the deadline bounds a stuck hook.
+// Drain flushes everything pending on an ephemeral host, bounded by the deadline (a stuck hook), not max_files_per_run.
 func (r *Runtime) Drain(ctx context.Context) (formats.Report, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.eff.DrainDeadline)
 	defer cancel()
@@ -238,7 +220,7 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 		r.OnLocked()
 	}
 
-	// Raised at the one moment it matters; a preview never reaches here with it set.
+	// A preview never needs the upload port.
 	if !dryRun && r.uploadErr != nil {
 		return formats.Report{}, r.uploadErr
 	}
@@ -248,8 +230,7 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 	o.Heartbeat = r.WriteHeartbeat
 	rep, err := engine.Run(ctx, store, o)
 
-	// Stamped even when the run shipped nothing: the marker answers "is the agent running at all",
-	// which the fingerprint document cannot.
+	// Stamped even when nothing shipped: the marker answers "is the agent running at all".
 	if !dryRun {
 		if markErr := packaging.RecordRun(r.eff.StateDir, time.Now()); markErr != nil && err == nil {
 			// A missing marker makes `status` report NEVER on a healthy install.
@@ -259,9 +240,8 @@ func (r *Runtime) flushWith(ctx context.Context, dryRun, unbounded bool) (format
 	return rep, err
 }
 
-// WriteHeartbeat publishes discovery health as an install-owned state object: under state/ but
-// inside the install prefix, so one erasure sweep takes it too, and carrying no transcript bytes.
-// `doctor` probes the write path with it, as it is the only state object the protocol authorizes.
+// WriteHeartbeat publishes discovery health, no transcript bytes, inside the install prefix so erasure takes it.
+// `doctor` probes the write path with it: the only state object the protocol authorizes.
 func (r *Runtime) WriteHeartbeat(ctx context.Context, rep formats.Report) error {
 	return r.writeHeartbeat(ctx, rep, true)
 }
@@ -278,8 +258,7 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 		RunID:          r.runID,
 		Report:         rep,
 		Now:            time.Now().UTC(),
-		// The crash comes from this process reading the journal; the failures come from the
-		// record, which may include this very run's judgement.
+		// The record may include this very run's judgement.
 		FailureRecord: r.failureRecord(),
 	})
 	body, err := hb.Encode()
@@ -288,14 +267,12 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 	}
 	hash := transforms.Hash(body)
 
-	// Mirrored in the clear (counts and versions, never payload bytes) so `quesma-shipper doctor` needs
-	// no network call. Best-effort: a reporting nicety must never fail a flush.
+	// Mirrored in the clear (counts, never payload bytes) for doctor; best-effort, it must never fail a flush.
 	if mirror {
 		_ = platform.WriteAtomic(filepath.Join(r.eff.StateDir, engine.Name), body, 0o600)
 	}
 
-	// The resolved organization, not a literal: the heartbeat has to land in the same subtree as
-	// its mirror objects, or one erasure sweep would miss it.
+	// The resolved organization, so one erasure sweep of the subtree takes the heartbeat too.
 	key, err := formats.StateKey(r.eff.OrganizationID, r.unit.InstallID.String(), engine.Name+".age")
 	if err != nil {
 		return err
@@ -311,7 +288,7 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 		SourceHash:      hash,
 		SealedAt:        time.Now().UTC().Format(time.RFC3339),
 		ShapeSniff:      string(formats.SniffOK),
-		// The same config fields every mirror manifest carries, so no reader special-cases this one.
+		// Same config fields as every mirror manifest, so no reader special-cases this one.
 		ConfigVersion: r.eff.ConfigVersion,
 		ConfigExpired: r.eff.ConfigExpired,
 		Client:        clientBlock(),
@@ -325,8 +302,7 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 	if r.uploadErr != nil {
 		return r.uploadErr
 	}
-	// The heartbeat goes down the trajectory path exactly: one authorization, the same validation,
-	// the same PUT. No second way to reach the store, which a revocation would have to learn about.
+	// The same authorization and PUT as trajectories: no second path to the store for a revocation to miss.
 	outcomes := r.upload.AuthorizeAndUpload(ctx, []engine.PreparedObject{{
 		ObjectID:   "heartbeat",
 		Key:        key,
@@ -344,9 +320,8 @@ func (r *Runtime) writeHeartbeat(ctx context.Context, rep formats.Report, mirror
 	return outcomes[0]
 }
 
-// planFor is the one place configuration becomes something the loop can read: the core gets
-// values, never the resolver, so adding a config key does not touch the engine. The repo
-// attributor comes from the catalog alone: tracking is answered by marker files, not config.
+// planFor hands the engine values, never the resolver, so a new config key does not touch the engine.
+// The repo attributor comes from the catalog alone: marker files answer tracking, not config.
 func planFor(eff *config.Effective) engine.Plan {
 	interval, _ := config.TickInterval(eff.Schedule)
 	return engine.Plan{
@@ -370,23 +345,20 @@ func planFor(eff *config.Effective) engine.Plan {
 // Effective is the configuration in force.
 func (r *Runtime) Effective() *config.Effective { return r.eff }
 
-// RefreshAbsentRoots re-picks the roots that did not resolve at startup and reports the source ids
-// that now do. The scheduler calls it before each tick: options() rebuilds the plan from r.eff
-// every flush, so a root found here is collected by the tick that follows.
+// RefreshAbsentRoots returns source ids whose roots now resolve; options() rebuilds the plan each
+// flush, so the next tick collects them.
 func (r *Runtime) RefreshAbsentRoots() []string { return config.RefreshAbsentRoots(r.eff, r.env) }
 
 // Remote is the outcome of this run's config refresh, so a verb can report a fallback.
 func (r *Runtime) Remote() controlplane.Remote { return r.remote }
 
-// Destination describes where objects go. A description, never a URL: a ticket's path and query
-// are credentials that must not reach a printed line.
+// Destination describes where objects go, never as a URL: a ticket's path and query are credentials.
 func (r *Runtime) Destination() string { return DescribeDestination(r.eff) }
 
 // StateDir is the directory in force, which is not necessarily the default one.
 func (r *Runtime) StateDir() string { return r.eff.StateDir }
 
-// AuditLog is the append-only record of what this install decided. Exposed so the scheduler loop
-// can record a panic: a run that died leaves no report.
+// AuditLog is exposed so the scheduler can record a panic: a run that died leaves no report.
 func (r *Runtime) AuditLog() *auditlog.Log { return r.log }
 
 // Recipients are the public keys objects are encrypted to, as strings: public halves only.
@@ -398,8 +370,7 @@ func (r *Runtime) Recipients() []string {
 	return out
 }
 
-// FilterSources narrows a run to one source, on a copy: narrowing a view must not mutate the
-// configuration the next verb reads.
+// FilterSources narrows a run to one source on a copy, so the next verb reads the full config.
 func (r *Runtime) FilterSources(id string) {
 	clone := *r.eff
 	clone.Sources = nil
@@ -411,8 +382,7 @@ func (r *Runtime) FilterSources(id string) {
 	r.eff = &clone
 }
 
-// clientBlock is the build identity stamped into every object. One place, because it is a wire
-// contract the ETL groups on: a second construction site is how two objects disagree.
+// clientBlock is the build identity in every object; the ETL groups on it, so it is built in one place.
 func clientBlock() transforms.Client {
 	b := platform.Current()
 	return transforms.Client{

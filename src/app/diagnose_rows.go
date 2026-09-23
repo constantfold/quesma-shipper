@@ -45,8 +45,7 @@ func checkUpdate(ctx context.Context, build Build, autoupdate bool, getenv func(
 	if !autoupdate {
 		return UpdateStatus{State: "disabled", Detail: "check disabled by autoupdate.enabled: false"}
 	}
-	// Only a release build self-updates, and it does so through TUF. A dev build reports its own
-	// stamp and stops: no network, no comparison against a source repository.
+	// Only a release build self-updates, through TUF; a dev build makes no network call.
 	if !build.Release {
 		return UpdateStatus{State: "skipped", Detail: "dev build; self-update installs only in release builds"}
 	}
@@ -173,7 +172,7 @@ func familyRows(name string, probes []sourceProbe, up familyUpload, now time.Tim
 	absent := 0
 	var noMatch []config.ResolvedSource
 
-	// Every per-part warning is the same row shape; short is what the rollup line says went wrong.
+	// short is what the rollup line says went wrong.
 	warn := func(part, short, detail, fix string) Row {
 		return Row{Sev: SevWarn, Sub: true, Label: "  " + part,
 			Brief: name + " " + part + ": " + short, Detail: detail, Fix: fix}
@@ -445,7 +444,6 @@ func discoveryRows(src config.ResolvedSource, d sources.Discovery) []Row {
 			rows = append(rows, Row{Sev: SevOK, Label: src.ID, Detail: detail})
 		}
 	default:
-		// Every health other than Collected reports the same line and differs only in severity and fix.
 		sev, fix := SevWarn, ""
 		switch {
 		case d.Health == sources.AgentAbsent, d.Health == sources.RootPresentNoMatch && d.Ignored:

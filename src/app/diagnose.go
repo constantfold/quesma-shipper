@@ -78,9 +78,7 @@ func Diagnose(ctx context.Context, build Build, verbose bool) *Report {
 		if verbose {
 			where = env.Destination() + ", "
 		}
-		// Doctor probes the write path with the one state object the protocol authorizes.
-		// mirror=false: doctor collects nothing, and mirroring its all-zero counters would erase
-		// the record of the last real flush, the very thing doctor reads.
+		// No mirror: doctor's all-zero counters would overwrite the last real flush it reads.
 		if err := env.writeHeartbeat(pctx, doctorReport(probes), false); err != nil {
 			shipping = append(shipping, Row{Sev: SevFail, Label: "storage", Brief: "cannot send",
 				Detail: where + "upload check failed: " + err.Error(),
