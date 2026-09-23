@@ -1,6 +1,7 @@
 package formats_test
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -189,5 +190,22 @@ func TestKeyLeaksNothingAboutThePath(t *testing.T) {
 	}
 	if len(leaf) != 64+len(".age") {
 		t.Errorf("mirror name should be 64 hex chars plus .age, got %q", leaf)
+	}
+}
+
+// Distinct files must never share a canonical path: the key is derived from it, so they would
+// overwrite each other on every run.
+func TestCanonicalPathKeepsDistinctFilesApart(t *testing.T) {
+	pairs := [][2]string{
+		{"notes/__USER__.md", "notes/jane.md"},
+		{"notes/__USER_jane.md", "notes/jane_USER__.md"},
+	}
+	if runtime.GOOS != "windows" {
+		pairs = append(pairs, [2]string{`a\b.jsonl`, "a/b.jsonl"})
+	}
+	for _, p := range pairs {
+		if a, b := formats.CanonicalPath(p[0], "jane"), formats.CanonicalPath(p[1], "jane"); a == b {
+			t.Errorf("%q and %q share the canonical path %q", p[0], p[1], a)
+		}
 	}
 }
