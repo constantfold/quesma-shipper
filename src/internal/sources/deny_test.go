@@ -133,15 +133,19 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 		{"~/.npmrc", "~/.npmrc"},
 		{"~/.pypirc", "~/.pypirc"},
 		{"~/.git-credentials", "~/.git-credentials"},
-		{"~/.claude.json", "~/.claude.json"},
+		{"~/.claude.json", "**/.claude.json"},
 		{"~/.claude.json.bak", ""},
-		{"~/.claude/.credentials.json", "~/.claude/.credentials.json"},
+		{"~/.claude/.credentials.json", "**/.credentials.json"},
 		{"~/.claude/projects/p/a.jsonl", ""},
 		{"~/.docker/config.json", "~/.docker/config.json"},
 		{"~/.docker/daemon.json", ""},
-		{"~/.codex/auth.json", "~/.codex/auth.json"},
-		{"~/.config/opencode/auth.json", "~/.config/opencode/auth.json"},
-		{"~/.local/share/opencode/auth.json", "~/.local/share/opencode/auth.json"},
+		{"~/.codex/auth.json", "**/auth.json"},
+		{"~/.config/opencode/auth.json", "**/auth.json"},
+		{"~/.local/share/opencode/auth.json", "**/auth.json"},
+		// Agent stores moved by $CLAUDE_CONFIG_DIR and $CODEX_HOME keep their credential files denied.
+		{"/work/claude-config/.credentials.json", "**/.credentials.json"},
+		{"/work/claude-config/.claude.json", "**/.claude.json"},
+		{"/work/codex-home/auth.json", "**/auth.json"},
 		// Basenames, anywhere, and their near misses.
 		{"~/proj/.env", "**/.env"},
 		{"~/proj/.envy", ""},
@@ -167,7 +171,7 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 		{"/", ""},
 	}
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		corpus = append(corpus, row{"~/.SSH/id_rsa", "~/.ssh/**"}, row{"~/proj/.ENV", "**/.env"},
 			row{"~/proj/ID_RSA", "**/id_rsa"}, row{"~/proj/PRIVATE.KEY", "**/*.key"})
 	} else {
@@ -200,5 +204,21 @@ func TestMatchReportsTheFirstPatternInListOrder(t *testing.T) {
 		if !reported[pat] {
 			t.Errorf("no corpus path is reported against %q: add one", pat)
 		}
+	}
+}
+
+// A symlinked home is denied under both spellings: Match also tests the resolved path.
+func TestDenyHoldsUnderASymlinkedHome(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied, _ := New(link).Match(filepath.Join(resolved, ".ssh", "id_ed25519_sk")); !denied {
+		t.Error("a path under the resolved home escaped ~/.ssh/**")
 	}
 }
