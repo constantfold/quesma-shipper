@@ -69,9 +69,8 @@ func pauseStateDir() (dir, warning string, err error) {
 		resolveErr, fallback), nil
 }
 
-// StateDirWithoutConfig resolves the state directory the way pause does. The diagnostics record
-// needs it for the same reason: a config too broken to load must not also hide the record of what
-// broke.
+// StateDirWithoutConfig resolves the state dir like pause, so a config too broken to load cannot
+// also hide the record of what broke.
 func StateDirWithoutConfig() (string, error) {
 	dir, _, err := pauseStateDir()
 	return dir, err

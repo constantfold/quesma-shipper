@@ -1,9 +1,7 @@
 package app
 
-// The write path, assembled: the authorization client, the upload-target allowlist and the
-// presigned uploader behind the engine's one upload port. The engine gets prepared objects and
-// verdicts; every wire type, every ticket and every URL stops here, because app is the only
-// package allowed to import both controlplane and upload.
+// The write path: authorization client, upload-target allowlist and presigned uploader behind the
+// engine's upload port. Wire types, tickets and URLs stop here; app alone imports controlplane and upload.
 
 import (
 	"context"
@@ -24,22 +22,19 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/upload"
 )
 
-// vendPort is the engine's UploadPort. One instance per process, because the writer id is one per
-// process: a second port would report two writers from one machine.
+// vendPort is the engine's UploadPort, one per process: a second would report two writers from one machine.
 type vendPort struct {
 	client   *controlplane.Client
 	uploader *upload.Uploader
 	targets  upload.UploadTargetList
 	writerID string
 
-	// now is the signing clock and the ticket-expiry clock. A field so a test can pin it.
+	// now is the signing and ticket-expiry clock, a field so a test can fix it.
 	now func() time.Time
 }
 
-// newControlPlaneClient builds the authenticated client from the enrollment record alone.
-//
-// Separate from the upload port because the two fail for different reasons: a client needs only an
-// enrolment, a port also needs usable upload targets. Telemetry depends on the first, not the second.
+// newControlPlaneClient builds the client from the enrollment alone, apart from the port, which also
+// needs usable upload targets: telemetry needs only the client.
 func newControlPlaneClient(stateDir string) (*controlplane.Client, error) {
 	enrollment, err := controlplane.LoadEnrollment(stateDir)
 	if err != nil {
@@ -62,8 +57,7 @@ func newControlPlaneClient(stateDir string) (*controlplane.Client, error) {
 	})
 }
 
-// newUploadPort assembles the write path. The enrollment record is mandatory, the allowlist is not:
-// with no upload_targets the tickets decide the destination, https only and exact key enforced.
+// newUploadPort needs no allowlist: without upload_targets tickets decide, https only and exact key.
 func newUploadPort(client *controlplane.Client, eff *config.Effective) (*vendPort, error) {
 	targets, err := uploadTargets(eff)
 	if err != nil {
@@ -78,8 +72,7 @@ func newUploadPort(client *controlplane.Client, eff *config.Effective) (*vendPor
 	}, nil
 }
 
-// AuthorizeAndUpload spends one bounded group: one authorization, then one PUT per ticket. The
-// batch is authorized whole or not at all; past that point the objects succeed or fail alone.
+// AuthorizeAndUpload authorizes the batch whole or not at all, then each object's PUT succeeds or fails alone.
 func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.PreparedObject) []error {
 	out := make([]error, len(batch))
 	req, err := p.request(batch)
@@ -100,7 +93,7 @@ func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.Prepar
 		tickets[t.ObjectID] = t
 	}
 
-	// Bounds the PUTs one authorization group has in flight; without it a group of 32 sends 32 at once.
+	// Bounds the PUTs one group has in flight.
 	slots := make(chan struct{}, 4*runtime.GOMAXPROCS(0))
 	var wg sync.WaitGroup
 	for i, obj := range batch {
@@ -110,8 +103,7 @@ func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.Prepar
 				"upload: the control plane issued no ticket for object %q", obj.ObjectID)
 			continue
 		}
-		// The archive already holds these bytes under this source hash: nothing to validate, nothing
-		// to send; the sentinel commits the fingerprint and marks the audit line.
+		// The archive holds these bytes already; the sentinel commits the fingerprint and marks the audit line.
 		if issued.AlreadyPresent {
 			out[i] = engine.ErrAlreadyPresent
 			continue
@@ -128,8 +120,8 @@ func (p *vendPort) AuthorizeAndUpload(ctx context.Context, batch []engine.Prepar
 	return out
 }
 
-// send validates one ticket against the object this machine actually prepared, then spends it.
-// Both checks come before any byte leaves: origin, then exact key, then the closed header set.
+// send validates the ticket against the object this machine prepared (origin, exact key, closed
+// header set) before any byte leaves.
 func (p *vendPort) send(ctx context.Context, obj engine.PreparedObject, issued controlplane.Ticket) error {
 	if issued.AlreadyPresent {
 		return nil
@@ -145,7 +137,7 @@ func (p *vendPort) send(ctx context.Context, obj engine.PreparedObject, issued c
 	if err := upload.ValidateTicket(p.targets, prepared, ticket); err != nil {
 		return err
 	}
-	// Nothing the store said crosses back: the local fingerprint document is the sole progress authority.
+	// Nothing the store says crosses back: the local fingerprint document alone tracks progress.
 	if err := p.uploader.Upload(ctx, ticket, obj.Body); err != nil {
 		return p.classifyPut(err, ticket)
 	}
@@ -178,8 +170,8 @@ func (p *vendPort) request(batch []engine.PreparedObject) (controlplane.Authoriz
 	}, nil
 }
 
-// uploadMetadata maps manifest metadata onto the closed request set, name by name. An unknown name
-// fails the whole batch: dropping it would ship plaintext metadata disagreeing with the manifest.
+// uploadMetadata fails the batch on an unknown name: dropping it would ship plaintext metadata
+// that disagrees with the manifest.
 func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string, error) {
 	var out controlplane.UploadMetadata
 	var dropped []string
@@ -194,8 +186,7 @@ func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string
 		case "artifact-class":
 			out.ArtifactClass = value
 		case "agent-version":
-			// The one value an agent's own file supplies verbatim: out of grammar it would fail the
-			// WHOLE batch for as long as that file exists, so the value goes and the object ships.
+			// Copied verbatim from the agent's file, so a bad value is dropped rather than fail every batch.
 			if !printableASCII(value, 128) {
 				dropped = append(dropped, fmt.Sprintf(
 					"agent-version %q is not printable ASCII within 128 bytes; "+
@@ -222,14 +213,13 @@ func uploadMetadata(md map[string]string) (controlplane.UploadMetadata, []string
 	return out, dropped, nil
 }
 
-// printableASCII is the plaintext-metadata grammar the control plane enforces: up to max bytes of
-// printable ASCII. Empty passes; an absent value is simply not sent.
+// printableASCII is the control plane's plaintext-metadata grammar; empty passes, as absent is not sent.
 func printableASCII(v string, max int) bool {
 	return len(v) <= max && !strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e })
 }
 
-// classifyAuthorize picks the sentinel the engine reads: refused credentials kill the install, an
-// outage stops one run, and the unavailable wrapping drops the chain so neither can find the other.
+// classifyAuthorize maps to engine sentinels: refused credentials kill the install, an outage stops
+// one run; the unavailable wrapping drops the chain so neither matches the other.
 func classifyAuthorize(err error) error {
 	switch {
 	case errors.Is(err, formats.ErrCredentialsRefused):
@@ -240,8 +230,7 @@ func classifyAuthorize(err error) error {
 	return err
 }
 
-// classifyPut names the one PUT failure worth a second authorization inside a run: a store refusal
-// on a ticket whose own expiry has passed. Every other refusal waits for the next run.
+// classifyPut marks only a store refusal on an expired ticket as worth re-authorizing within the run.
 func (p *vendPort) classifyPut(err error, ticket upload.Ticket) error {
 	var status *upload.StatusError
 	if !errors.As(err, &status) {
@@ -256,7 +245,7 @@ func (p *vendPort) classifyPut(err error, ticket upload.Ticket) error {
 	return err
 }
 
-// sameOutcome is one verdict for the whole group, for the failures that leave no per-object information.
+// sameOutcome gives the whole group one verdict when a failure has no per-object information.
 func sameOutcome(out []error, err error) []error {
 	for i := range out {
 		out[i] = err
@@ -264,11 +253,11 @@ func sameOutcome(out []error, err error) []error {
 	return out
 }
 
-// DescribeDestination names where objects go for the verbs that print it before a runtime exists:
-// a ticket path or query authorizes the write, so it never reaches a printed line.
+// DescribeDestination names where objects go before a runtime exists, never a ticket path or
+// query: those authorize the write.
 func DescribeDestination(eff *config.Effective) string {
 	if len(eff.UploadTargets) == 0 {
-		// Worded to hold on a local-dev install too, where no tickets exist and nothing uploads.
+		// Worded to hold on local-dev too, where nothing uploads.
 		return "presigned upload (no pinned origins; set upload_targets to pin)"
 	}
 	origins := make([]string, 0, len(eff.UploadTargets))
@@ -285,8 +274,7 @@ func DestinationHosts(destination, endpoint string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
 }
 
-// uploadTargets turns the machine owner's allowlist into the matcher the uploader consults. One
-// bad entry refuses the whole list, or the operator's file would disagree with the live origins.
+// uploadTargets refuses the whole allowlist on one bad entry, or the file would disagree with live origins.
 func uploadTargets(eff *config.Effective) (upload.UploadTargetList, error) {
 	list := make(upload.UploadTargetList, 0, len(eff.UploadTargets))
 	for i, t := range eff.UploadTargets {
@@ -304,8 +292,7 @@ func uploadTargets(eff *config.Effective) (upload.UploadTargetList, error) {
 	return list, nil
 }
 
-// toUploadTicket copies one issued ticket into the uploader's shape; ValidateTicket refuses header
-// names outside the provider set before any byte leaves.
+// toUploadTicket clones headers; ValidateTicket refuses names outside the provider set.
 func toUploadTicket(t controlplane.Ticket) upload.Ticket {
 	return upload.Ticket{
 		TicketID:            t.TicketID,

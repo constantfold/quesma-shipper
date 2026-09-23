@@ -12,15 +12,14 @@ import (
 	"github.com/QuesmaOrg/quesma-shipper/internal/sources"
 )
 
-// ResolveEffective resolves every local layer plus whatever remote layer is already on disk. No
-// network call: a read-only verb must explain the config in force without a round-trip.
+// ResolveEffective resolves local layers plus the cached remote layer, with no network call, so a
+// read-only verb explains the config in force without a round-trip.
 func ResolveEffective() (*config.Effective, config.Paths, error) {
 	eff, paths, _, err := resolve(context.Background(), true)
 	return eff, paths, err
 }
 
-// ResolveOnline refreshes the remote layer first, then resolves. A refresh that fails falls back
-// to the cached config and reports why; collection continues either way.
+// ResolveOnline refreshes the remote layer first; a failed refresh falls back to the cache and says why.
 func ResolveOnline(ctx context.Context) (*config.Effective, config.Paths, controlplane.Remote, error) {
 	return resolve(ctx, false)
 }
@@ -41,12 +40,10 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 		return nil, paths, controlplane.Remote{}, err
 	}
 
-	// Known BEFORE the remote layer is fetched, because the enrollment record and the config cache
-	// live in it; only local layers may set state_dir, so the remote layer cannot move it after.
+	// Known before the fetch, since enrollment and config cache live in it; only local layers set state_dir.
 	paths.StateDir = stateDirFrom(layers, paths.StateDir)
 
-	// A MISSING record means standalone, a complete configuration. Anything else is refused, not
-	// swallowed: swallowing silently downgrades an enrolled install to "no backend".
+	// A missing record means standalone; any other error is refused, not downgraded to "no backend".
 	enrollment, err := controlplane.LoadEnrollment(paths.StateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, paths, controlplane.Remote{}, fmt.Errorf(
@@ -62,7 +59,7 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 	})
 
 	if remote.Doc != nil {
-		// Fetched or read back from the cache; either way it came from the enrolled control plane.
+		// Fetched or cached, it came from the enrolled control plane.
 		layers = append(layers, config.LayeredDocument{
 			Layer: config.LayerRemote,
 			Doc:   remote.Doc,
@@ -79,14 +76,12 @@ func resolve(ctx context.Context, offline bool) (*config.Effective, config.Paths
 	if err != nil {
 		return nil, paths, remote, err
 	}
-	// paths.StateDir now means "the state directory in force": the identity unit and the
-	// fingerprint document persist together or not at all.
+	// The state dir in force: the identity unit and fingerprint document persist together or not at all.
 	paths.StateDir = eff.StateDir
 	return eff, paths, remote, nil
 }
 
-// stateDirFrom returns the state directory the layers set, or the default. Layers arrive in
-// precedence order, lowest first, so the last one that mentions it wins, as Resolve does.
+// stateDirFrom lets the last layer that sets it win, as Resolve does: layers arrive lowest first.
 func stateDirFrom(layers []config.LayeredDocument, def string) string {
 	out := def
 	for _, ld := range layers {

@@ -1,8 +1,7 @@
 package app
 
-// The install's memory of its failures, carried by heartbeats. Persisted when the disk allows it
-// and held in memory when it does not, and a failed tick ships its own failure heartbeat: without
-// both, a machine that fails every tick is indistinguishable from an idle one.
+// The install's failure record, carried by heartbeats: persisted when the disk allows, held in memory
+// when not, and a failed tick ships its own heartbeat, so a machine failing every tick is not read as idle.
 
 import (
 	"context"
@@ -26,15 +25,10 @@ const (
 	maxFailureBytes = 1 << 16
 )
 
-// JudgeTick decides whether a flush counts as a failure and persists that decision. It RETURNS the
-// error the run should be judged by, which is not always the one passed in:
-//
-//   - lock contention becomes nil and records nothing, because another flush IS running
-//   - a nil error with every attempted upload failed becomes a failure, because that is the shape a
-//     real outage takes
-//
-// A locally-caused failure also ships a failure heartbeat, which can block up to
-// failureHeartbeatTimeout. Best-effort throughout: bookkeeping must never change a run's outcome.
+// JudgeTick persists whether a flush failed and returns the error to judge the run by: lock contention
+// becomes nil (another flush is running), and a nil error with every upload failed becomes a failure
+// (a real outage). A local failure ships a heartbeat, blocking up to failureHeartbeatTimeout.
+// Best-effort: bookkeeping must never change a run's outcome.
 func (r *Runtime) JudgeTick(err error, rep formats.Report, panicked bool, mem platform.Delta) error {
 	kind := formats.FailureTick
 	if panicked {
@@ -43,8 +37,7 @@ func (r *Runtime) JudgeTick(err error, rep formats.Report, panicked bool, mem pl
 	return r.judge(err, rep, kind, mem)
 }
 
-// JudgeFinalSlice is the SIGTERM drain: the same judgement, filed under its own kind because a
-// failed last slice on a host that is going away is loss rather than a retry.
+// JudgeFinalSlice judges the SIGTERM drain under its own kind: a failed last slice is loss, not a retry.
 func (r *Runtime) JudgeFinalSlice(err error, rep formats.Report, mem platform.Delta) error {
 	return r.judge(err, rep, formats.FailureShutdown, mem)
 }
@@ -54,8 +47,7 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 		return nil
 	}
 	if err == nil && rep.Shipped == 0 && rep.Failed > 0 {
-		// One reason travels: the count alone cannot tell a refused PUT from an unreachable
-		// control plane, and identical messages make the log unactionable.
+		// A count alone cannot tell a refused PUT from an unreachable control plane, and identical messages are unactionable.
 		err = fmt.Errorf("the run shipped nothing: all %d attempted uploads failed: %s",
 			rep.Failed, firstFailureReason(rep))
 	}
@@ -63,18 +55,15 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 	r.persistRecord("tick outcome", os.Stderr, func(rec *formats.FailureRecord) {
 		rec.Facts = r.runFacts(rep, mem)
 
-		// Recorded, never counted: the discard costs one re-ship rather than failing the run, but it
-		// is the one condition that can otherwise lose a file for good.
+		// Recorded, never counted: the discard costs a re-ship, but it can otherwise lose a file for good.
 		if rep.StoreCorrupt {
 			rec.Append(newEvent(r.eff.StateDir, r.runID, formats.FailureStoreCorrupt,
 				"the fingerprint store could not be loaded and was discarded; the next sync replaces it"))
 		}
 
 		if err == nil {
-			// Persisted on a clean run too, on purpose twice over: a healthy run's cost is the
-			// baseline that makes the next one's readable, and the next heartbeat is built
-			// mid-flush BEFORE judging, so it can only read these facts off disk; an in-memory
-			// shortcut would silently empty the field.
+			// Persisted on a clean run too: it is the next run's baseline, and the next heartbeat is
+			// built mid-flush before judging, so it can only read these facts off disk.
 			rec.ConsecutiveFailures = 0
 		} else {
 			ev := newEvent(r.eff.StateDir, r.runID, kind, err.Error())
@@ -86,14 +75,12 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 	})
 
 	if err == nil {
-		// Kept for the stall heartbeat, which fires mid-tick when no fresh report exists yet.
+		// For the stall heartbeat, which fires mid-tick before a fresh report exists.
 		r.lastRep = rep
 	}
 
-	// A failed run's own heartbeat never shipped (the engine sends it only on success), so without
-	// this the record waits for a future healthy run that a full disk may never grant. Skipped when
-	// the uploads themselves failed (another attempt could only stall the loop for one more
-	// timeout) and on the SIGTERM drain, whose host is going away either way.
+	// The engine heartbeats only on success; waiting for a healthy run could wait forever. Skipped when uploads failed
+	// (it would only stall the loop one more timeout) and on the SIGTERM drain, whose host is leaving.
 	if err != nil && kind != formats.FailureShutdown && rep.Failed == 0 {
 		r.shipFailureHeartbeat(context.Background(), rep, "failure record", os.Stderr)
 	}
@@ -102,9 +89,8 @@ func (r *Runtime) judge(err error, rep formats.Report, kind string, mem platform
 
 const failureHeartbeatTimeout = 30 * time.Second
 
-// shipFailureHeartbeat uploads the record outside the engine's own success-path heartbeat.
-// mirror=false always: the local heartbeat.json keeps describing the last real flush, which is
-// what doctor reads. A cancelled parent (the tick finished mid-send) is not worth a warning.
+// shipFailureHeartbeat never mirrors: doctor reads heartbeat.json as the last real flush.
+// A cancelled parent (the tick finished mid-send) is not worth a warning.
 func (r *Runtime) shipFailureHeartbeat(parent context.Context, rep formats.Report, what string, errOut io.Writer) {
 	if r.upload == nil {
 		return
@@ -125,11 +111,9 @@ func (r *Runtime) loadRecordLocked() *formats.FailureRecord {
 	return r.rec
 }
 
-// persistRecord applies one mutation and writes the result. The in-memory copy is kept only while
-// the disk refuses the write: dropping it after a success means the next mutation re-reads the
-// file, so events appended by other processes merge instead of being clobbered by a stale
-// snapshot. The write runs outside the lock, so an fsync wedged on the very disk being diagnosed
-// cannot block the flush's own heartbeat, which reads the record under the same mutex.
+// persistRecord keeps the in-memory copy only while the disk refuses writes, so the next mutation
+// re-reads the file and merges other processes' events. It writes outside the lock, so an fsync
+// wedged on a failing disk cannot block the heartbeat, which reads the record under the same mutex.
 func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*formats.FailureRecord)) {
 	r.recMu.Lock()
 	rec := r.loadRecordLocked()
@@ -147,10 +131,8 @@ func (r *Runtime) persistRecord(what string, errOut io.Writer, mutate func(*form
 	r.recMu.Unlock()
 }
 
-// WatchStalledTick reports a tick that outlives its own interval, because a run stuck forever
-// never reaches the judge that would say so. One standing event, refreshed on every fire, describes
-// the current stall; the warning and the heartbeat repeat on doubling intervals, so a fleet-wide
-// stall cannot become a fleet-wide request storm.
+// WatchStalledTick reports a tick that outlives its interval, since a stuck run never reaches the judge.
+// One event is refreshed per fire, and intervals double, so a fleet-wide stall is no request storm.
 func (r *Runtime) WatchStalledTick(ctx context.Context, n int, every time.Duration, errOut io.Writer) {
 	if every <= 0 {
 		return
@@ -167,29 +149,25 @@ func (r *Runtime) WatchStalledTick(ctx context.Context, n int, every time.Durati
 		r.persistRecord("stalled tick", errOut, func(rec *formats.FailureRecord) {
 			e := newEvent(r.eff.StateDir, r.runID, formats.FailureStalled,
 				fmt.Sprintf("tick %d still running after %s", n, elapsed))
-			// Replaced, not skipped: clean ticks append nothing, so a stall that recovered stays the
-			// newest event indefinitely, and a later stall must not hide behind its stale timestamp.
+			// Replaced: clean ticks append nothing, so a later stall must not hide behind a stale one.
 			if last := rec.Latest(); last != nil && last.Kind == formats.FailureStalled {
 				*last = e
 			} else {
 				rec.Append(e)
 			}
 		})
-		// The last completed tick's report rides along: this heartbeat overwrites the remote
-		// object, and blanking per-source health would make a stalled install read as an idle one.
+		// This overwrites the remote heartbeat; blank per-source health would read as an idle install.
 		r.shipFailureHeartbeat(ctx, r.lastRep, "stall heartbeat", errOut)
 	}
 }
 
-// RecordCrash persists how the previous run died, written by the run that discovered it: the dead
-// run could say nothing itself.
+// RecordCrash persists how the previous run died, as found by the run after it.
 func RecordCrash(crash *formats.LastCrash) {
 	if crash == nil {
 		return
 	}
 	appendWithoutRuntime("crash", func(dir string, rec *formats.FailureRecord) bool {
-		// One event per dead run, not per restart: an undelivered crash is re-detected on every
-		// start until a heartbeat carries it out, and duplicates would evict the rest of the log.
+		// One event per dead run: it is re-detected each start until delivered, and duplicates evict the log.
 		for i := len(rec.Recent) - 1; i >= 0; i-- {
 			if rec.Recent[i].Kind == formats.FailureCrash {
 				if rec.Recent[i].RunID == crash.RunID {
@@ -205,9 +183,7 @@ func RecordCrash(crash *formats.LastCrash) {
 	})
 }
 
-// runFacts snapshots what the run cost and what it was allowed to do. Written on every outcome,
-// including a clean one: "the last run was fine and here is what it cost" is what makes the run
-// after it comparable.
+// runFacts snapshots what the run cost and was allowed to do, on every outcome so runs compare.
 func (r *Runtime) runFacts(rep formats.Report, mem platform.Delta) *formats.RunFacts {
 	return &formats.RunFacts{
 		GOMAXPROCS:       runtime.GOMAXPROCS(0),
@@ -223,16 +199,13 @@ func (r *Runtime) runFacts(rep formats.Report, mem platform.Delta) *formats.RunF
 	}
 }
 
-// RecordPanic persists a panic from any verb, including the ones with no resolved configuration.
-// Uncounted: the consecutive count answers "how many COLLECTION runs failed in a row", and a
-// one-shot verb crashing is not one of those. The stack stays on stderr, being the one diagnostic
-// that can carry payload-derived strings.
+// RecordPanic persists a panic from any verb, even without resolved config. Uncounted: the count is of
+// collection runs. The stack stays on stderr since it can carry payload-derived strings.
 func RecordPanic(verb string, cause any) {
 	recordWithoutRuntime("", formats.FailurePanic, fmt.Sprintf("panic in %s: %v", verb, cause))
 }
 
-// RecordStartupFailure persists a collecting run that could not start. JudgeTick cannot
-// serve these: it is a *Runtime method, and not having a Runtime is exactly the failure.
+// RecordStartupFailure persists a collecting run that could not build its Runtime, so JudgeTick cannot.
 func RecordStartupFailure(verb, runID string, cause error) {
 	if cause == nil {
 		return
@@ -241,10 +214,8 @@ func RecordStartupFailure(verb, runID string, cause error) {
 		fmt.Sprintf("%s could not start: %v", verb, cause))
 }
 
-// RecordUpdateFailure persists a self-update that did not happen. Uncounted: collection is not
-// failing, so counting it would report a broken collector. It matters because self-update is the
-// remediation channel -- an install that cannot replace itself cannot be fixed remotely, and this
-// reached stderr only, which on a supervised daemon is a log file nothing ships.
+// RecordUpdateFailure persists a failed self-update, uncounted since collection still works. Self-update
+// is the remediation channel, and a supervised daemon's stderr is a log file nothing ships.
 func RecordUpdateFailure(message string) {
 	recordWithoutRuntime("", formats.FailureUpdate, message)
 }
@@ -260,15 +231,14 @@ func recordWithoutRuntime(runID, kind, message string) {
 	})
 }
 
-// appendWithoutRuntime serves the paths with no resolved configuration. The state directory
-// resolves the way the kill switch resolves it, so a config too broken to load cannot also hide
-// the record of what broke.
+// appendWithoutRuntime resolves the state dir like the kill switch, so a config too broken to load
+// cannot also hide the record of what broke.
 func appendWithoutRuntime(what string, mutate func(dir string, rec *formats.FailureRecord) bool) {
 	dir, _, err := pauseStateDir()
 	if err != nil || dir == "" {
 		return
 	}
-	// A verb can fail before anything has minted an identity, so the directory may not exist yet.
+	// A verb can fail before an identity exists, so the directory may not either.
 	if err := platform.EnsureDir(dir, 0o700); err != nil {
 		return
 	}
@@ -281,8 +251,7 @@ func appendWithoutRuntime(what string, mutate func(dir string, rec *formats.Fail
 	}
 }
 
-// Placeholdered here rather than at the call sites, so no path can reach the record by a route
-// that forgot.
+// The username placeholder is applied here, not at call sites, so no route to the record forgets it.
 func newEvent(stateDir, runID, kind, message string) formats.FailureEvent {
 	return formats.FailureEvent{
 		At:      time.Now().UTC().Format(time.RFC3339),
@@ -302,13 +271,11 @@ func (r *Runtime) failureRecord() formats.FailureRecord {
 	return rec
 }
 
-// A record that does not parse is reported and then treated as absent: refusing to flush over
-// corrupt bookkeeping would invert the priorities.
+// An unparsable record is reported and treated as absent: bookkeeping must not stop a flush.
 func readFailureRecord(stateDir string) formats.FailureRecord {
 	raw, _, err := platform.ReadWhole(filepath.Join(stateDir, lastFailureFile), maxFailureBytes)
 	if err != nil {
-		// errors.Is, not os.IsNotExist: ReadWhole wraps the open error, and a fresh install's
-		// missing record is the normal case, not a warning.
+		// errors.Is because ReadWhole wraps the open error; a missing record is normal.
 		if !errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "warning: %s is unreadable and is ignored: %v\n", lastFailureFile, err)
 		}
@@ -322,8 +289,7 @@ func readFailureRecord(stateDir string) formats.FailureRecord {
 	return rec
 }
 
-// The first reason is enough: a run that failed every upload almost always failed them all the
-// same way, and the audit log has the rest.
+// All uploads almost always fail the same way, and the audit log has the rest.
 func firstFailureReason(rep formats.Report) string {
 	for _, s := range rep.Sources {
 		for _, f := range s.Files {
@@ -335,8 +301,6 @@ func firstFailureReason(rep formats.Report) string {
 	return "no reason recorded"
 }
 
-// writeFailureRecord is the one spelling of the write, mirroring readFailureRecord so the file name
-// and its permissions are stated once.
 func writeFailureRecord(stateDir string, rec formats.FailureRecord) error {
 	body, err := json.Marshal(rec)
 	if err != nil {

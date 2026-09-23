@@ -14,16 +14,15 @@ const (
 
 // Build carries the values a release injects at link time.
 type Build struct {
-	// Version is DERIVED, not configured: NewBuild fills it from the binary's own build stamp.
+	// Version comes from the binary's build stamp, never configuration.
 	Version string
 
-	// Release says the version above is a corroborated release stamp; it gates self-update, so a
-	// build that cannot prove which release it is never decides it is out of date.
+	// Release marks a corroborated release stamp; self-update requires it, so an unproven build never
+	// decides it is out of date.
 	Release bool
 }
 
-// NewBuild describes this binary. The version comes from what the toolchain stamped rather than
-// from a flag, so there is exactly one answer and no way for a caller to supply a different one.
+// NewBuild takes the version from the toolchain stamp, not a flag, so no caller can supply another.
 func NewBuild() Build {
 	return Build{Version: platform.Current().String(), Release: platform.Current().Release}
 }
