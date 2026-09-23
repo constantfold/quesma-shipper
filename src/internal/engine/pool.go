@@ -137,6 +137,16 @@ func (p *sourcePass) run(ctx context.Context) error {
 	p.staged = &batcher{
 		maxObjects: max(1, min(maxBatchObjects, uploadLimit/2)),
 		send: func(items []stagedUpload) {
+			if err := p.forgetShipped(items); err != nil {
+				res := make([]fileResult, len(items))
+				for i, it := range items {
+					res[i] = it.res
+					res[i].outcome.Decision = auditlog.DecisionFailed
+					res[i].outcome.Reason = "not attempted: " + err.Error()
+				}
+				go func() { batches <- res }()
+				return
+			}
 			// One authorization, then one PUT per member. The group holds ONE upload slot for its
 			// whole life; the port bounds the fan-out inside.
 			go func() {
@@ -391,6 +401,25 @@ func (p *sourcePass) stageUpload(r fileResult) (res fileResult, final bool) {
 	}
 	p.staged.add(it, int64(len(pending.obj)))
 	return fileResult{}, false
+}
+
+// forgetShipped durably clears the committed hash of every file in the group before it is sent. A
+// PUT can land without its verdict arriving (a crash, a lost response), and a file that then
+// reverts to the committed bytes would read as unchanged while the sink holds the newer ones.
+func (p *sourcePass) forgetShipped(items []stagedUpload) error {
+	forgot := false
+	for _, it := range items {
+		if fp, ok := p.store.Get(it.pending.key); ok && fp.SourceHash != "" {
+			if err := p.store.Commit(it.pending.key, Fingerprint{}); err != nil {
+				return err
+			}
+			forgot = true
+		}
+	}
+	if !forgot {
+		return nil
+	}
+	return p.store.Flush()
 }
 
 // drainStaged empties the accumulator once the run has stopped uploading.
