@@ -45,11 +45,10 @@ var CompiledDeny = []string{
 	"~/Library/Keychains/**",
 
 	// Agent stores hold credentials that look like ordinary JSON, so collection targets projects/** and memory/**, never a whole root.
-	"~/.claude/.credentials.json",
-	"~/.claude.json",
-	"~/.codex/auth.json",
-	"~/.config/opencode/auth.json",
-	"~/.local/share/opencode/auth.json",
+	// Anywhere, not under ~: $CLAUDE_CONFIG_DIR and $CODEX_HOME move the store and its credential file with it.
+	"**/.credentials.json",
+	"**/.claude.json",
+	"**/auth.json",
 }
 
 type List struct {
@@ -61,17 +60,24 @@ func New(home string) *List {
 	d := &List{}
 	env := Env{Home: home, Lookup: os.LookupEnv}
 	seen := map[string]bool{}
-	for _, p := range CompiledDeny {
-		expanded, err := env.expandVars(p)
-		if err != nil {
-			continue
+	// Both spellings of a symlinked home: Match also tests the resolved path, which a pattern built from the link never matches.
+	homes := []string{home}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != home {
+		homes = append(homes, resolved)
+	}
+	for _, h := range homes {
+		for _, p := range CompiledDeny {
+			expanded, err := env.expandVars(p)
+			if err != nil {
+				continue
+			}
+			e := normalize(ExpandHome(expanded, h))
+			if seen[e] {
+				continue
+			}
+			seen[e] = true
+			d.patterns = append(d.patterns, e)
 		}
-		e := normalize(ExpandHome(expanded, home))
-		if seen[e] {
-			continue
-		}
-		seen[e] = true
-		d.patterns = append(d.patterns, e)
 	}
 	return d
 }
@@ -166,11 +172,11 @@ func (d *List) CheckIncludes(root string, includes []string) error {
 	return nil
 }
 
-// normalize converts a path to forward slashes and, on Windows, to lower case: doublestar matching is
-// slash-separated and case-sensitive.
+// normalize converts a path to forward slashes and, on Windows and macOS, to lower case: doublestar
+// matching is slash-separated and case-sensitive, and both default filesystems are not.
 func normalize(p string) string {
 	p = filepath.ToSlash(filepath.Clean(p))
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		p = strings.ToLower(p)
 	}
 	return p
