@@ -565,6 +565,31 @@ func TestFailedUploadCommitsNothing(t *testing.T) {
 	}
 }
 
+// An upload can land without its verdict arriving, so a file reverting to the bytes committed
+// before it must ship again: the sink may hold the newer version.
+func TestAFileRevertingAfterAnUnconfirmedUploadShipsAgain(t *testing.T) {
+	f := newFixture(t)
+	f.writeTranscript("p/s1.jsonl", line1)
+	f.run()
+
+	f.writeTranscript("p/s1.jsonl", line1+line2)
+	f.port.verdict = func(_, _ int, o engine.PreparedObject) error {
+		f.port.store(o)
+		return errors.New("connection reset after the PUT")
+	}
+	f.run()
+	f.port.verdict = nil
+
+	f.writeTranscript("p/s1.jsonl", line1)
+	if rep := f.run(); rep.Shipped != 1 {
+		t.Fatalf("the reverted file must ship again: %+v", rep)
+	}
+	obj, _ := f.port.get(f.port.keys()[0])
+	if got, want := obj.Metadata["source-hash"], transforms.Hash([]byte(line1)); got != want {
+		t.Errorf("the sink holds source hash %s, the file is %s", got, want)
+	}
+}
+
 // --- redaction and never-mutate ---------------------------------------------
 
 // The payload is scrubbed before sealing, and the identifiers that make it a graph survive.
