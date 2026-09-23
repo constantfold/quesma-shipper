@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -27,11 +28,15 @@ var identifierRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // CanonicalPath is the deterministic string a mirror name is derived from: identical on every run
 // and every machine of the identity unit, so a re-ship after state loss overwrites, never duplicates.
 func CanonicalPath(sourceRelPath, username string) string {
-	p := path.Clean(strings.ReplaceAll(sourceRelPath, `\`, "/"))
+	// ToSlash, not a blanket replace: outside Windows a backslash is a filename byte, and a\b is not a/b.
+	p := path.Clean(filepath.ToSlash(sourceRelPath))
 	p = strings.TrimPrefix(p, "/")
 	if p == "." {
 		p = ""
 	}
+	// Only the placeholder may spell USER, or a file named like it lands on another file's key. The
+	// escape encodes as US%00ER, and NUL never occurs in a path.
+	p = strings.ReplaceAll(p, "USER", "US\x00ER")
 	p = ApplyUserPlaceholder(p, username)
 
 	segs := strings.Split(p, "/")
